@@ -242,7 +242,7 @@ Opens the corresponding GIF fullscreen. Tap anywhere to return to the clock.
 
 ## Daily Automation Schedule
 
-All times are local time (UTC+1 by default, adjust `GMT_OFFSET_SEC` in the code).
+All times are local time. Timezone is set via `gmt_offset` in `[clock]` in `config.ini`.
 
 | Time | Action |
 |---|---|
@@ -260,17 +260,6 @@ All times are local time (UTC+1 by default, adjust `GMT_OFFSET_SEC` in the code)
 
 ---
 
-## Scheduled Animation
-
-When `[animation] schedule = true`, a GIF plays automatically every 5 minutes for the configured duration, then fades back to the clock over 800 ms.
-
-- **Day (07:00–19:59):** smile GIF
-- **Night (20:00–06:59):** sleep GIF
-- The animation is skipped if any other screen is already open
-- Touch the screen at any time to dismiss it immediately
-
----
-
 ## Build & Flash
 
 1. Clone the repository:
@@ -278,15 +267,37 @@ When `[animation] schedule = true`, a GIF plays automatically every 5 minutes fo
    git clone https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock.git
    ```
 2. Open **Arduino IDE 2.x**
-3. Install board support: **File → Preferences → Additional URLs** → add the ESP32 board manager URL, then install **esp32 by Espressif** via Board Manager
-4. Select board: **ESP32C6 Dev Module**
-5. Set **Flash Size** to **4MB** (or match your module)
+3. Install board support: **File → Preferences → Additional URLs**, add:
+   ```
+   https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+   ```
+   Then open **Tools → Board → Boards Manager**, search `esp32` and install **esp32 by Espressif**.
+
+4. Select and configure the board — **all settings below are mandatory**:
+
+   | Setting | Value |
+   |---|---|
+   | **Board** | `ESP32C6 Dev Module` |
+   | **USB CDC On Boot** | `Enabled` |
+   | **Flash Size** | `8MB (64Mb)` |
+   | **Partition Scheme** | `8MB with spiffs (3MB APP/1.5MB SPIFFS)` |
+   | CPU Frequency | `160MHz (WiFi)` _(recommended)_ |
+   | Flash Frequency | `80MHz` |
+   | Flash Mode | `QIO` |
+   | Upload Speed | `921600` |
+   | JTAG Adapter | `Disabled` |
+   | Zigbee Mode | `Disabled` |
+
+   > **USB CDC On Boot must be Enabled** — without it the Serial Monitor will not receive any output and the device may not be recognised on the port.
+   > **Flash Size and Partition Scheme must match** — the 3MB APP partition is required to fit the firmware with LVGL v9 and all libraries.
+
+5. Set the correct **Port** (e.g. `COM3` on Windows, `/dev/ttyUSB0` on Linux/macOS)
 6. Install all libraries listed in [Software Dependencies](#software-dependencies)
-7. Edit `lv_conf.h` as described in [lv_conf.h Settings](#lv_confh-settings)
-8. Place `montserrat_96.c` in the sketch folder
-9. Prepare the SD card as described in [SD Card Setup](#sd-card-setup)
-10. Open `ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock.ino`, click **Upload**
-11. Open Serial Monitor at **115200 baud** to watch the boot log
+8. Edit `lv_conf.h` as described in [lv_conf.h Settings](#lv_confh-settings)
+9. Place `montserrat_96.c` in the sketch folder
+10. Prepare the SD card as described in [SD Card Setup](#sd-card-setup)
+11. Open `ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock.ino`, click **Upload**
+12. Open Serial Monitor at **115200 baud** to watch the boot log
 
 ### Expected Boot Log
 

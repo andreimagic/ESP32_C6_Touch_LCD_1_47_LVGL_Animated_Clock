@@ -13,7 +13,7 @@ A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47
 | **Big clock face** | HH:MM in a full-screen custom font (Montserrat 96px) |
 | **Hello! splash** | Shown for 2.5 s on boot before the clock appears |
 | **Animated GIFs** | Smile (day) and Sleep (night) emotions from SD card |
-| **Scheduled animation** | GIF plays every 5 min for 10 s (configurable), fades back to clock _(coming in v1.1)_ |
+| **Scheduled animation** | GIF plays every 5 min (configurable duration), 800 ms fade back to clock |
 | **Night mode** | Sleep GIF used automatically between 20:00 and 07:00 |
 | **Alarm** | Configurable wake-up time, buzzer beeps, smile GIF, stops on touch |
 | **Brightness schedule** | Auto-dims at 19:00 → 19:30 → 20:00, brightens at 06:00 → 07:00 |
@@ -173,6 +173,13 @@ ntp_server = pool.ntp.org
 [alarm]
 enabled = true
 time = 07:10
+
+[animation]
+# Play smile GIF (day) or sleep GIF (night) automatically every 5 minutes
+# set schedule = false to disable
+schedule = true
+# Seconds the GIF plays before fading back to the clock (3-60)
+duration = 10
 ```
 
 | Section | Key | Type | Default | Description |
@@ -183,6 +190,8 @@ time = 07:10
 | `[clock]` | `ntp_server` | string | `pool.ntp.org` | NTP time server |
 | `[alarm]` | `enabled` | bool | `false` | Enable morning alarm |
 | `[alarm]` | `time` | `HH:MM` | `07:00` | Alarm time |
+| `[animation]` | `schedule` | bool | `true` | Enable periodic GIF every 5 min |
+| `[animation]` | `duration` | int (3–60) | `10` | Seconds each GIF plays before fading |
 
 > If `config.ini` is missing the firmware boots with the hardcoded defaults shown above.
 
@@ -257,6 +266,21 @@ All times are local time. Timezone is set via `gmt_offset` in `[clock]` in `conf
 | 21:00 | Sleep GIF closes automatically (if not already dismissed) |
 
 **Buzzer:** plays a `beep-beep-beep … pause` pattern (3 × 200 ms on, 700 ms pause) until the screen is touched.
+
+---
+
+## Scheduled Animation
+
+When `[animation] schedule = true`, a GIF plays automatically every 5 minutes for the configured duration, then fades back to the clock over 800 ms.
+
+| Time of day | GIF played |
+|---|---|
+| Day (07:00–19:59) | `cruzr_smile.gif` |
+| Night (20:00–06:59) | `cruzr_sleep.gif` |
+
+- Skipped silently if any sub-screen is already open
+- Touch the screen at any time to dismiss immediately
+- The GIF fades out over 800 ms when the timer expires
 
 ---
 
@@ -349,7 +373,7 @@ All times are local time. Timezone is set via `gmt_offset` in `[clock]` in `conf
 - **SD ↔ LVGL filesystem bridge** — a custom `lv_fs_drv_t` registered under drive letter `'S'` forwards all LVGL file operations to the Arduino `SD` library. This lets `lv_gif_set_src()` open files directly from the card.
 - **GIF memory management** — the LVGL GIF decoder needs a contiguous block for its canvas. GIFs are pre-scaled to 160×86 px (55 KB canvas) so they fit alongside the WiFi stack. The render buffer uses 20 scan lines for good throughput without exhausting RAM.
 - **config.ini** — parsed once at boot with a hand-rolled INI reader (no external library). Comments (`#`), blank lines and whitespace around `=` are all handled. The `[alarm]` section is rewritten on save while preserving all other sections and comments.
-- **Scheduled animation** — periodic GIF playback (smile by day, sleep by night) with an 800 ms fade back to the clock. Implemented as a separate feature branch, available in v1.1.
+- **Scheduled animation** — `run_scheduled_animation()` fires on `minute % 5 == 0` inside `run_daily_automation()`. A one-shot LVGL timer triggers `sched_gif_close_cb()` after the configured duration, which fades opacity 100→0% over 800 ms via `lv_anim` then deletes the overlay. Touching the screen cancels the timer before it fires.
 
 ---
 
@@ -358,7 +382,7 @@ All times are local time. Timezone is set via `gmt_offset` in `[clock]` in `conf
 | Version | Status | Feature |
 |---|---|---|
 | v1.0 | ✅ released | Clock, alarms, GIF on tap, buzzer, brightness tilt, config.ini |
-| v1.1 | 🔄 in progress | Scheduled animation (smile/sleep every 5 min with fade) |
+| v1.1 | ✅ released | Scheduled animation (smile/sleep every 5 min, 800 ms fade) |
 
 ## Contributing
 

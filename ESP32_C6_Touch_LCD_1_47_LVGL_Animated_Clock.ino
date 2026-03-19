@@ -868,7 +868,7 @@ static void show_gif_fullscreen(const char *path)
   // add_back_hint(overlay_cont);
 }
 
-// ── Tilt poll: runs every 200 ms ONLY while status screen is open ────────────
+// ── Tilt poll: runs every 400 ms ONLY while status screen is open ────────────
 static void tilt_poll_cb(lv_timer_t * /*t*/)
 {
   if (!imuReady || !overlay_cont) return;
@@ -971,8 +971,8 @@ static void show_status_screen(void)
   lv_obj_align(label_brightness, LV_ALIGN_LEFT_MID, 20, 28);
   lv_obj_add_flag(label_brightness, LV_OBJ_FLAG_IGNORE_LAYOUT);
 
-  // Start tilt poll timer — 200 ms, runs while this screen is open
-  tilt_timer = lv_timer_create(tilt_poll_cb, 200, nullptr);
+  // Start tilt poll timer — 400 ms, runs while this screen is open
+  tilt_timer = lv_timer_create(tilt_poll_cb, 400, nullptr);
 
   add_back_hint(overlay_cont);
 }

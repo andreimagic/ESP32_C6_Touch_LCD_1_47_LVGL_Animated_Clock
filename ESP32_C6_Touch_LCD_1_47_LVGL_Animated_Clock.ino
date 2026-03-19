@@ -51,9 +51,11 @@ struct AppConfig {
   char wifi_password[64] = "changeme";       // [wifi] password
   char ntp_server[64]    = "pool.ntp.org";   // [clock] ntp_server
   int  gmt_offset_hours  = 1;                // [clock] gmt_offset  (e.g. 1 for UTC+1, -5 for UTC-5)
-  bool alarm_enabled     = false;            // [alarm] enabled
-  int  alarm_hour        = 7;                // [alarm] time HH
-  int  alarm_minute      = 0;                // [alarm] time MM
+  bool alarm_enabled          = false;       // [alarm] enabled
+  int  alarm_hour             = 7;           // [alarm] time HH
+  int  alarm_minute           = 0;           // [alarm] time MM
+  bool anim_schedule_enabled  = true;        // [animation] schedule
+  int  anim_duration_sec      = 10;          // [animation] duration
 } cfg;
 
 // ─── Pin definitions ─────────────────────────────────────────────────────────
@@ -140,8 +142,9 @@ bool      imuReady  = false;
 // ─── Brightness + tilt timer handles — valid only while Status screen is open ─
 lv_obj_t   *label_brightness = nullptr;
 lv_timer_t *tilt_timer       = nullptr;
-lv_timer_t *buzzer_timer     = nullptr;  // alarm beep pattern timer
-bool        buzzer_active    = false;
+lv_timer_t *buzzer_timer      = nullptr;  // alarm beep pattern timer
+bool        buzzer_active     = false;
+lv_timer_t *sched_close_timer = nullptr;  // auto-close timer for scheduled GIF
 
 
 
@@ -404,6 +407,21 @@ static void load_config()
         }
       }
     }
+
+    // ── [animation] ─────────────────────────────────────────────────────
+    else if (strcmp(section, "animation") == 0) {
+      if (strcmp(key, "schedule") == 0) {
+        cfg.anim_schedule_enabled = (strcmp(val, "true") == 0 || strcmp(val, "1") == 0);
+        Serial.printf("[CFG]   anim.schedule  = %s\n",
+                      cfg.anim_schedule_enabled ? "true" : "false");
+      }
+      else if (strcmp(key, "duration") == 0) {
+        cfg.anim_duration_sec = atoi(val);
+        if (cfg.anim_duration_sec < 3)  cfg.anim_duration_sec = 3;
+        if (cfg.anim_duration_sec > 60) cfg.anim_duration_sec = 60;
+        Serial.printf("[CFG]   anim.duration  = %ds\n", cfg.anim_duration_sec);
+      }
+    }
   }
 
   f.close();
@@ -595,12 +613,73 @@ static void wifi_poll_cb(lv_timer_t * /*t*/)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+//  SCHEDULED ANIMATION  —  every 5 min, configurable duration, 800 ms fade
+//  Day (07:00–19:59): smile GIF.  Night (20:00–06:59): sleep GIF.
+//  Only fires when the clock face is visible and no overlay is open.
+//  Touch the screen at any time to dismiss immediately.
+// ══════════════════════════════════════════════════════════════════════════════
+static bool is_night_time(int hour)
+{
+  return (hour >= 20 || hour < 7);
+}
+
+static void sched_gif_close_cb(lv_timer_t *t)
+{
+  lv_timer_del(t);
+  sched_close_timer = nullptr;
+  if (!overlay_cont) return;
+
+  lv_anim_t a;
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, overlay_cont);
+  lv_anim_set_exec_cb(&a, [](void *obj, int32_t v) {
+    if (obj) lv_obj_set_style_opa((lv_obj_t *)obj, (lv_opa_t)v, 0);
+  });
+  lv_anim_set_values(&a, LV_OPA_COVER, LV_OPA_TRANSP);
+  lv_anim_set_duration(&a, 800);
+  lv_anim_set_ready_cb(&a, [](lv_anim_t * /*a*/) {
+    if (overlay_cont) {
+      if (tilt_timer) { lv_timer_del(tilt_timer); tilt_timer = nullptr; }
+      label_brightness = nullptr;
+      lv_obj_del(overlay_cont);
+      overlay_cont = nullptr;
+      Serial.println("[ANIM] Scheduled GIF closed (fade)");
+    }
+  });
+  lv_anim_start(&a);
+}
+
+static void run_scheduled_animation(int hour)
+{
+  if (!cfg.anim_schedule_enabled) return;
+  if (!sdCardAvailable)           return;
+  if (overlay_cont)               return;  // another screen already open
+  if (!home_time_lbl)             return;  // clock face not visible yet
+
+  const char *path = is_night_time(hour) ? GIF_SLEEP_PATH : GIF_SMILE_PATH;
+  Serial.printf("[ANIM] %s GIF for %ds\n",
+                is_night_time(hour) ? "sleep" : "smile", cfg.anim_duration_sec);
+
+  show_gif_fullscreen(path);
+
+  if (overlay_cont) {
+    sched_close_timer = lv_timer_create(sched_gif_close_cb,
+                                         (uint32_t)cfg.anim_duration_sec * 1000UL,
+                                         nullptr);
+    lv_timer_set_repeat_count(sched_close_timer, 1);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  DAILY AUTOMATION  —  brightness schedule + sleep GIF
 //  Called once per minute from clock_tick_cb (only when minute changes).
 // ══════════════════════════════════════════════════════════════════════════════
 static void run_daily_automation(int hour, int minute)
 {
   Serial.printf("[SCHED] %02d:%02d\n", hour, minute);
+
+  // ── Scheduled animation every 5 minutes ──────────────────────────────────
+  if (minute % 5 == 0) run_scheduled_animation(hour);
 
   // ── Evening dimming ───────────────────────────────────────────────────────
   if (hour == 19 && minute ==  0) set_brightness(25);
@@ -684,6 +763,8 @@ static void overlay_close_event_cb(lv_event_t *e)
       tilt_timer = nullptr;
     }
     label_brightness = nullptr;  // label is about to be destroyed
+    // Cancel scheduled GIF auto-close if user taps during animation
+    if (sched_close_timer) { lv_timer_del(sched_close_timer); sched_close_timer = nullptr; }
     // Stop buzzer if alarm was playing (screen touch = acknowledge alarm)
     buzzer_stop();
     lv_obj_del(overlay_cont);  // frees GIF decoder + canvas automatically
@@ -787,7 +868,7 @@ static void show_gif_fullscreen(const char *path)
   // add_back_hint(overlay_cont);
 }
 
-// ── Tilt poll: runs every 200 ms ONLY while status screen is open ────────────
+// ── Tilt poll: runs every 400 ms ONLY while status screen is open ────────────
 static void tilt_poll_cb(lv_timer_t * /*t*/)
 {
   if (!imuReady || !overlay_cont) return;
@@ -890,8 +971,8 @@ static void show_status_screen(void)
   lv_obj_align(label_brightness, LV_ALIGN_LEFT_MID, 20, 28);
   lv_obj_add_flag(label_brightness, LV_OBJ_FLAG_IGNORE_LAYOUT);
 
-  // Start tilt poll timer — 200 ms, runs while this screen is open
-  tilt_timer = lv_timer_create(tilt_poll_cb, 200, nullptr);
+  // Start tilt poll timer — 400 ms, runs while this screen is open
+  tilt_timer = lv_timer_create(tilt_poll_cb, 400, nullptr);
 
   add_back_hint(overlay_cont);
 }

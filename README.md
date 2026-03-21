@@ -11,7 +11,7 @@ A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47
 | Feature | Details |
 |---|---|
 | **Big clock face** | HH:MM in a full-screen custom font (Montserrat 96px) |
-| **Hello! splash** | Shown for 2.5 s on boot before the clock appears |
+| **Hello! splash** | "Hello!" shown for 2.5 s on cold boot; "Welcome back!" for 1 s when waking from deep sleep |
 | **Animated GIFs** | Smile (day) and Sleep (night) emotions from SD card |
 | **Scheduled animation** | GIF plays every 5 min (configurable duration), 800 ms fade back to clock |
 | **Night mode** | Sleep GIF used automatically between 20:00 and 07:00 |
@@ -20,7 +20,10 @@ A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47
 | **Tilt brightness** | Tilt device left/right in the Status screen to adjust brightness |
 | **WiFi + NTP** | Connects at boot, syncs time automatically |
 | **Status screen** | Shows WiFi SSID, NTP sync status, date, and current brightness |
-| **Battery monitor** | Shows ADC raw value and calculated voltage |
+| **Battery monitor** | Shows ADC raw value, calculated voltage, and percentage; icon updates live |
+| **Battery colour** | Clock digits turn orange at ≤25%, red at ≤10% to warn of low charge |
+| **Auto power-off** | At ≤10% battery, a 60-second countdown opens automatically and sleeps the device |
+| **Deep sleep** | Long-press in the Battery screen starts a 5-second shutdown countdown; if an alarm is set the device wakes automatically 30 s before alarm time via timer wakeup |
 | **SD card config** | All settings in `/config.ini` — no recompile needed |
 | **LVGL v9** | Hardware-accelerated UI, zero blocking in the main loop |
 
@@ -224,7 +227,7 @@ The home screen has **four invisible touch zones**. Tap to open a sub-screen, **
 Shows WiFi connection status (SSID or disconnected), NTP sync state, today's date, and current brightness level. **Tilt the device left or right** while this screen is open to decrease or increase brightness in 10% steps.
 
 ### Battery (lower-right tap)
-Shows the raw ADC reading and calculated battery voltage. Values update every second.
+Shows the battery icon, percentage, raw ADC reading, and calculated voltage. Values update every second. The clock digits change colour based on charge: white above 25%, orange at 11–25%, and red at ≤10%. **Long-press** the battery screen to open a 5-second shutdown countdown — tap **Cancel** to abort. If an alarm is configured, the device will wake automatically 30 s before alarm time via ESP32 timer wakeup. To wake at any other time, press the **RESET** button.
 
 ### GIF animations (upper taps)
 Opens the corresponding GIF fullscreen. Tap anywhere to return to the clock.
@@ -316,7 +319,8 @@ When `[animation] schedule = true`, a GIF plays automatically every 5 minutes fo
    > **Flash Size and Partition Scheme must match** — the 3MB APP partition is required to fit the firmware with LVGL v9 and all libraries.
 
 5. Set the correct **Port** (e.g. `COM3` on Windows, `/dev/ttyUSB0` on Linux/macOS)
-6. Install all libraries listed in [Software Dependencies](#software-dependencies)
+6. Set the correct **Port** (e.g. `COM3` on Windows, `/dev/ttyUSB0` on Linux/macOS)
+7. Install all libraries listed in [Software Dependencies](#software-dependencies)
 8. Edit `lv_conf.h` as described in [lv_conf.h Settings](#lv_confh-settings)
 9. Place `montserrat_96.c` in the sketch folder
 10. Prepare the SD card as described in [SD Card Setup](#sd-card-setup)
@@ -364,6 +368,9 @@ When `[animation] schedule = true`, a GIF plays automatically every 5 minutes fo
 | Alarm not firing | `enabled = false` | Set `enabled = true` in `config.ini` |
 | Buzzer silent | Wrong pin or active buzzer | Must be a **passive** buzzer on GPIO 5; active buzzers don't work with PWM |
 | Font not found (compile error) | `montserrat_96.c` missing | Generate and place the file as described in [Custom Font](#custom-font) |
+| Device won't wake after deep sleep | No alarm set | Press the **RESET** button; if alarm is set, confirm `enabled = true` and correct time in `config.ini` |
+| Clock shows correct time after reset but `--:--` briefly | RTC battery valid but NTP not yet re-synced | Normal on cold boot; clock pre-populates from RTC when waking from sleep |
+| Shutdown popup appears unexpectedly | Battery ≤10% auto-poweroff triggered | Charge the device; the countdown can be cancelled by tapping **Cancel** |
 
 ---
 
@@ -372,6 +379,8 @@ When `[animation] schedule = true`, a GIF plays automatically every 5 minutes fo
 - **No blocking calls in `loop()`** — `loop()` only calls `lv_timer_handler()` + `delay(5)`. All WiFi polling, clock ticks, brightness schedules, buzzer patterns and animations run as LVGL timer callbacks.
 - **SD ↔ LVGL filesystem bridge** — a custom `lv_fs_drv_t` registered under drive letter `'S'` forwards all LVGL file operations to the Arduino `SD` library. This lets `lv_gif_set_src()` open files directly from the card.
 - **GIF memory management** — the LVGL GIF decoder needs a contiguous block for its canvas. GIFs are pre-scaled to 160×86 px (55 KB canvas) so they fit alongside the WiFi stack. The render buffer uses 20 scan lines for good throughput without exhausting RAM.
+- **Deep sleep & timer wakeup** — `show_shutdown_popup()` opens a 5-second countdown card (cancelled by tap). On `shutdown_execute()`, if an alarm is configured the ESP32 timer wakeup is set for `alarm_time − 30 s` so the boot sequence completes before the alarm fires. If no alarm is set the device sleeps indefinitely until the RESET button is pressed. On wakeup the boot path detects `ESP_SLEEP_WAKEUP_TIMER`, validates the RTC epoch, and shortens the splash to 1 s.
+- **Battery monitoring & auto-poweroff** — `battery_timer_callback()` runs every second. It maps the ADC millivolt reading (through a ÷3 divider) onto a LiPo discharge curve to produce a percentage, updates the battery screen labels and icon, and colours the clock digits (white → orange at ≤25% → red at ≤10%). A one-shot `low_bat_triggered` flag prevents re-entry; at ≤10% it opens the battery screen and immediately starts a 60-second `shutdown_execute()` countdown.
 - **config.ini** — parsed once at boot with a hand-rolled INI reader (no external library). Comments (`#`), blank lines and whitespace around `=` are all handled. The `[alarm]` section is rewritten on save while preserving all other sections and comments.
 - **Scheduled animation** — `run_scheduled_animation()` fires on `minute % 5 == 0` inside `run_daily_automation()`. A one-shot LVGL timer triggers `sched_gif_close_cb()` after the configured duration, which fades opacity 100→0% over 800 ms via `lv_anim` then deletes the overlay. Touching the screen cancels the timer before it fires.
 
@@ -383,6 +392,7 @@ When `[animation] schedule = true`, a GIF plays automatically every 5 minutes fo
 |---|---|---|
 | v1.0 | ✅ released | Clock, alarms, GIF on tap, buzzer, brightness tilt, config.ini |
 | v1.1 | ✅ released | Scheduled animation (smile/sleep every 5 min, 800 ms fade) |
+| v1.2 | ✅ released | Deep sleep / power-off, timer wakeup before alarm, battery % + colour indicator, auto power-off at low battery |
 
 ## Contributing
 

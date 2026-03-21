@@ -51,9 +51,14 @@ struct AppConfig {
   char wifi_password[64] = "changeme";       // [wifi] password
   char ntp_server[64]    = "pool.ntp.org";   // [clock] ntp_server
   int  gmt_offset_hours  = 1;                // [clock] gmt_offset  (e.g. 1 for UTC+1, -5 for UTC-5)
+  bool wifi_enabled           = true;        // [wifi] enabled
   bool alarm_enabled          = false;       // [alarm] enabled
   int  alarm_hour             = 7;           // [alarm] time HH
   int  alarm_minute           = 0;           // [alarm] time MM
+  int  alarm_beep_sequences   = 5;           // [alarm] beep_sequences (0=until touch)
+  int  timer_hours            = 0;           // [timer] hours
+  int  timer_minutes          = 0;           // [timer] minutes
+  int  timer_beep_sequences   = 3;           // [timer] beep_sequences
   bool anim_schedule_enabled  = true;        // [animation] schedule
   int  anim_duration_sec      = 10;          // [animation] duration
 } cfg;
@@ -77,6 +82,8 @@ struct AppConfig {
 // ─── GIF paths — SD card root is mapped to LVGL drive letter "S" ──────────────
 #define GIF_SMILE_PATH  "S:/cruzr_emotions/cruzr_smile.gif"
 #define GIF_SLEEP_PATH  "S:/cruzr_emotions/cruzr_sleep.gif"
+#define GIF_ALARM_PATH  "S:/cruzr_emotions/alarm_animation.gif"
+#define GIF_TIMER_PATH  "S:/cruzr_emotions/timer_animation.gif"
 
 // ─── Forward declarations ─────────────────────────────────────────────────────
 static void home_screen_init(void);
@@ -88,9 +95,9 @@ static void show_battery_screen(void);
 static void show_status_screen(void);
 static void overlay_close_event_cb(lv_event_t *e);
 static void lvgl_sd_fs_init(void);
-static void show_alarm_screen(void);
-static void alarm_screen_close_and_save(void);
+static void show_carousel(void);
 static void save_config(void);
+static void apply_wifi_state(void);
 
 
 // ─── Display ─────────────────────────────────────────────────────────────────
@@ -152,6 +159,16 @@ lv_timer_t *tilt_timer       = nullptr;
 lv_timer_t *buzzer_timer      = nullptr;  // alarm beep pattern timer
 bool        buzzer_active     = false;
 lv_timer_t *sched_close_timer = nullptr;  // auto-close timer for scheduled GIF
+
+// ─── Carousel / modal settings ────────────────────────────────────────────────
+lv_obj_t   *modal_cont   = nullptr;  // carousel / editor full-screen modal
+static int  carousel_idx = 0;        // 0=Clock 1=Timer 2=Alarm 3=WiFi
+
+// ─── Countdown timer ─────────────────────────────────────────────────────────
+lv_timer_t *countdown_timer = nullptr;
+int         countdown_sec   = 0;
+bool        timer_running   = false;
+lv_obj_t   *home_timer_lbl  = nullptr;  // small label bottom-left when running
 
 
 
@@ -233,50 +250,94 @@ static void lvgl_sd_fs_init(void)
 //  Stopped by touching the screen (overlay_close_event_cb) or explicitly.
 // ══════════════════════════════════════════════════════════════════════════════
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  BUZZER — unified pattern for alarm and timer
+//  One sequence = 4 × (200ms ON + 100ms OFF) + 1000ms pause
+//  cfg.alarm_beep_sequences / cfg.timer_beep_sequences controls auto-stop.
+//  0 = repeat until buzzer_stop() is called (touch to dismiss).
+// ══════════════════════════════════════════════════════════════════════════════
+
+static int  buzzer_seq_total  = 0;   // 0 = infinite
+static int  buzzer_seq_done   = 0;
+static int  buzzer_step       = 0;
+static bool buzzer_fade_after = false; // fade overlay when beeping finishes
+
+// 9 steps: 4 × (on200 + off100) + pause1000
+static const struct { bool on; uint32_t ms; } BUZZ_STEPS[9] = {
+  {true,200},{false,100},{true,200},{false,100},
+  {true,200},{false,100},{true,200},{false,100},
+  {false,1000}
+};
+
+static void overlay_fade_and_close()
+{
+  if (!overlay_cont) return;
+  lv_anim_t a;
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, overlay_cont);
+  lv_anim_set_exec_cb(&a, [](void *obj, int32_t v) {
+    if (obj) lv_obj_set_style_opa((lv_obj_t *)obj, (lv_opa_t)v, 0);
+  });
+  lv_anim_set_values(&a, LV_OPA_COVER, LV_OPA_TRANSP);
+  lv_anim_set_duration(&a, 800);
+  lv_anim_set_ready_cb(&a, [](lv_anim_t * /*a*/) {
+    if (overlay_cont) {
+      if (tilt_timer) { lv_timer_del(tilt_timer); tilt_timer = nullptr; }
+      label_brightness = nullptr;
+      lv_obj_del(overlay_cont);
+      overlay_cont = nullptr;
+      Serial.println("[ANIM] Alarm GIF closed (fade after beeping)");
+    }
+  });
+  lv_anim_start(&a);
+}
+
 static void buzzer_stop()
 {
   if (!buzzer_active) return;
   if (buzzer_timer) { lv_timer_del(buzzer_timer); buzzer_timer = nullptr; }
-  ledcWrite(BUZZER_PIN, 0);   // silence
-  buzzer_active = false;
+  ledcWrite(BUZZER_PIN, 0);
+  buzzer_active   = false;
+  buzzer_step     = 0;
+  buzzer_seq_done = 0;
   Serial.println("[BUZZ] Stopped");
+  if (buzzer_fade_after) {
+    buzzer_fade_after = false;
+    overlay_fade_and_close();  // fade out alarm animation
+  }
 }
 
-// LVGL timer callback — runs as a state machine producing: beep on/off × 3 + pause
 static void buzzer_tick_cb(lv_timer_t *t)
 {
-  // Each step toggles between ON and OFF. Pattern (ms): 200 on, 100 off, ×3 then 700 pause
-  static const struct { bool on; uint32_t next_ms; } steps[] = {
-    { true,  200 },   // beep 1 on
-    { false, 100 },   // beep 1 off
-    { true,  200 },   // beep 2 on
-    { false, 100 },   // beep 2 off
-    { true,  200 },   // beep 3 on
-    { false, 700 },   // pause before repeat
-  };
-  static int step = 0;
-
-  if (steps[step].on) {
-    ledcWrite(BUZZER_PIN, 128);   // 50% duty = ~2 kHz tone
-  } else {
-    ledcWrite(BUZZER_PIN, 0);     // silence
+  ledcWrite(BUZZER_PIN, BUZZ_STEPS[buzzer_step].on ? 128 : 0);
+  lv_timer_set_period(t, BUZZ_STEPS[buzzer_step].ms);
+  buzzer_step++;
+  if (buzzer_step >= 9) {
+    buzzer_step = 0;
+    buzzer_seq_done++;
+    if (buzzer_seq_total > 0 && buzzer_seq_done >= buzzer_seq_total)
+      buzzer_stop();
   }
-
-  uint32_t next = steps[step].next_ms;
-  step = (step + 1) % 6;
-  lv_timer_set_period(t, next);   // reschedule at next interval
 }
 
-static void buzzer_start()
+static void buzzer_start(int sequences)
 {
-  if (buzzer_active) return;
-  // Attach PWM at 2 kHz, 8-bit resolution (0-255 duty)
-  // ledcAttach is idempotent — safe to call even if pin was already attached
+  if (buzzer_active) buzzer_stop();
+  buzzer_seq_total = sequences;
+  buzzer_seq_done  = 0;
+  buzzer_step      = 0;
   ledcAttach(BUZZER_PIN, 2000, 8);
   buzzer_active = true;
   buzzer_timer  = lv_timer_create(buzzer_tick_cb, 200, nullptr);
-  Serial.println("[BUZZ] Started");
+  Serial.printf("[BUZZ] Started (%d sequences)\n", sequences);
 }
+
+static void buzzer_start_alarm()
+{
+  buzzer_fade_after = (cfg.alarm_beep_sequences > 0); // only when finite
+  buzzer_start(cfg.alarm_beep_sequences);
+}
+static void buzzer_start_timer() { buzzer_start(cfg.timer_beep_sequences); }
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  BACKLIGHT PWM
@@ -398,20 +459,43 @@ static void load_config()
       }
     }
 
+    // ── [wifi] extra keys ────────────────────────────────────────────────────
+    if (strcmp(section, "wifi") == 0 && strcmp(key, "enabled") == 0) {
+      cfg.wifi_enabled = (strcmp(val,"true")==0||strcmp(val,"1")==0);
+      Serial.printf("[CFG]   wifi.enabled       = %s\n", cfg.wifi_enabled?"true":"false");
+    }
+
     // ── [alarm] ─────────────────────────────────────────────────────────────
     else if (strcmp(section, "alarm") == 0) {
       if (strcmp(key, "enabled") == 0) {
-        cfg.alarm_enabled = (strcmp(val, "true") == 0 || strcmp(val, "1") == 0);
-        Serial.printf("[CFG]   alarm.enabled = %s\n", cfg.alarm_enabled ? "true" : "false");
+        cfg.alarm_enabled = (strcmp(val,"true")==0||strcmp(val,"1")==0);
+        Serial.printf("[CFG]   alarm.enabled      = %s\n", cfg.alarm_enabled?"true":"false");
       }
       else if (strcmp(key, "time") == 0) {
-        // Parse HH:MM
-        int h = 0, m = 0;
-        if (sscanf(val, "%d:%d", &h, &m) == 2) {
-          cfg.alarm_hour   = h;
-          cfg.alarm_minute = m;
-          Serial.printf("[CFG]   alarm.time    = %02d:%02d\n", h, m);
+        int h=0,m=0;
+        if (sscanf(val,"%d:%d",&h,&m)==2) {
+          cfg.alarm_hour=h; cfg.alarm_minute=m;
+          Serial.printf("[CFG]   alarm.time         = %02d:%02d\n",h,m);
         }
+      }
+      else if (strcmp(key,"beep_sequences")==0) {
+        cfg.alarm_beep_sequences=atoi(val);
+        Serial.printf("[CFG]   alarm.beep_sequences = %d\n",cfg.alarm_beep_sequences);
+      }
+    }
+
+    // ── [timer] ─────────────────────────────────────────────────────────────
+    else if (strcmp(section,"timer")==0) {
+      if (strcmp(key,"duration")==0) {
+        int h=0,m=0;
+        if (sscanf(val,"%d:%d",&h,&m)==2) {
+          cfg.timer_hours=h; cfg.timer_minutes=m;
+          Serial.printf("[CFG]   timer.duration      = %02d:%02d\n",h,m);
+        }
+      }
+      else if (strcmp(key,"beep_sequences")==0) {
+        cfg.timer_beep_sequences=atoi(val);
+        Serial.printf("[CFG]   timer.beep_sequences = %d\n",cfg.timer_beep_sequences);
       }
     }
 
@@ -443,7 +527,7 @@ static void save_config()
   const char *path = "/config.ini";
   char lines[32][128];
   int  lineCount = 0;
-  bool inAlarm   = false;
+  bool inAlarm   = false;  // also covers [wifi] and [timer]
 
   File fr = SD.open(path, FILE_READ);
   if (fr) {
@@ -458,8 +542,10 @@ static void save_config()
       // Detect [alarm] section and skip its lines — we'll rewrite them fresh
       char *trimmed = lines[lineCount];
       while (*trimmed == ' ' || *trimmed == '\t') trimmed++;
-      if (strncmp(trimmed, "[alarm]", 7) == 0) { inAlarm = true; continue; }
-      if (*trimmed == '[') inAlarm = false;
+      if (strncmp(trimmed,"[wifi]", 6)==0||
+          strncmp(trimmed,"[alarm]",7)==0||
+          strncmp(trimmed,"[timer]",7)==0) { inAlarm=true; continue; }
+      if (*trimmed=='[') inAlarm=false;
       if (!inAlarm) lineCount++;
     }
     fr.close();
@@ -472,16 +558,88 @@ static void save_config()
   for (int i = 0; i < lineCount; i++) {
     fw.println(lines[i]);
   }
-  // Append updated [alarm] block
+  fw.println();
+  fw.println("[wifi]");
+  fw.printf("enabled = %s\n",  cfg.wifi_enabled ?"true":"false");
+  fw.printf("ssid = %s\n",     cfg.wifi_ssid);
+  fw.printf("password = %s\n", cfg.wifi_password);
+
   fw.println();
   fw.println("[alarm]");
-  fw.printf("enabled = %s\n", cfg.alarm_enabled ? "true" : "false");
-  fw.printf("time = %02d:%02d\n", cfg.alarm_hour, cfg.alarm_minute);
+  fw.printf("enabled = %s\n",        cfg.alarm_enabled?"true":"false");
+  fw.printf("time = %02d:%02d\n",    cfg.alarm_hour, cfg.alarm_minute);
+  fw.printf("beep_sequences = %d\n", cfg.alarm_beep_sequences);
+
+  fw.println();
+  fw.println("[timer]");
+  fw.printf("duration = %02d:%02d\n",  cfg.timer_hours, cfg.timer_minutes);
+  fw.printf("beep_sequences = %d\n",   cfg.timer_beep_sequences);
   fw.close();
 
-  Serial.printf("[CFG] Saved alarm: enabled=%s time=%02d:%02d\n",
-                cfg.alarm_enabled ? "true" : "false",
-                cfg.alarm_hour, cfg.alarm_minute);
+  Serial.println("[CFG] Saved wifi/alarm/timer.");
+}
+
+// ── WiFi runtime toggle ───────────────────────────────────────────────────────
+static void apply_wifi_state()
+{
+  if (cfg.wifi_enabled) {
+    Serial.println("[WiFi] Enabling...");
+    WiFi.mode(WIFI_STA);
+    wifiMulti.addAP(cfg.wifi_ssid, cfg.wifi_password);
+    configTime(cfg.gmt_offset_hours * 3600L, 0, cfg.ntp_server);
+  } else {
+    Serial.println("[WiFi] Disabled by user.");
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    wifiConnected = false;
+    timeSynced    = false;
+  }
+}
+
+// ── Countdown timer ───────────────────────────────────────────────────────────
+static void countdown_tick_cb(lv_timer_t * /*t*/)
+{
+  if (!timer_running || countdown_sec <= 0) return;
+  countdown_sec--;
+  if (home_timer_lbl) {
+    int h=countdown_sec/3600, m=(countdown_sec%3600)/60, s=countdown_sec%60;
+    if (h > 0)
+      lv_label_set_text_fmt(home_timer_lbl, LV_SYMBOL_STOP " %d:%02d:%02d",h,m,s);
+    else
+      lv_label_set_text_fmt(home_timer_lbl, LV_SYMBOL_STOP " %02d:%02d",m,s);
+  }
+  if (countdown_sec == 0) {
+    timer_running = false;
+    if (countdown_timer) { lv_timer_del(countdown_timer); countdown_timer=nullptr; }
+    Serial.println("[TIMER] Done.");
+    // Hide the 00:00 label immediately — GIF animation takes over
+    if (home_timer_lbl) lv_obj_add_flag(home_timer_lbl, LV_OBJ_FLAG_HIDDEN);
+    show_gif_fullscreen(GIF_TIMER_PATH);
+    buzzer_start_timer();
+  }
+}
+
+static void timer_start_countdown()
+{
+  countdown_sec = cfg.timer_hours*3600 + cfg.timer_minutes*60;
+  if (countdown_sec <= 0) return;
+  if (countdown_timer) { lv_timer_del(countdown_timer); countdown_timer=nullptr; }
+  timer_running   = true;
+  countdown_timer = lv_timer_create(countdown_tick_cb, 1000, nullptr);
+  Serial.printf("[TIMER] Started %02d:%02d (%ds)\n",
+                cfg.timer_hours, cfg.timer_minutes, countdown_sec);
+  if (home_timer_lbl) {
+    int m=countdown_sec/60, s=countdown_sec%60;
+    lv_label_set_text_fmt(home_timer_lbl, LV_SYMBOL_STOP " %02d:%02d",m,s);
+    lv_obj_clear_flag(home_timer_lbl, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+static void timer_stop()
+{
+  if (countdown_timer) { lv_timer_del(countdown_timer); countdown_timer=nullptr; }
+  timer_running = false;
+  if (home_timer_lbl) lv_obj_add_flag(home_timer_lbl, LV_OBJ_FLAG_HIDDEN);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -788,7 +946,7 @@ static void wifi_poll_cb(lv_timer_t * /*t*/)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  SCHEDULED ANIMATION  —  every 5 min, configurable duration, 800 ms fade
+//  SCHEDULED ANIMATION  —  every 2 min, configurable duration, 800 ms fade
 //  Day (07:00–19:59): smile GIF.  Night (20:00–06:59): sleep GIF.
 //  Only fires when the clock face is visible and no overlay is open.
 //  Touch the screen at any time to dismiss immediately.
@@ -853,8 +1011,8 @@ static void run_daily_automation(int hour, int minute)
 {
   Serial.printf("[SCHED] %02d:%02d\n", hour, minute);
 
-  // ── Scheduled animation every 5 minutes ──────────────────────────────────
-  if (minute % 5 == 0) run_scheduled_animation(hour);
+  // ── Scheduled animation every 2 minutes ──────────────────────────────────
+  if (minute % 2 == 0) run_scheduled_animation(hour);
 
   // ── Evening dimming ───────────────────────────────────────────────────────
   if (hour == 19 && minute ==  0) set_brightness(25);
@@ -889,9 +1047,9 @@ static void run_daily_automation(int hour, int minute)
       && hour   == cfg.alarm_hour
       && minute == cfg.alarm_minute) {
     Serial.printf("[SCHED] Alarm at %02d:%02d\n", hour, minute);
-    set_brightness(80);            // wake-up brightness
-    show_gif_fullscreen(GIF_SMILE_PATH);  // smile wake-up animation
-    buzzer_start();                // beep until screen is touched
+    set_brightness(80);
+    show_gif_fullscreen(GIF_ALARM_PATH);
+    buzzer_start_alarm();
   }
 }
 
@@ -1249,234 +1407,361 @@ static void show_battery_screen(void)
 //  Long-press anywhere saves and closes.
 // ══════════════════════════════════════════════════════════════════════════════
 
-static lv_obj_t *alarm_hour_lbl  = nullptr;
-static lv_obj_t *alarm_min_lbl   = nullptr;
-static lv_obj_t *alarm_onoff_lbl = nullptr;
+// ══════════════════════════════════════════════════════════════════════════════
+//  CAROUSEL + EDITORS
+//  Long-press → carousel: ◀ [ CLOCK | TIMER | ALARM | WiFi ] ▶
+//  Tap centre → open editor (HH:MM + toggle). Long-press → save + exit to clock.
+//  WiFi: tap centre to toggle inline — no sub-screen.
+// ══════════════════════════════════════════════════════════════════════════════
 
-// Refresh the three value labels from cfg
-static void alarm_flash_anim_cb(void *obj, int32_t v)
-{
-  lv_obj_set_style_text_opa((lv_obj_t *)obj, (lv_opa_t)v, 0);
-}
+// ── Carousel / editor state ───────────────────────────────────────────────────
+static lv_obj_t *editor_cont   = nullptr;
+static lv_obj_t *se_hour_lbl   = nullptr;
+static lv_obj_t *se_min_lbl    = nullptr;
+static lv_obj_t *se_onoff_lbl  = nullptr;
+static int  edit_hour           = 0;
+static int  edit_min            = 0;
+static bool edit_enabled        = false;
 
-static void alarm_flash(lv_obj_t *lbl)
+// ── Flash animation ───────────────────────────────────────────────────────────
+static void se_flash_cb(void *obj, int32_t v)
+{ lv_obj_set_style_text_opa((lv_obj_t*)obj,(lv_opa_t)v,0); }
+
+static void se_flash(lv_obj_t *lbl)
 {
-  // Quick dim→bright animation (100ms) so you see the value changed
-  lv_anim_t a;
-  lv_anim_init(&a);
-  lv_anim_set_var(&a, lbl);
-  lv_anim_set_exec_cb(&a, alarm_flash_anim_cb);
-  lv_anim_set_values(&a, LV_OPA_30, LV_OPA_COVER);
-  lv_anim_set_duration(&a, 120);
+  if (!lbl) return;
+  lv_anim_t a; lv_anim_init(&a);
+  lv_anim_set_var(&a,lbl);
+  lv_anim_set_exec_cb(&a,se_flash_cb);
+  lv_anim_set_values(&a,LV_OPA_30,LV_OPA_COVER);
+  lv_anim_set_duration(&a,120);
   lv_anim_start(&a);
 }
 
-static void alarm_screen_refresh()
+static void se_refresh()
 {
-  if (!alarm_hour_lbl) return;
-  lv_label_set_text_fmt(alarm_hour_lbl,  "%02d", cfg.alarm_hour);
-  lv_label_set_text_fmt(alarm_min_lbl,   "%02d", cfg.alarm_minute);
-  lv_label_set_text(alarm_onoff_lbl,
-    cfg.alarm_enabled ? "#00e070 ON#" : "#808080 OFF#");
-  // Flash all three so the user gets clear visual confirmation
-  alarm_flash(alarm_hour_lbl);
-  alarm_flash(alarm_min_lbl);
-  alarm_flash(alarm_onoff_lbl);
-}
-
-// Save + close handler (long-press anywhere)
-static void alarm_longpress_cb(lv_event_t *e)
-{
-  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
-  lv_indev_wait_release(lv_indev_get_act());  // suppress the CLICKED on release
-  alarm_screen_close_and_save();
-}
-
-static void alarm_screen_close_and_save()
-{
-  if (!alarm_cont) return;
-  alarm_hour_lbl  = nullptr;
-  alarm_min_lbl   = nullptr;
-  alarm_onoff_lbl = nullptr;
-  lv_obj_del(alarm_cont);
-  alarm_cont = nullptr;
-
-  save_config();   // write back to /config.ini
-
-  // Update bell icon on home screen
-  if (home_bell_lbl) {
-    if (cfg.alarm_enabled) {
-      lv_label_set_text_fmt(home_bell_lbl, LV_SYMBOL_BELL " %02d:%02d",
-                            cfg.alarm_hour, cfg.alarm_minute);
-      lv_obj_clear_flag(home_bell_lbl, LV_OBJ_FLAG_HIDDEN);
-    } else {
-      lv_obj_add_flag(home_bell_lbl, LV_OBJ_FLAG_HIDDEN);
-    }
+  if (!se_hour_lbl) return;
+  lv_label_set_text_fmt(se_hour_lbl,"%02d",edit_hour);
+  lv_label_set_text_fmt(se_min_lbl, "%02d",edit_min);
+  if (se_onoff_lbl) {
+    if (carousel_idx == 1)  // Timer: Ready!/Not yet
+      lv_label_set_text(se_onoff_lbl, edit_enabled?"#00e070 Ready!#":"#808080 Not yet#");
+    else                    // Alarm: ON/OFF
+      lv_label_set_text(se_onoff_lbl, edit_enabled?"#00e070 ON#":"#808080 OFF#");
   }
-  Serial.println("[ALARM] Screen closed, config saved.");
+  se_flash(se_hour_lbl); se_flash(se_min_lbl); se_flash(se_onoff_lbl);
 }
 
-// Invisible tap-zone button helper
-static lv_obj_t *alarm_make_zone(lv_obj_t *parent, int x, int y, int w, int h,
-                                  lv_event_cb_t cb)
+// ── Forward refs ──────────────────────────────────────────────────────────────
+static void modal_longpress_cb(lv_event_t *e);
+static void carousel_build(void);
+
+// ── Invisible tap-zone helper ─────────────────────────────────────────────────
+static lv_obj_t *se_zone(lv_obj_t *p,int x,int y,int w,int h,lv_event_cb_t cb)
 {
-  lv_obj_t *z = lv_obj_create(parent);
-  lv_obj_set_size(z, w, h);
-  lv_obj_set_pos(z, x, y);
-  lv_obj_set_style_bg_opa(z, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(z, 0, 0);
-  lv_obj_set_style_pad_all(z, 0, 0);
-  lv_obj_set_style_radius(z, 0, 0);
-  lv_obj_set_style_shadow_width(z, 0, 0);
-  lv_obj_clear_flag(z, LV_OBJ_FLAG_SCROLLABLE);
-  // PRESSED fires on finger-down (instant feel).
-  // LONG_PRESSED is still detected because LVGL tracks hold duration independently.
-  lv_obj_add_event_cb(z, cb, LV_EVENT_PRESSED, nullptr);
-  lv_obj_add_event_cb(z, alarm_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+  lv_obj_t *z=lv_obj_create(p);
+  lv_obj_set_size(z,w,h); lv_obj_set_pos(z,x,y);
+  lv_obj_set_style_bg_opa(z,LV_OPA_TRANSP,0);
+  lv_obj_set_style_border_width(z,0,0); lv_obj_set_style_pad_all(z,0,0);
+  lv_obj_set_style_radius(z,0,0); lv_obj_set_style_shadow_width(z,0,0);
+  lv_obj_clear_flag(z,LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(z,cb,LV_EVENT_PRESSED,nullptr);
+  lv_obj_add_event_cb(z,modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
   return z;
 }
 
-// Zone callbacks — hour
-static void alarm_hour_up_cb(lv_event_t *e)
-{ if (lv_event_get_code(e)==LV_EVENT_PRESSED)  { cfg.alarm_hour=(cfg.alarm_hour+1)%24; alarm_screen_refresh(); } }
-static void alarm_hour_dn_cb(lv_event_t *e)
-{ if (lv_event_get_code(e)==LV_EVENT_PRESSED)  { cfg.alarm_hour=(cfg.alarm_hour+23)%24; alarm_screen_refresh(); } }
-// Zone callbacks — minute
-static void alarm_min_up_cb(lv_event_t *e)
-{ if (lv_event_get_code(e)==LV_EVENT_PRESSED)  { cfg.alarm_minute=(cfg.alarm_minute+1)%60; alarm_screen_refresh(); } }
-static void alarm_min_dn_cb(lv_event_t *e)
-{ if (lv_event_get_code(e)==LV_EVENT_PRESSED)  { cfg.alarm_minute=(cfg.alarm_minute+59)%60; alarm_screen_refresh(); } }
-// Zone callback — ON/OFF toggle
-static void alarm_toggle_cb(lv_event_t *e)
-{ if (lv_event_get_code(e)==LV_EVENT_PRESSED)  { cfg.alarm_enabled=!cfg.alarm_enabled; alarm_screen_refresh(); } }
+// ── Value edit callbacks ───────────────────────────────────────────────────────
+static void se_h_up(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){edit_hour=(edit_hour+1)%24;se_refresh();}}
+static void se_h_dn(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){edit_hour=(edit_hour+23)%24;se_refresh();}}
+static void se_m_up(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){edit_min=(edit_min+1)%60;se_refresh();}}
+static void se_m_dn(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){edit_min=(edit_min+59)%60;se_refresh();}}
+static void se_tog(lv_event_t*e) {if(lv_event_get_code(e)==LV_EVENT_PRESSED){edit_enabled=!edit_enabled;se_refresh();}}
 
-static void show_alarm_screen(void)
+// ── Open shared HH:MM (+ optional toggle) editor ─────────────────────────────
+static void open_editor(int h,int m,bool enabled,bool show_toggle)
 {
-  if (alarm_cont || overlay_cont) return;
+  if (editor_cont) { lv_obj_del(editor_cont); editor_cont=nullptr; }
+  se_hour_lbl=se_min_lbl=se_onoff_lbl=nullptr;
+  edit_hour=h; edit_min=m; edit_enabled=enabled;
 
-  alarm_cont = lv_obj_create(lv_scr_act());
-  lv_obj_set_size(alarm_cont, LV_PCT(100), LV_PCT(100));
-  lv_obj_align(alarm_cont, LV_ALIGN_CENTER, 0, 0);
-  lv_obj_set_style_bg_color(alarm_cont, lv_color_make(8, 12, 28), 0);
-  lv_obj_set_style_bg_opa(alarm_cont, LV_OPA_COVER, 0);
-  lv_obj_set_style_border_width(alarm_cont, 0, 0);
-  lv_obj_set_style_pad_all(alarm_cont, 0, 0);
-  lv_obj_set_style_radius(alarm_cont, 0, 0);
-  lv_obj_clear_flag(alarm_cont, LV_OBJ_FLAG_SCROLLABLE);
-  // Long-press anywhere on background saves + exits
-  lv_obj_add_event_cb(alarm_cont, alarm_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+  editor_cont=lv_obj_create(modal_cont);
+  lv_obj_set_size(editor_cont,320,172); lv_obj_set_pos(editor_cont,0,0);
+  lv_obj_set_style_bg_color(editor_cont,lv_color_make(8,12,28),0);
+  lv_obj_set_style_bg_opa(editor_cont,LV_OPA_COVER,0);
+  lv_obj_set_style_border_width(editor_cont,0,0);
+  lv_obj_set_style_pad_all(editor_cont,0,0);
+  lv_obj_set_style_radius(editor_cont,0,0);
+  lv_obj_clear_flag(editor_cont,LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(editor_cont,modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
 
-  // Title
-  lv_obj_t *title = lv_label_create(alarm_cont);
-  lv_label_set_text(title, LV_SYMBOL_BELL "  Set Alarm");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(title, lv_color_make(200, 200, 255), 0);
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 6);
+  const int VY=54,VH=52,AH=20;
+  const int HX=42,HW=60,MX=150,MW=60,TX=240,TW=60;
 
-  // Thin separator
-  lv_obj_t *sep = lv_obj_create(alarm_cont);
-  lv_obj_set_size(sep, LV_PCT(85), 1);
-  lv_obj_set_style_bg_color(sep, lv_color_make(50, 60, 100), 0);
-  lv_obj_set_style_bg_opa(sep, LV_OPA_COVER, 0);
-  lv_obj_set_style_border_width(sep, 0, 0);
-  lv_obj_set_style_radius(sep, 0, 0);
-  lv_obj_align(sep, LV_ALIGN_TOP_MID, 0, 26);
-
-  // ── Screen geometry ───────────────────────────────────────────────────────
-  // Available area below separator: y=28 to y=172  →  144px
-  // Rows: arrows (20px) + value (50px) + arrows (20px) = 90px, centred → y=55
-  // Column centres (landscape 320px wide):
-  //   HH   :  x=70  (width=60)
-  //   colon:  x=148 (separator)
-  //   mm   :  x=180 (width=60)
-  //   toggle: x=258 (width=52)
-
-  const int VAL_Y    = 54;    // top of value label
-  const int VAL_H    = 52;    // height of value label
-  const int ARR_H    = 20;    // arrow zone height
-  const int HH_X     = 42;   const int HH_W  = 60;
-  const int MM_X     = 150;  const int MM_W  = 60;
-  const int TOG_X    = 240;  const int TOG_W = 60;
-
-  // ── Value labels: each sits inside a transparent fixed-width container ─────
-  // so that LV_SIZE_CONTENT sizing + LV_ALIGN_CENTER always centres correctly
-  // regardless of whether the digit is 1 or 2 chars wide.
-  auto make_val_cont = [&](int x, int w, int y, int h) -> lv_obj_t * {
-    lv_obj_t *cont = lv_obj_create(alarm_cont);
-    lv_obj_set_size(cont, w, h);
-    lv_obj_set_pos(cont, x, y);
-    lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(cont, 0, 0);
-    lv_obj_set_style_pad_all(cont, 0, 0);
-    lv_obj_set_style_radius(cont, 0, 0);
-    lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
+  auto mkcont=[&](int x,int w,int y,int h2)->lv_obj_t*{
+    lv_obj_t*cont=lv_obj_create(editor_cont);
+    lv_obj_set_size(cont,w,h2); lv_obj_set_pos(cont,x,y);
+    lv_obj_set_style_bg_opa(cont,LV_OPA_TRANSP,0);
+    lv_obj_set_style_border_width(cont,0,0); lv_obj_set_style_pad_all(cont,0,0);
+    lv_obj_set_style_radius(cont,0,0); lv_obj_clear_flag(cont,LV_OBJ_FLAG_SCROLLABLE);
     return cont;
   };
-
-  // ── HH ────────────────────────────────────────────────────────────────────
-  lv_obj_t *hh_cont = make_val_cont(HH_X, HH_W, VAL_Y, VAL_H);
-  alarm_hour_lbl = lv_label_create(hh_cont);
-  lv_obj_set_style_text_font(alarm_hour_lbl, &lv_font_montserrat_48, 0);
-  lv_obj_set_style_text_color(alarm_hour_lbl, lv_color_white(), 0);
-  lv_obj_set_size(alarm_hour_lbl, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-  lv_obj_align(alarm_hour_lbl, LV_ALIGN_CENTER, 0, 0);
-
-  // ── Colon ─────────────────────────────────────────────────────────────────
-  lv_obj_t *colon = lv_label_create(alarm_cont);
-  lv_label_set_text(colon, ":");
-  lv_obj_set_style_text_font(colon, &lv_font_montserrat_48, 0);
-  lv_obj_set_style_text_color(colon, lv_color_make(140, 140, 180), 0);
-  lv_obj_set_pos(colon, 124, VAL_Y);
-
-  // ── MM ────────────────────────────────────────────────────────────────────
-  lv_obj_t *mm_cont = make_val_cont(MM_X, MM_W, VAL_Y, VAL_H);
-  alarm_min_lbl = lv_label_create(mm_cont);
-  lv_obj_set_style_text_font(alarm_min_lbl, &lv_font_montserrat_48, 0);
-  lv_obj_set_style_text_color(alarm_min_lbl, lv_color_white(), 0);
-  lv_obj_set_size(alarm_min_lbl, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-  lv_obj_align(alarm_min_lbl, LV_ALIGN_CENTER, 0, 0);
-
-  // ── ON/OFF ────────────────────────────────────────────────────────────────
-  lv_obj_t *tog_cont = make_val_cont(TOG_X, TOG_W, VAL_Y + 12, VAL_H - 24);
-  alarm_onoff_lbl = lv_label_create(tog_cont);
-  lv_obj_set_style_text_font(alarm_onoff_lbl, &lv_font_montserrat_16, 0);
-  lv_label_set_recolor(alarm_onoff_lbl, true);
-  lv_obj_set_size(alarm_onoff_lbl, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-  lv_obj_align(alarm_onoff_lbl, LV_ALIGN_CENTER, 0, 0);
-
-  // ── Up/down arrows (purely visual, labels only) ───────────────────────────
-  auto make_arrow = [&](int x, int w, int y, const char *sym) {
-    lv_obj_t *a = lv_label_create(alarm_cont);
-    lv_label_set_text(a, sym);
-    lv_obj_set_style_text_color(a, lv_color_make(100, 120, 200), 0);
-    lv_obj_set_pos(a, x, y);
-    lv_obj_set_width(a, w);
-    lv_obj_set_style_text_align(a, LV_TEXT_ALIGN_CENTER, 0);
+  auto mkarr=[&](int x,int w,int y,const char*s){
+    lv_obj_t*a=lv_label_create(editor_cont); lv_label_set_text(a,s);
+    lv_obj_set_style_text_color(a,lv_color_make(100,120,200),0);
+    lv_obj_set_pos(a,x,y); lv_obj_set_width(a,w);
+    lv_obj_set_style_text_align(a,LV_TEXT_ALIGN_CENTER,0);
   };
-  make_arrow(HH_X,  HH_W,  VAL_Y - ARR_H, LV_SYMBOL_UP);
-  make_arrow(HH_X,  HH_W,  VAL_Y + VAL_H, LV_SYMBOL_DOWN);
-  make_arrow(MM_X,  MM_W,  VAL_Y - ARR_H, LV_SYMBOL_UP);
-  make_arrow(MM_X,  MM_W,  VAL_Y + VAL_H, LV_SYMBOL_DOWN);
-  make_arrow(TOG_X, TOG_W, VAL_Y - ARR_H, LV_SYMBOL_UP);
-  make_arrow(TOG_X, TOG_W, VAL_Y + VAL_H, LV_SYMBOL_DOWN);
 
-  // ── Invisible tap zones — top/bottom halves of each column ────────────────
-  alarm_make_zone(alarm_cont, HH_X,  28,       HH_W,  (VAL_Y+VAL_H/2)-28, alarm_hour_up_cb);
-  alarm_make_zone(alarm_cont, HH_X,  VAL_Y+VAL_H/2, HH_W,  172-(VAL_Y+VAL_H/2)-18, alarm_hour_dn_cb);
-  alarm_make_zone(alarm_cont, MM_X,  28,       MM_W,  (VAL_Y+VAL_H/2)-28, alarm_min_up_cb);
-  alarm_make_zone(alarm_cont, MM_X,  VAL_Y+VAL_H/2, MM_W,  172-(VAL_Y+VAL_H/2)-18, alarm_min_dn_cb);
-  alarm_make_zone(alarm_cont, TOG_X, 28,       TOG_W, 172-28-18,          alarm_toggle_cb);
+  // HH
+  lv_obj_t*hc=mkcont(HX,HW,VY,VH);
+  se_hour_lbl=lv_label_create(hc);
+  lv_obj_set_style_text_font(se_hour_lbl,&lv_font_montserrat_48,0);
+  lv_obj_set_style_text_color(se_hour_lbl,lv_color_white(),0);
+  lv_obj_set_size(se_hour_lbl,LV_SIZE_CONTENT,LV_SIZE_CONTENT);
+  lv_obj_align(se_hour_lbl,LV_ALIGN_CENTER,0,0);
 
-  // Initial values
-  alarm_screen_refresh();
+  // Colon
+  lv_obj_t*col=lv_label_create(editor_cont); lv_label_set_text(col,":");
+  lv_obj_set_style_text_font(col,&lv_font_montserrat_48,0);
+  lv_obj_set_style_text_color(col,lv_color_make(140,140,180),0);
+  lv_obj_set_pos(col,124,VY);
 
-  // Hint
-  lv_obj_t *hint = lv_label_create(alarm_cont);
-  lv_label_set_text(hint, "hold to save & exit");
-  lv_obj_set_style_text_color(hint, lv_color_make(100, 100, 120), 0);
-  lv_obj_set_style_text_opa(hint, LV_OPA_60, 0);
-  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -4);
+  // MM
+  lv_obj_t*mc=mkcont(MX,MW,VY,VH);
+  se_min_lbl=lv_label_create(mc);
+  lv_obj_set_style_text_font(se_min_lbl,&lv_font_montserrat_48,0);
+  lv_obj_set_style_text_color(se_min_lbl,lv_color_white(),0);
+  lv_obj_set_size(se_min_lbl,LV_SIZE_CONTENT,LV_SIZE_CONTENT);
+  lv_obj_align(se_min_lbl,LV_ALIGN_CENTER,0,0);
+
+  if (show_toggle) {
+    lv_obj_t*tc=mkcont(TX,TW,VY+12,VH-24);
+    se_onoff_lbl=lv_label_create(tc);
+    lv_obj_set_style_text_font(se_onoff_lbl,&lv_font_montserrat_16,0);
+    lv_label_set_recolor(se_onoff_lbl,true);
+    lv_obj_set_size(se_onoff_lbl,LV_SIZE_CONTENT,LV_SIZE_CONTENT);
+    lv_obj_align(se_onoff_lbl,LV_ALIGN_CENTER,0,0);
+    mkarr(TX,TW,VY-AH,LV_SYMBOL_UP);
+    mkarr(TX,TW,VY+VH,LV_SYMBOL_DOWN);
+    se_zone(editor_cont,TX,28,TW,(VY+VH/2)-28,se_tog);
+    se_zone(editor_cont,TX,VY+VH/2,TW,172-(VY+VH/2)-18,se_tog);
+  }
+
+  mkarr(HX,HW,VY-AH,LV_SYMBOL_UP); mkarr(HX,HW,VY+VH,LV_SYMBOL_DOWN);
+  mkarr(MX,MW,VY-AH,LV_SYMBOL_UP); mkarr(MX,MW,VY+VH,LV_SYMBOL_DOWN);
+  se_zone(editor_cont,HX,28,HW,(VY+VH/2)-28,se_h_up);
+  se_zone(editor_cont,HX,VY+VH/2,HW,172-(VY+VH/2)-18,se_h_dn);
+  se_zone(editor_cont,MX,28,MW,(VY+VH/2)-28,se_m_up);
+  se_zone(editor_cont,MX,VY+VH/2,MW,172-(VY+VH/2)-18,se_m_dn);
+
+  lv_obj_t*hint=lv_label_create(editor_cont);
+  lv_label_set_text(hint,"hold to save & exit");
+  lv_obj_set_style_text_color(hint,lv_color_make(100,100,120),0);
+  lv_obj_set_style_text_opa(hint,LV_OPA_60,0);
+  lv_obj_align(hint,LV_ALIGN_BOTTOM_MID,0,-4);
+  se_refresh();
 }
+
+// ── Save helpers ──────────────────────────────────────────────────────────────
+static void close_clock_editor()
+{
+  time_t now=time(nullptr); struct tm cur; localtime_r(&now,&cur);
+  cur.tm_hour=edit_hour; cur.tm_min=edit_min; cur.tm_sec=0; cur.tm_isdst=-1;
+  struct timeval tv={mktime(&cur),0}; settimeofday(&tv,nullptr);
+  if (home_time_lbl) {
+    char buf[6]; snprintf(buf,sizeof(buf),"%02d:%02d",edit_hour,edit_min);
+    lv_label_set_text(home_time_lbl,buf);
+  }
+  Serial.printf("[SETTINGS] RTC set to %02d:%02d\n",edit_hour,edit_min);
+}
+static void close_timer_editor()
+{
+  cfg.timer_hours=edit_hour; cfg.timer_minutes=edit_min;
+  save_config();
+  if (edit_enabled) {
+    timer_start_countdown();  // Ready! — start the countdown
+  } else {
+    timer_stop();             // Not yet — cancel any running timer
+  }
+}
+static void close_alarm_editor()
+{
+  cfg.alarm_enabled=edit_enabled;
+  cfg.alarm_hour=edit_hour; cfg.alarm_minute=edit_min;
+  save_config();
+  if (home_bell_lbl) {
+    if (cfg.alarm_enabled) {
+      lv_label_set_text_fmt(home_bell_lbl,LV_SYMBOL_BELL " %02d:%02d",
+                            cfg.alarm_hour,cfg.alarm_minute);
+      lv_obj_clear_flag(home_bell_lbl,LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(home_bell_lbl,LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+}
+
+// ── Modal close ───────────────────────────────────────────────────────────────
+static void modal_close()
+{
+  se_hour_lbl=se_min_lbl=se_onoff_lbl=nullptr;
+  editor_cont=nullptr;
+  if (modal_cont) { lv_obj_del(modal_cont); modal_cont=nullptr; alarm_cont=nullptr; }
+}
+
+// ── Long-press: save and exit all the way to clock ───────────────────────────
+static void modal_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e)!=LV_EVENT_LONG_PRESSED) return;
+  lv_indev_wait_release(lv_indev_get_act());
+  if (!editor_cont) { modal_close(); return; }
+  switch (carousel_idx) {
+    case 0: close_clock_editor(); break;
+    case 1: close_timer_editor(); break;
+    case 2: close_alarm_editor(); break;
+    default: break;
+  }
+  modal_close();
+}
+
+// ── Carousel tap: enter the selected item ────────────────────────────────────
+static void carousel_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
+  switch (carousel_idx) {
+    case 0: { // Clock — pre-load current RTC time
+      time_t n=time(nullptr); struct tm t; localtime_r(&n,&t);
+      open_editor(t.tm_hour,t.tm_min,false,false); } break;
+    case 1: // Timer — always open with Not yet
+      open_editor(cfg.timer_hours,cfg.timer_minutes,false,true); break;
+    case 2: // Alarm
+      open_editor(cfg.alarm_hour,cfg.alarm_minute,cfg.alarm_enabled,true); break;
+    case 3: // WiFi — inline toggle
+      cfg.wifi_enabled=!cfg.wifi_enabled;
+      apply_wifi_state(); save_config();
+      carousel_build(); break;
+  }
+}
+
+// ── Left/right navigation ────────────────────────────────────────────────────
+static void carousel_left_cb(lv_event_t*e)
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){carousel_idx=(carousel_idx+3)%4;carousel_build();} }
+static void carousel_right_cb(lv_event_t*e)
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){carousel_idx=(carousel_idx+1)%4;carousel_build();} }
+
+// ── Rebuild carousel view ─────────────────────────────────────────────────────
+static void carousel_build()
+{
+  if (editor_cont) { lv_obj_del(editor_cont); editor_cont=nullptr; }
+  se_hour_lbl=se_min_lbl=se_onoff_lbl=nullptr;
+  lv_obj_clean(modal_cont);
+
+  struct CarouselItem { const char *icon; const char *name; const char *desc; };
+  static const CarouselItem items[4]={
+    {LV_SYMBOL_HOME, "CLOCK",  "Set current time"},
+    {LV_SYMBOL_STOP, "TIMER",  "Set countdown"},
+    {LV_SYMBOL_BELL, "ALARM",  "Set wake-up alarm"},
+    {LV_SYMBOL_WIFI, "WiFi",   nullptr},
+  };
+  char wifi_desc[20]={};
+  if (carousel_idx==3)
+    snprintf(wifi_desc,sizeof(wifi_desc),"Currently: %s",cfg.wifi_enabled?"ON":"OFF");
+  const char *desc=(carousel_idx==3)?wifi_desc:items[carousel_idx].desc;
+
+  lv_obj_add_event_cb(modal_cont,modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
+
+  // Left arrow + zone
+  lv_obj_t*larr=lv_label_create(modal_cont);
+  lv_label_set_text(larr,LV_SYMBOL_LEFT);
+  lv_obj_set_style_text_font(larr,&lv_font_montserrat_48,0);
+  lv_obj_set_style_text_color(larr,lv_color_make(80,100,180),0);
+  lv_obj_align(larr,LV_ALIGN_LEFT_MID,6,0);
+  se_zone(modal_cont,0,0,60,172,carousel_left_cb);
+
+  // Right arrow + zone
+  lv_obj_t*rarr=lv_label_create(modal_cont);
+  lv_label_set_text(rarr,LV_SYMBOL_RIGHT);
+  lv_obj_set_style_text_font(rarr,&lv_font_montserrat_48,0);
+  lv_obj_set_style_text_color(rarr,lv_color_make(80,100,180),0);
+  lv_obj_align(rarr,LV_ALIGN_RIGHT_MID,-6,0);
+  se_zone(modal_cont,260,0,60,172,carousel_right_cb);
+
+  // Icon
+  lv_obj_t*icon=lv_label_create(modal_cont);
+  lv_label_set_text(icon,items[carousel_idx].icon);
+  lv_obj_set_style_text_font(icon,&lv_font_montserrat_48,0);
+  lv_obj_set_style_text_color(icon,
+    carousel_idx==3&&!cfg.wifi_enabled?lv_color_make(180,60,60):lv_color_make(120,200,255),0);
+  lv_obj_align(icon,LV_ALIGN_CENTER,0,-28);
+
+  // Name
+  lv_obj_t*name_lbl=lv_label_create(modal_cont);
+  lv_label_set_text(name_lbl,items[carousel_idx].name);
+  lv_obj_set_style_text_font(name_lbl,&lv_font_montserrat_16,0);
+  lv_obj_set_style_text_color(name_lbl,lv_color_white(),0);
+  lv_obj_align(name_lbl,LV_ALIGN_CENTER,0,18);
+
+  // Description
+  lv_obj_t*desc_lbl=lv_label_create(modal_cont);
+  lv_label_set_text(desc_lbl,desc);
+  lv_obj_set_style_text_font(desc_lbl,&lv_font_montserrat_14,0);
+  lv_obj_set_style_text_color(desc_lbl,
+    carousel_idx==3?(cfg.wifi_enabled?lv_color_make(80,200,120):lv_color_make(200,80,80))
+                   :lv_color_make(160,160,180),0);
+  lv_obj_align(desc_lbl,LV_ALIGN_CENTER,0,40);
+
+  // Centre tap zone — uses CLICKED so long-press and tap are mutually
+  // exclusive: CLICKED only fires when the finger lifts without triggering
+  // LONG_PRESSED, so the editor never opens immediately before closing.
+  {
+    lv_obj_t *z = lv_obj_create(modal_cont);
+    lv_obj_set_size(z,200,172); lv_obj_set_pos(z,60,0);
+    lv_obj_set_style_bg_opa(z,LV_OPA_TRANSP,0);
+    lv_obj_set_style_border_width(z,0,0); lv_obj_set_style_pad_all(z,0,0);
+    lv_obj_set_style_radius(z,0,0); lv_obj_set_style_shadow_width(z,0,0);
+    lv_obj_clear_flag(z,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(z,carousel_tap_cb,LV_EVENT_CLICKED,nullptr);
+    lv_obj_add_event_cb(z,modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
+  }
+
+  // Hint — shown above the position dots
+  lv_obj_t*hint=lv_label_create(modal_cont);
+  lv_label_set_text(hint,"tap  ·  hold to exit");
+  lv_obj_set_style_text_color(hint,lv_color_make(80,80,100),0);
+  lv_obj_set_style_text_opa(hint,LV_OPA_60,0);
+  lv_obj_set_style_text_font(hint,&lv_font_montserrat_14,0);
+  lv_obj_align(hint,LV_ALIGN_BOTTOM_MID,0,-18);  // above the dots
+
+  // Position dots — bottom row
+  for (int i=0;i<4;i++) {
+    lv_obj_t*dot=lv_label_create(modal_cont);
+    lv_label_set_text(dot,i==carousel_idx?"●":"○");
+    lv_obj_set_style_text_color(dot,
+      i==carousel_idx?lv_color_white():lv_color_make(80,80,100),0);
+    lv_obj_set_pos(dot,137+i*14,156);
+  }
+}
+
+// ── Open the carousel (called from home long-press) ───────────────────────────
+static void show_carousel(void)
+{
+  if (modal_cont || overlay_cont) return;
+  carousel_idx=0;  // always start at CLOCK
+
+  modal_cont=lv_obj_create(lv_scr_act());
+  lv_obj_set_size(modal_cont,LV_PCT(100),LV_PCT(100));
+  lv_obj_align(modal_cont,LV_ALIGN_CENTER,0,0);
+  lv_obj_set_style_bg_color(modal_cont,lv_color_make(8,12,28),0);
+  lv_obj_set_style_bg_opa(modal_cont,LV_OPA_COVER,0);
+  lv_obj_set_style_border_width(modal_cont,0,0);
+  lv_obj_set_style_pad_all(modal_cont,0,0);
+  lv_obj_set_style_radius(modal_cont,0,0);
+  lv_obj_clear_flag(modal_cont,LV_OBJ_FLAG_SCROLLABLE);
+  alarm_cont=modal_cont;  // keep existing guards working
+  carousel_build();
+}
+
+// Backward-compat alias (home_longpress still calls show_alarm_screen)
+static inline void show_alarm_screen() { show_carousel(); }
 
 // Helper: refresh the bell label on the home screen
 static void update_home_bell()
@@ -1520,6 +1805,14 @@ static void clock_face_show(lv_timer_t *t)
   lv_obj_set_style_text_color(home_time_lbl, lv_color_white(), 0);
   lv_obj_set_style_text_letter_space(home_time_lbl, 4, 0);
   lv_obj_align(home_time_lbl, LV_ALIGN_CENTER, 0, 0);
+
+  // ── Timer label (bottom-left, hidden when timer not running) ─────────────
+  home_timer_lbl=lv_label_create(lv_scr_act());
+  lv_label_set_text(home_timer_lbl,"");
+  lv_obj_set_style_text_font(home_timer_lbl,&lv_font_montserrat_14,0);
+  lv_obj_set_style_text_color(home_timer_lbl,lv_color_make(100,200,255),0);
+  lv_obj_align(home_timer_lbl,LV_ALIGN_BOTTOM_LEFT,8,-4);
+  if (!timer_running) lv_obj_add_flag(home_timer_lbl,LV_OBJ_FLAG_HIDDEN);
 
   // ── Bell icon (bottom-right, shown only when alarm is enabled) ──────────
   home_bell_lbl = lv_label_create(lv_scr_act());
@@ -1585,7 +1878,7 @@ static void home_screen_init(void)
     // Without this the zone's CLICKED callback (show_gif / show_battery)
     // fires immediately after the alarm screen opens.
     lv_indev_wait_release(lv_indev_get_act());
-    show_alarm_screen();
+    show_carousel();
   };
 
   for (int i = 0; i < 4; i++) {
@@ -1778,10 +2071,8 @@ void setup()
   // addAP() queues the credential; actual connection happens in wifi_poll_cb()
   // (an LVGL timer, every 5 s) so setup() is never blocked.
   // configTime() starts the SNTP client; it syncs automatically once online.
-  Serial.println("[7b] Starting WiFi + NTP client (non-blocking)...");
-  WiFi.mode(WIFI_STA);
-  wifiMulti.addAP(cfg.wifi_ssid, cfg.wifi_password);
-  configTime(cfg.gmt_offset_hours * 3600L, 0, cfg.ntp_server);
+  Serial.println("[7b] Applying WiFi state from config...");
+  apply_wifi_state();
   Serial.println("     Done.");
 
   Serial.println("[8] Building UI...");

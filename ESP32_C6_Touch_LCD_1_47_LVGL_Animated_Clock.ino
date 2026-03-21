@@ -122,7 +122,14 @@ lv_timer_t *wifi_timer     = nullptr;
 lv_obj_t   *home_bell_lbl  = nullptr;  // bell icon shown on home when alarm ON
 lv_obj_t   *alarm_cont     = nullptr;  // alarm editor screen
 
-bool sdCardAvailable = false;
+bool sdCardAvailable  = false;
+bool boot_from_sleep  = false;  // true when waking from deep sleep via BOOT btn
+
+lv_obj_t   *label_percent        = nullptr;  // battery % in title bar
+lv_obj_t   *shutdown_popup       = nullptr;  // countdown confirmation card
+lv_obj_t   *shutdown_cntdown_lbl = nullptr;  // "Shutting down in N..." label
+lv_timer_t *shutdown_timer       = nullptr;  // 1-second tick
+int         shutdown_count       = 5;
 
 LV_FONT_DECLARE(montserrat_96);
 
@@ -578,18 +585,186 @@ void touchpad_read_cb(lv_indev_t * /*indev*/, lv_indev_data_t *data)
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ══════════════════════════════════════════════════════════════════════════════
+//  BATTERY HELPERS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// LiPo discharge curve: 4.20V=100% → 3.00V=0%
+// ADC reads through a ÷3 divider: actual_V = analogReadMilliVolts × 3 / 1000
+static int battery_voltage_to_percent(float v)
+{
+  if (v >= 4.20f) return 100;
+  if (v >= 4.00f) return 80  + (int)((v - 4.00f) / 0.20f * 20.f);
+  if (v >= 3.80f) return 50  + (int)((v - 3.80f) / 0.20f * 30.f);
+  if (v >= 3.60f) return 20  + (int)((v - 3.60f) / 0.20f * 30.f);
+  if (v >= 3.00f) return      (int)((v - 3.00f) / 0.60f * 20.f);
+  return 0;
+}
+
+static const char *battery_icon(int pct)
+{
+  if (pct >= 75) return LV_SYMBOL_BATTERY_FULL;
+  if (pct >= 50) return LV_SYMBOL_BATTERY_3;
+  if (pct >= 25) return LV_SYMBOL_BATTERY_2;
+  if (pct >= 10) return LV_SYMBOL_BATTERY_1;
+  return LV_SYMBOL_BATTERY_EMPTY;
+}
+
+// Read current battery percentage (shared by timer + low-bat check)
+static int battery_read_percent()
+{
+  uint16_t mv = analogReadMilliVolts(BAT_PIN);
+  float v     = mv * 3.0f / 1000.0f;
+  return battery_voltage_to_percent(v);
+}
+
+// ── Shutdown ──────────────────────────────────────────────────────────────────
+static void shutdown_cancel()
+{
+  if (shutdown_timer) { lv_timer_del(shutdown_timer); shutdown_timer = nullptr; }
+  if (shutdown_popup) { lv_obj_del(shutdown_popup); shutdown_popup = nullptr; }
+  shutdown_cntdown_lbl = nullptr;
+  shutdown_count = 5;
+}
+
+static void shutdown_cancel_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) == LV_EVENT_CLICKED) shutdown_cancel();
+}
+
+static void shutdown_execute()
+{
+  // ── Wake strategy ────────────────────────────────────────────────────────
+  // RESET button (EN pin) always causes a hard reboot — use it any time.
+  // Timer wakeup: if an alarm is configured, the device wakes automatically
+  // 30 s before alarm time so the boot sequence completes before it fires.
+  // If no alarm is set, the device sleeps indefinitely until RESET is pressed.
+  //
+  Serial.println("[PWR] Entering deep sleep.");
+  Serial.println("[PWR] Press RESET button to wake the device.");
+  if (cfg.alarm_enabled) {
+    // Calculate seconds until alarm; wake 30s early to let boot complete
+    time_t now = time(nullptr);
+    struct tm t; localtime_r(&now, &t);
+    int now_sec  = t.tm_hour * 3600 + t.tm_min * 60 + t.tm_sec;
+    int alm_sec  = cfg.alarm_hour * 3600 + cfg.alarm_minute * 60;
+    int diff_sec = alm_sec - now_sec;
+    if (diff_sec <= 0) diff_sec += 86400;   // alarm is tomorrow
+    diff_sec = max(diff_sec - 30, 10);       // 30s early, minimum 10s
+    esp_sleep_enable_timer_wakeup((uint64_t)diff_sec * 1000000ULL);
+    Serial.printf("[PWR] Timer wakeup set for %ds (alarm at %02d:%02d)\n",
+                  diff_sec, cfg.alarm_hour, cfg.alarm_minute);
+  }
+  Serial.flush();
+  ledcWrite(GFX_BL, 0);  // blank display
+  delay(200);
+  esp_deep_sleep_start();
+}
+
+static void shutdown_tick_cb(lv_timer_t * /*t*/)
+{
+  shutdown_count--;
+  if (shutdown_cntdown_lbl)
+    lv_label_set_text_fmt(shutdown_cntdown_lbl,
+                          "Shutting down in %d...", shutdown_count);
+  if (shutdown_count <= 0) {
+    shutdown_cancel();
+    shutdown_execute();
+  }
+}
+
+static void show_shutdown_popup()
+{
+  if (shutdown_popup) return;
+  shutdown_count = 5;
+
+  // Semi-transparent confirmation card centred over the battery screen
+  shutdown_popup = lv_obj_create(overlay_cont);
+  lv_obj_set_size(shutdown_popup, 240, 90);
+  lv_obj_align(shutdown_popup, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(shutdown_popup, lv_color_make(20, 20, 40), 0);
+  lv_obj_set_style_bg_opa(shutdown_popup, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(shutdown_popup, lv_color_make(80, 80, 160), 0);
+  lv_obj_set_style_border_width(shutdown_popup, 1, 0);
+  lv_obj_set_style_radius(shutdown_popup, 8, 0);
+  lv_obj_set_style_pad_all(shutdown_popup, 0, 0);
+  lv_obj_clear_flag(shutdown_popup, LV_OBJ_FLAG_SCROLLABLE);
+
+  shutdown_cntdown_lbl = lv_label_create(shutdown_popup);
+  lv_label_set_text_fmt(shutdown_cntdown_lbl,
+                        "Shutting down in %d...", shutdown_count);
+  lv_obj_set_style_text_font(shutdown_cntdown_lbl, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(shutdown_cntdown_lbl, lv_color_make(220, 220, 255), 0);
+  lv_obj_align(shutdown_cntdown_lbl, LV_ALIGN_CENTER, 0, -18);
+
+  lv_obj_t *btn = lv_btn_create(shutdown_popup);
+  lv_obj_set_size(btn, 90, 28);
+  lv_obj_align(btn, LV_ALIGN_CENTER, 0, 22);
+  lv_obj_set_style_bg_color(btn, lv_color_make(180, 60, 60), 0);
+  lv_obj_set_style_radius(btn, 6, 0);
+  lv_obj_add_event_cb(btn, shutdown_cancel_cb, LV_EVENT_CLICKED, nullptr);
+
+  lv_obj_t *btn_lbl = lv_label_create(btn);
+  lv_label_set_text(btn_lbl, "Cancel");
+  lv_obj_set_style_text_font(btn_lbl, &lv_font_montserrat_14, 0);
+  lv_obj_center(btn_lbl);
+
+  shutdown_timer = lv_timer_create(shutdown_tick_cb, 1000, nullptr);
+}
+
+static void battery_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  lv_indev_wait_release(lv_indev_get_act());
+  show_shutdown_popup();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  BATTERY TIMER
 // ══════════════════════════════════════════════════════════════════════════════
 static void battery_timer_callback(lv_timer_t * /*timer*/)
 {
-  if (!label_adc_raw || !label_voltage) return;
-  char     buf[20];
+  char     buf[24];
   uint16_t raw   = analogRead(BAT_PIN);
   uint16_t mv    = analogReadMilliVolts(BAT_PIN);
   float    volts = mv * 3.0f / 1000.0f;
-  lv_label_set_text_fmt(label_adc_raw, "%d", raw);
-  snprintf(buf, sizeof(buf), "%.1f V", volts);
-  lv_label_set_text(label_voltage, buf);
+  int      pct   = battery_voltage_to_percent(volts);
+
+  // ── Update battery screen labels if open ────────────────────────────────
+  if (label_adc_raw) lv_label_set_text_fmt(label_adc_raw, "%d", raw);
+  if (label_voltage) {
+    snprintf(buf, sizeof(buf), "%.2f V", volts);
+    lv_label_set_text(label_voltage, buf);
+  }
+  if (label_percent)
+    lv_label_set_text_fmt(label_percent, "%s  %d%%", battery_icon(pct), pct);
+
+  // ── Home screen clock colour by battery level ────────────────────────────
+  //   > 25%  : white  (normal)
+  //   11-25% : orange (low warning)
+  //   ≤ 10%  : red    (critical — triggers auto-poweroff after 60 s)
+  if (home_time_lbl) {
+    lv_color_t clr = lv_color_white();
+    if      (pct <= 10) clr = lv_color_make(220, 50,  50);   // red
+    else if (pct <= 25) clr = lv_color_make(255, 165,  0);   // orange
+    lv_obj_set_style_text_color(home_time_lbl, clr, 0);
+  }
+
+  // ── Auto-poweroff at ≤ 10% ───────────────────────────────────────────────
+  // Uses a one-shot flag so we only trigger once per session, not every second.
+  static bool low_bat_triggered = false;
+  if (pct <= 10 && !low_bat_triggered && !overlay_cont && !alarm_cont) {
+    low_bat_triggered = true;
+    Serial.printf("[BAT] Critical: %d%% — auto-poweroff in 60s\n", pct);
+    // Open battery screen so the user sees the warning
+    show_battery_screen();
+    // Start shutdown countdown at 60 seconds instead of the normal 5
+    shutdown_count = 60;
+    show_shutdown_popup();
+    // Override the countdown label to explain why
+    if (shutdown_cntdown_lbl)
+      lv_label_set_text_fmt(shutdown_cntdown_lbl,
+        "Low battery (%d%%)!\nSleeping in %ds...", pct, shutdown_count);
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -757,6 +932,12 @@ static void overlay_close_event_cb(lv_event_t *e)
   if (overlay_cont) {
     label_adc_raw = nullptr;
     label_voltage = nullptr;
+    label_percent = nullptr;
+    // Cancel shutdown countdown if battery screen closed via tap
+    if (shutdown_timer) { lv_timer_del(shutdown_timer); shutdown_timer = nullptr; }
+    if (shutdown_popup) { lv_obj_del(shutdown_popup); shutdown_popup = nullptr; }
+    shutdown_cntdown_lbl = nullptr;
+    shutdown_count = 5;
     // Stop tilt timer if status screen was open
     if (tilt_timer) {
       lv_timer_del(tilt_timer);
@@ -983,12 +1164,19 @@ static void show_battery_screen(void)
   if (overlay_cont) return;
   overlay_cont = make_overlay(lv_color_make(14, 14, 26));
 
-  lv_obj_t *title = lv_label_create(overlay_cont);
-  lv_label_set_text(title, LV_SYMBOL_BATTERY_FULL "  Battery");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(title, lv_color_make(180, 180, 220), 0);
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
-  lv_obj_add_flag(title, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  // Read immediately for the initial title
+  uint16_t mv_now  = analogReadMilliVolts(BAT_PIN);
+  float    v_now   = mv_now * 3.0f / 1000.0f;
+  int      pct_now = battery_voltage_to_percent(v_now);
+
+  // ── Title: icon + "Battery" + live % (updated by battery_timer_callback) ──
+  label_percent = lv_label_create(overlay_cont);
+  lv_label_set_text_fmt(label_percent, "%s  Battery  %d%%",
+                        battery_icon(pct_now), pct_now);
+  lv_obj_set_style_text_font(label_percent, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(label_percent, lv_color_make(180, 180, 220), 0);
+  lv_obj_align(label_percent, LV_ALIGN_TOP_MID, 0, 8);
+  lv_obj_add_flag(label_percent, LV_OBJ_FLAG_IGNORE_LAYOUT);
 
   lv_obj_t *sep = lv_obj_create(overlay_cont);
   lv_obj_set_size(sep, LV_PCT(85), 1);
@@ -999,31 +1187,45 @@ static void show_battery_screen(void)
   lv_obj_align(sep, LV_ALIGN_TOP_MID, 0, 30);
   lv_obj_add_flag(sep, LV_OBJ_FLAG_IGNORE_LAYOUT);
 
-  lv_obj_t *adc_key = lv_label_create(overlay_cont);
-  lv_label_set_text(adc_key, "ADC raw");
-  lv_obj_set_style_text_color(adc_key, lv_color_make(140, 140, 180), 0);
-  lv_obj_align(adc_key, LV_ALIGN_LEFT_MID, 24, -14);
-  lv_obj_add_flag(adc_key, LV_OBJ_FLAG_IGNORE_LAYOUT);
-
-  label_adc_raw = lv_label_create(overlay_cont);
-  lv_label_set_text(label_adc_raw, "---");
-  lv_obj_set_style_text_font(label_adc_raw, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(label_adc_raw, lv_color_white(), 0);
-  lv_obj_align(label_adc_raw, LV_ALIGN_RIGHT_MID, -24, -14);
-  lv_obj_add_flag(label_adc_raw, LV_OBJ_FLAG_IGNORE_LAYOUT);
-
+  // ── Row 1: Voltage ────────────────────────────────────────────────────────
   lv_obj_t *v_key = lv_label_create(overlay_cont);
   lv_label_set_text(v_key, "Voltage");
   lv_obj_set_style_text_color(v_key, lv_color_make(140, 140, 180), 0);
-  lv_obj_align(v_key, LV_ALIGN_LEFT_MID, 24, 14);
+  lv_obj_align(v_key, LV_ALIGN_LEFT_MID, 24, -22);
   lv_obj_add_flag(v_key, LV_OBJ_FLAG_IGNORE_LAYOUT);
 
   label_voltage = lv_label_create(overlay_cont);
   lv_label_set_text(label_voltage, "--- V");
   lv_obj_set_style_text_font(label_voltage, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(label_voltage, lv_color_make(100, 220, 120), 0);
-  lv_obj_align(label_voltage, LV_ALIGN_RIGHT_MID, -24, 14);
+  lv_obj_align(label_voltage, LV_ALIGN_RIGHT_MID, -24, -22);
   lv_obj_add_flag(label_voltage, LV_OBJ_FLAG_IGNORE_LAYOUT);
+
+  // ── Row 2: ADC raw ────────────────────────────────────────────────────────
+  lv_obj_t *adc_key = lv_label_create(overlay_cont);
+  lv_label_set_text(adc_key, "ADC raw");
+  lv_obj_set_style_text_color(adc_key, lv_color_make(140, 140, 180), 0);
+  lv_obj_align(adc_key, LV_ALIGN_LEFT_MID, 24, 4);
+  lv_obj_add_flag(adc_key, LV_OBJ_FLAG_IGNORE_LAYOUT);
+
+  label_adc_raw = lv_label_create(overlay_cont);
+  lv_label_set_text(label_adc_raw, "---");
+  lv_obj_set_style_text_font(label_adc_raw, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(label_adc_raw, lv_color_white(), 0);
+  lv_obj_align(label_adc_raw, LV_ALIGN_RIGHT_MID, -24, 4);
+  lv_obj_add_flag(label_adc_raw, LV_OBJ_FLAG_IGNORE_LAYOUT);
+
+  // ── Row 3: Power-off hint ─────────────────────────────────────────────────
+  lv_obj_t *pwr_hint = lv_label_create(overlay_cont);
+  lv_label_set_text(pwr_hint, LV_SYMBOL_POWER "  hold to power off");
+  lv_obj_set_style_text_color(pwr_hint, lv_color_make(160, 100, 100), 0);
+  lv_obj_set_style_text_opa(pwr_hint, LV_OPA_70, 0);
+  lv_obj_align(pwr_hint, LV_ALIGN_LEFT_MID, 24, 30);
+  lv_obj_add_flag(pwr_hint, LV_OBJ_FLAG_IGNORE_LAYOUT);
+
+  // Long-press triggers the 5-second shutdown countdown popup
+  lv_obj_add_event_cb(overlay_cont, battery_longpress_cb,
+                      LV_EVENT_LONG_PRESSED, nullptr);
 
   battery_timer_callback(nullptr);
   add_back_hint(overlay_cont);
@@ -1303,9 +1505,17 @@ static void clock_face_show(lv_timer_t *t)
     home_hello_lbl = nullptr;
   }
 
-  // Large HH:mm label — montserrat_48 is ~48 px tall, fits the 172 px height
+  // Large HH:mm label — populate from RTC immediately when waking from sleep
   home_time_lbl = lv_label_create(lv_scr_act());
-  lv_label_set_text(home_time_lbl, "--:--");
+  if (boot_from_sleep) {
+    time_t rtc_now = time(nullptr);
+    struct tm rtc_tm; localtime_r(&rtc_now, &rtc_tm);
+    char tbuf[6];
+    snprintf(tbuf, sizeof(tbuf), "%02d:%02d", rtc_tm.tm_hour, rtc_tm.tm_min);
+    lv_label_set_text(home_time_lbl, tbuf);  // real time — no "--:--" flash
+  } else {
+    lv_label_set_text(home_time_lbl, "--:--");  // cold boot: wait for NTP
+  }
   lv_obj_set_style_text_font(home_time_lbl, &montserrat_96, 0);
   lv_obj_set_style_text_color(home_time_lbl, lv_color_white(), 0);
   lv_obj_set_style_text_letter_space(home_time_lbl, 4, 0);
@@ -1343,15 +1553,21 @@ static void home_screen_init(void)
   lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
-  // ── "Hello!" splash ───────────────────────────────────────────────────────
+  // ── Splash: "Hello!" on cold boot, brief "Welcome back!" on wake-from-sleep
   home_hello_lbl = lv_label_create(scr);
-  lv_label_set_text(home_hello_lbl, "Hello!");
-  lv_obj_set_style_text_font(home_hello_lbl, &lv_font_montserrat_48, 0);
+  if (boot_from_sleep) {
+    lv_label_set_text(home_hello_lbl, LV_SYMBOL_HOME "  Welcome back!");
+    lv_obj_set_style_text_font(home_hello_lbl, &lv_font_montserrat_16, 0);
+  } else {
+    lv_label_set_text(home_hello_lbl, "Hello!");
+    lv_obj_set_style_text_font(home_hello_lbl, &lv_font_montserrat_48, 0);
+  }
   lv_obj_set_style_text_color(home_hello_lbl, lv_color_white(), 0);
   lv_obj_align(home_hello_lbl, LV_ALIGN_CENTER, 0, 0);
 
-  // ── Transition to clock face after 2.5 s ──────────────────────────────────
-  lv_timer_t *splash = lv_timer_create(clock_face_show, 2500, nullptr);
+  // Cold boot: 2.5 s splash. Wake from sleep: 1.0 s (user pressed intentionally)
+  uint32_t splash_ms = boot_from_sleep ? 1000 : 2500;
+  lv_timer_t *splash = lv_timer_create(clock_face_show, splash_ms, nullptr);
   lv_timer_set_repeat_count(splash, 1);
 
   // ── Invisible 4-zone touch overlay ───────────────────────────────────────
@@ -1398,9 +1614,24 @@ static void home_screen_init(void)
 // ══════════════════════════════════════════════════════════════════════════════
 void setup()
 {
+  // ── Wake cause — must be read before any peripheral init ───────────────────
+  esp_sleep_wakeup_cause_t wakeup_cause = esp_sleep_get_wakeup_cause();
+  // Timer wakeup = alarm auto-wake (only wakeup source configured)
+  boot_from_sleep = (wakeup_cause == ESP_SLEEP_WAKEUP_TIMER);
+
+  // Snapshot RTC time immediately if waking from sleep
+  if (boot_from_sleep) {
+    time_t rtc_now = time(nullptr);
+    // Sanity: RTC epoch must be > 2020-01-01; if not, battery died during sleep
+    if (rtc_now < 1577836800UL) boot_from_sleep = false;
+  }
+
   Serial.begin(115200);
   delay(500);  // give serial monitor time to connect
   Serial.println("\n\n========== BOOT ==========");
+  Serial.printf("[BOOT] Wake cause: %s\n",
+    wakeup_cause == ESP_SLEEP_WAKEUP_TIMER     ? "TIMER — alarm auto-wake" :
+    wakeup_cause == ESP_SLEEP_WAKEUP_UNDEFINED ? "cold boot / RESET button" : "other");
 
   // ── Step 1: Pull ALL SPI CS lines HIGH before the bus starts ──────────────
   // This prevents any device from misinterpreting the SPI init sequence.

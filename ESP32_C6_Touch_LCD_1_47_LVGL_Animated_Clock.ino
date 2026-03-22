@@ -1544,7 +1544,7 @@ static void open_clock_editor()
   // Time row  (montserrat_48): centred at y=24, height=48
   const int TY=24, TH=48, TA=16;  // top-row y, height, arrow height
   // Date row  (montserrat_16): centred at y=96, height=20
-  const int DY=96, DH=20, DA=12;  // date-row y, height, arrow height
+  const int DY=112, DH=20, DA=12;  // date-row y, height, arrow height
   // Time columns
   const int HX=60,HW=60, MX=168,MW=60;
   // Date columns
@@ -1599,7 +1599,7 @@ static void open_clock_editor()
 
   // ── Thin divider between time and date rows ───────────────────────────────
   lv_obj_t*div=lv_obj_create(editor_cont);
-  lv_obj_set_size(div,240,1); lv_obj_set_pos(div,40,DY-8);
+  lv_obj_set_size(div,240,1); lv_obj_set_pos(div,40,DY-16);
   lv_obj_set_style_bg_color(div,lv_color_make(50,60,100),0);
   lv_obj_set_style_bg_opa(div,LV_OPA_COVER,0);
   lv_obj_set_style_border_width(div,0,0); lv_obj_set_style_radius(div,0,0);

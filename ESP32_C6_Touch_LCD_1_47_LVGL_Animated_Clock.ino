@@ -929,19 +929,25 @@ static void battery_timer_callback(lv_timer_t * /*timer*/)
 //  WIFI + NTP BACKGROUND POLL TIMER  (every 5 s)
 //  Runs entirely from the LVGL timer so it never blocks the display.
 // ══════════════════════════════════════════════════════════════════════════════
-static void wifi_poll_cb(lv_timer_t * /*t*/)
+static void wifi_poll_cb(lv_timer_t *t)
 {
-  // WiFi.status() is instant (no blocking). wifiMulti.run(0) is called
-  // only when disconnected so it can attempt a reconnect in the background.
-  wl_status_t wst = WiFi.status();
+  wl_status_t wst = WiFi.status();  // instant read, never blocks
   if (wst == WL_CONNECTED) {
     wifiConnected = true;
     time_t now = time(nullptr);
     timeSynced = (now >= 8 * 3600 * 2);
+    lv_timer_set_period(t, 5000);   // back to 5s when connected
   } else {
     wifiConnected = false;
     timeSynced    = false;
-    wifiMulti.run(0);  // non-blocking reconnect attempt
+    // wifiMulti.run() briefly takes the radio lock and stalls the
+    // FreeRTOS scheduler for 20-80ms, causing visible UI stutter.
+    // Only attempt reconnect when no modal/editor is open, and slow
+    // down to every 30s so the stall is infrequent.
+    if (!modal_cont && !overlay_cont && cfg.wifi_enabled) {
+      wifiMulti.run(0);
+    }
+    lv_timer_set_period(t, 30000);  // 30s between reconnect attempts
   }
 }
 
@@ -1047,7 +1053,7 @@ static void run_daily_automation(int hour, int minute)
       && hour   == cfg.alarm_hour
       && minute == cfg.alarm_minute) {
     Serial.printf("[SCHED] Alarm at %02d:%02d\n", hour, minute);
-    set_brightness(80);
+    set_brightness(50);
     show_gif_fullscreen(GIF_ALARM_PATH);
     buzzer_start_alarm();
   }
@@ -1725,7 +1731,7 @@ static void carousel_build()
 
   // Hint — shown above the position dots
   lv_obj_t*hint=lv_label_create(modal_cont);
-  lv_label_set_text(hint,"tap  ·  hold to exit");
+  lv_label_set_text(hint,"tap in or hold to exit");
   lv_obj_set_style_text_color(hint,lv_color_make(80,80,100),0);
   lv_obj_set_style_text_opa(hint,LV_OPA_60,0);
   lv_obj_set_style_text_font(hint,&lv_font_montserrat_14,0);

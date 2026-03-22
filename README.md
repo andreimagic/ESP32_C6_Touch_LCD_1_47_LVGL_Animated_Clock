@@ -13,7 +13,7 @@ A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47
 | **Big clock face** | HH:MM in a full-screen custom font (Montserrat 96px) |
 | **Hello! splash** | "Hello!" shown for 2.5 s on cold boot; "Welcome back!" for 1 s when waking from deep sleep |
 | **Animated GIFs** | Smile (day) and Sleep (night) emotions from SD card |
-| **Scheduled animation** | GIF plays every 5 min (configurable duration), 800 ms fade back to clock |
+| **Scheduled animation** | GIF plays every 2 min (configurable duration), 800 ms fade back to clock |
 | **Night mode** | Sleep GIF used automatically between 20:00 and 07:00 |
 | **Alarm** | Configurable wake-up time, buzzer beeps, smile GIF, stops on touch |
 | **Brightness schedule** | Auto-dims at 19:00 → 19:30 → 20:00, brightens at 06:00 → 07:00 |
@@ -178,7 +178,7 @@ enabled = true
 time = 07:10
 
 [animation]
-# Play smile GIF (day) or sleep GIF (night) automatically every 5 minutes
+# Play smile GIF (day) or sleep GIF (night) automatically every 2 minutes
 # set schedule = false to disable
 schedule = true
 # Seconds the GIF plays before fading back to the clock (3-60)
@@ -193,7 +193,7 @@ duration = 10
 | `[clock]` | `ntp_server` | string | `pool.ntp.org` | NTP time server |
 | `[alarm]` | `enabled` | bool | `false` | Enable morning alarm |
 | `[alarm]` | `time` | `HH:MM` | `07:00` | Alarm time |
-| `[animation]` | `schedule` | bool | `true` | Enable periodic GIF every 5 min |
+| `[animation]` | `schedule` | bool | `true` | Enable periodic GIF every 2 min |
 | `[animation]` | `duration` | int (3–60) | `10` | Seconds each GIF plays before fading |
 
 > If `config.ini` is missing the firmware boots with the hardcoded defaults shown above.
@@ -274,7 +274,7 @@ All times are local time. Timezone is set via `gmt_offset` in `[clock]` in `conf
 
 ## Scheduled Animation
 
-When `[animation] schedule = true`, a GIF plays automatically every 5 minutes for the configured duration, then fades back to the clock over 800 ms.
+When `[animation] schedule = true`, a GIF plays automatically every 2 minutes for the configured duration, then fades back to the clock over 800 ms.
 
 | Time of day | GIF played |
 |---|---|

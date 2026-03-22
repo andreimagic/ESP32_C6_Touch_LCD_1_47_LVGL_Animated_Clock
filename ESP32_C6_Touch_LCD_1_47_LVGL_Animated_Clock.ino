@@ -1082,7 +1082,10 @@ static void clock_tick_cb(lv_timer_t * /*t*/)
 
   // Run daily automation (brightness schedule + sleep GIF) once per minute.
   // Only after NTP is synced so we have a reliable time.
-  if (timeSynced) {
+  // if (timeSynced) {
+  //   run_daily_automation(tm_info.tm_hour, tm_info.tm_min);
+  // }
+  if (now > 1577836800UL) {   // RTC holds a sane time (> 2020-01-01)
     run_daily_automation(tm_info.tm_hour, tm_info.tm_min);
   }
 }

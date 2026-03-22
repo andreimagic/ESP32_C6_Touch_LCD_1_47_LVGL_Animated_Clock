@@ -1245,19 +1245,21 @@ static void show_status_screen(void)
   // Screen is 172px tall (landscape). Title sits at top, separator at y=30,
   // leaving three evenly-spaced rows below for WiFi, NTP and Brightness.
   lv_obj_t *title = lv_label_create(overlay_cont);
-  if (timeSynced) {
+  {
     time_t    now = time(nullptr);
     struct tm t;
     localtime_r(&now, &t);
-    static const char *wday[]  = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
-    static const char *month[] = {"Jan","Feb","Mar","Apr","May","Jun",
-                                   "Jul","Aug","Sep","Oct","Nov","Dec"};
-    char date_buf[28];
-    snprintf(date_buf, sizeof(date_buf), "%s %d %s %d",
-             wday[t.tm_wday], t.tm_mday, month[t.tm_mon], 1900 + t.tm_year);
-    lv_label_set_text(title, date_buf);
-  } else {
-    lv_label_set_text(title, "Status");
+    if (now > 1577836800UL) {  // RTC sane (> 2020) — show date
+      static const char *wday[]  = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+      static const char *month[] = {"Jan","Feb","Mar","Apr","May","Jun",
+                                     "Jul","Aug","Sep","Oct","Nov","Dec"};
+      char date_buf[28];
+      snprintf(date_buf, sizeof(date_buf), "%s %d %s %d",
+               wday[t.tm_wday], t.tm_mday, month[t.tm_mon], 1900 + t.tm_year);
+      lv_label_set_text(title, date_buf);
+    } else {
+      lv_label_set_text(title, "Status");  // RTC not set yet
+    }
   }
   lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(title, lv_color_make(180, 180, 220), 0);

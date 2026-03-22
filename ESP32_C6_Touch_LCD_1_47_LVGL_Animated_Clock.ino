@@ -1433,6 +1433,12 @@ static lv_obj_t *se_onoff_lbl  = nullptr;
 static int  edit_hour           = 0;
 static int  edit_min            = 0;
 static bool edit_enabled        = false;
+static int  edit_day            = 1;
+static int  edit_month          = 1;   // 1-12
+static int  edit_year           = 2024;
+static lv_obj_t *se_day_lbl     = nullptr;
+static lv_obj_t *se_mon_lbl     = nullptr;
+static lv_obj_t *se_yr_lbl      = nullptr;
 
 // ── Flash animation ───────────────────────────────────────────────────────────
 static void se_flash_cb(void *obj, int32_t v)
@@ -1461,6 +1467,13 @@ static void se_refresh()
       lv_label_set_text(se_onoff_lbl, edit_enabled?"#00e070 ON#":"#808080 OFF#");
   }
   se_flash(se_hour_lbl); se_flash(se_min_lbl); se_flash(se_onoff_lbl);
+  // Date labels (only populated by open_clock_editor)
+  static const char *mon_names[] = {"Jan","Feb","Mar","Apr","May","Jun",
+                                     "Jul","Aug","Sep","Oct","Nov","Dec"};
+  if (se_day_lbl) lv_label_set_text_fmt(se_day_lbl, "%02d", edit_day);
+  if (se_mon_lbl) lv_label_set_text(se_mon_lbl, mon_names[edit_month-1]);
+  if (se_yr_lbl)  lv_label_set_text_fmt(se_yr_lbl,  "%d",   edit_year);
+  se_flash(se_day_lbl); se_flash(se_mon_lbl); se_flash(se_yr_lbl);
 }
 
 // ── Forward refs ──────────────────────────────────────────────────────────────
@@ -1487,6 +1500,165 @@ static void se_h_dn(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){edi
 static void se_m_up(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){edit_min=(edit_min+1)%60;se_refresh();}}
 static void se_m_dn(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){edit_min=(edit_min+59)%60;se_refresh();}}
 static void se_tog(lv_event_t*e) {if(lv_event_get_code(e)==LV_EVENT_PRESSED){edit_enabled=!edit_enabled;se_refresh();}}
+
+// Days in month (leap-year aware)
+static int days_in_month(int m, int y)
+{
+  static const int dim[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+  if (m==2 && ((y%4==0&&y%100!=0)||(y%400==0))) return 29;
+  return dim[m-1];
+}
+static void se_day_up(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){int d=days_in_month(edit_month,edit_year);edit_day=edit_day%d+1;se_refresh();}}
+static void se_day_dn(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){int d=days_in_month(edit_month,edit_year);edit_day=(edit_day-2+d)%d+1;se_refresh();}}
+static void se_mon_up(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){edit_month=edit_month%12+1;int d=days_in_month(edit_month,edit_year);if(edit_day>d)edit_day=d;se_refresh();}}
+static void se_mon_dn(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){edit_month=(edit_month-2+12)%12+1;int d=days_in_month(edit_month,edit_year);if(edit_day>d)edit_day=d;se_refresh();}}
+static void se_yr_up(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){edit_year++;se_refresh();}}
+static void se_yr_dn(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){if(edit_year>2020)edit_year--;se_refresh();}}
+
+// ── Clock editor: HH:MM on top row + DD/MON/YYYY on second row ───────────────
+static void open_clock_editor()
+{
+  if (editor_cont) { lv_obj_del(editor_cont); editor_cont=nullptr; }
+  se_hour_lbl=se_min_lbl=se_onoff_lbl=nullptr;
+  se_day_lbl=se_mon_lbl=se_yr_lbl=nullptr;
+
+  // Pre-load current RTC
+  time_t n=time(nullptr); struct tm t; localtime_r(&n,&t);
+  edit_hour  = t.tm_hour;
+  edit_min   = t.tm_min;
+  edit_day   = t.tm_mday;
+  edit_month = t.tm_mon + 1;
+  edit_year  = 1900 + t.tm_year;
+
+  editor_cont=lv_obj_create(modal_cont);
+  lv_obj_set_size(editor_cont,320,172); lv_obj_set_pos(editor_cont,0,0);
+  lv_obj_set_style_bg_color(editor_cont,lv_color_make(8,12,28),0);
+  lv_obj_set_style_bg_opa(editor_cont,LV_OPA_COVER,0);
+  lv_obj_set_style_border_width(editor_cont,0,0);
+  lv_obj_set_style_pad_all(editor_cont,0,0);
+  lv_obj_set_style_radius(editor_cont,0,0);
+  lv_obj_clear_flag(editor_cont,LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(editor_cont,modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
+
+  // ── Layout constants ────────────────────────────────────────────────────────
+  // Time row  (montserrat_48): centred at y=24, height=48
+  const int TY=24, TH=48, TA=16;  // top-row y, height, arrow height
+  // Date row  (montserrat_16): centred at y=96, height=20
+  const int DY=96, DH=20, DA=12;  // date-row y, height, arrow height
+  // Time columns
+  const int HX=60,HW=60, MX=168,MW=60;
+  // Date columns
+  const int DDX=50,DDW=36, MOX=110,MOW=44, YX=180,YW=58;
+
+  auto mkcont=[&](int x,int w,int y,int h)->lv_obj_t*{
+    lv_obj_t*cont=lv_obj_create(editor_cont);
+    lv_obj_set_size(cont,w,h); lv_obj_set_pos(cont,x,y);
+    lv_obj_set_style_bg_opa(cont,LV_OPA_TRANSP,0);
+    lv_obj_set_style_border_width(cont,0,0); lv_obj_set_style_pad_all(cont,0,0);
+    lv_obj_set_style_radius(cont,0,0); lv_obj_clear_flag(cont,LV_OBJ_FLAG_SCROLLABLE);
+    return cont;
+  };
+  auto mkarr=[&](int x,int w,int y,const char*s,bool small){
+    lv_obj_t*a=lv_label_create(editor_cont); lv_label_set_text(a,s);
+    lv_obj_set_style_text_color(a,lv_color_make(100,120,200),0);
+    if (small) lv_obj_set_style_text_font(a,&lv_font_montserrat_14,0);
+    lv_obj_set_pos(a,x,y); lv_obj_set_width(a,w);
+    lv_obj_set_style_text_align(a,LV_TEXT_ALIGN_CENTER,0);
+  };
+
+  // ── Time row ─────────────────────────────────────────────────────────────
+  lv_obj_t*hc=mkcont(HX,HW,TY,TH);
+  se_hour_lbl=lv_label_create(hc);
+  lv_obj_set_style_text_font(se_hour_lbl,&lv_font_montserrat_48,0);
+  lv_obj_set_style_text_color(se_hour_lbl,lv_color_white(),0);
+  lv_obj_set_size(se_hour_lbl,LV_SIZE_CONTENT,LV_SIZE_CONTENT);
+  lv_obj_align(se_hour_lbl,LV_ALIGN_CENTER,0,0);
+
+  lv_obj_t*col=lv_label_create(editor_cont); lv_label_set_text(col,":");
+  lv_obj_set_style_text_font(col,&lv_font_montserrat_48,0);
+  lv_obj_set_style_text_color(col,lv_color_make(140,140,180),0);
+  lv_obj_set_pos(col,142,TY);
+
+  lv_obj_t*mc=mkcont(MX,MW,TY,TH);
+  se_min_lbl=lv_label_create(mc);
+  lv_obj_set_style_text_font(se_min_lbl,&lv_font_montserrat_48,0);
+  lv_obj_set_style_text_color(se_min_lbl,lv_color_white(),0);
+  lv_obj_set_size(se_min_lbl,LV_SIZE_CONTENT,LV_SIZE_CONTENT);
+  lv_obj_align(se_min_lbl,LV_ALIGN_CENTER,0,0);
+
+  mkarr(HX,HW,TY-TA,LV_SYMBOL_UP,false);
+  mkarr(HX,HW,TY+TH,LV_SYMBOL_DOWN,false);
+  mkarr(MX,MW,TY-TA,LV_SYMBOL_UP,false);
+  mkarr(MX,MW,TY+TH,LV_SYMBOL_DOWN,false);
+
+  int t_mid = TY+TH/2;
+  se_zone(editor_cont,HX,TA,HW,t_mid-TA,se_h_up);
+  se_zone(editor_cont,HX,t_mid,HW,TY+TH-t_mid,se_h_dn);
+  se_zone(editor_cont,MX,TA,MW,t_mid-TA,se_m_up);
+  se_zone(editor_cont,MX,t_mid,MW,TY+TH-t_mid,se_m_dn);
+
+  // ── Thin divider between time and date rows ───────────────────────────────
+  lv_obj_t*div=lv_obj_create(editor_cont);
+  lv_obj_set_size(div,240,1); lv_obj_set_pos(div,40,DY-8);
+  lv_obj_set_style_bg_color(div,lv_color_make(50,60,100),0);
+  lv_obj_set_style_bg_opa(div,LV_OPA_COVER,0);
+  lv_obj_set_style_border_width(div,0,0); lv_obj_set_style_radius(div,0,0);
+
+  // ── Date row ─────────────────────────────────────────────────────────────
+  lv_obj_t*dc=mkcont(DDX,DDW,DY,DH);
+  se_day_lbl=lv_label_create(dc);
+  lv_obj_set_style_text_font(se_day_lbl,&lv_font_montserrat_16,0);
+  lv_obj_set_style_text_color(se_day_lbl,lv_color_white(),0);
+  lv_obj_set_size(se_day_lbl,LV_SIZE_CONTENT,LV_SIZE_CONTENT);
+  lv_obj_align(se_day_lbl,LV_ALIGN_CENTER,0,0);
+
+  lv_obj_t*s1=lv_label_create(editor_cont); lv_label_set_text(s1,"/");
+  lv_obj_set_style_text_font(s1,&lv_font_montserrat_16,0);
+  lv_obj_set_style_text_color(s1,lv_color_make(140,140,180),0);
+  lv_obj_set_pos(s1,DDX+DDW,DY+1);
+
+  lv_obj_t*mnc=mkcont(MOX,MOW,DY,DH);
+  se_mon_lbl=lv_label_create(mnc);
+  lv_obj_set_style_text_font(se_mon_lbl,&lv_font_montserrat_16,0);
+  lv_obj_set_style_text_color(se_mon_lbl,lv_color_white(),0);
+  lv_obj_set_size(se_mon_lbl,LV_SIZE_CONTENT,LV_SIZE_CONTENT);
+  lv_obj_align(se_mon_lbl,LV_ALIGN_CENTER,0,0);
+
+  lv_obj_t*s2=lv_label_create(editor_cont); lv_label_set_text(s2,"/");
+  lv_obj_set_style_text_font(s2,&lv_font_montserrat_16,0);
+  lv_obj_set_style_text_color(s2,lv_color_make(140,140,180),0);
+  lv_obj_set_pos(s2,MOX+MOW,DY+1);
+
+  lv_obj_t*yc=mkcont(YX,YW,DY,DH);
+  se_yr_lbl=lv_label_create(yc);
+  lv_obj_set_style_text_font(se_yr_lbl,&lv_font_montserrat_16,0);
+  lv_obj_set_style_text_color(se_yr_lbl,lv_color_white(),0);
+  lv_obj_set_size(se_yr_lbl,LV_SIZE_CONTENT,LV_SIZE_CONTENT);
+  lv_obj_align(se_yr_lbl,LV_ALIGN_CENTER,0,0);
+
+  int d_mid=DY+DH/2;
+  mkarr(DDX,DDW,DY-DA,LV_SYMBOL_UP,true);
+  mkarr(DDX,DDW,DY+DH+2,LV_SYMBOL_DOWN,true);
+  mkarr(MOX,MOW,DY-DA,LV_SYMBOL_UP,true);
+  mkarr(MOX,MOW,DY+DH+2,LV_SYMBOL_DOWN,true);
+  mkarr(YX, YW, DY-DA,LV_SYMBOL_UP,true);
+  mkarr(YX, YW, DY+DH+2,LV_SYMBOL_DOWN,true);
+
+  se_zone(editor_cont,DDX,DY-DA,DDW,DH/2+DA,se_day_up);
+  se_zone(editor_cont,DDX,d_mid,DDW,DH/2+DA+4,se_day_dn);
+  se_zone(editor_cont,MOX,DY-DA,MOW,DH/2+DA,se_mon_up);
+  se_zone(editor_cont,MOX,d_mid,MOW,DH/2+DA+4,se_mon_dn);
+  se_zone(editor_cont,YX, DY-DA,YW, DH/2+DA,se_yr_up);
+  se_zone(editor_cont,YX, d_mid,YW, DH/2+DA+4,se_yr_dn);
+
+  lv_obj_t*hint=lv_label_create(editor_cont);
+  lv_label_set_text(hint,"hold to save & exit");
+  lv_obj_set_style_text_color(hint,lv_color_make(100,100,120),0);
+  lv_obj_set_style_text_opa(hint,LV_OPA_60,0);
+  lv_obj_align(hint,LV_ALIGN_BOTTOM_MID,0,-4);
+
+  se_refresh();
+}
 
 // ── Open shared HH:MM (+ optional toggle) editor ─────────────────────────────
 static void open_editor(int h,int m,bool enabled,bool show_toggle)
@@ -1576,14 +1748,21 @@ static void open_editor(int h,int m,bool enabled,bool show_toggle)
 // ── Save helpers ──────────────────────────────────────────────────────────────
 static void close_clock_editor()
 {
-  time_t now=time(nullptr); struct tm cur; localtime_r(&now,&cur);
-  cur.tm_hour=edit_hour; cur.tm_min=edit_min; cur.tm_sec=0; cur.tm_isdst=-1;
+  struct tm cur = {};
+  cur.tm_hour  = edit_hour;
+  cur.tm_min   = edit_min;
+  cur.tm_sec   = 0;
+  cur.tm_mday  = edit_day;
+  cur.tm_mon   = edit_month - 1;
+  cur.tm_year  = edit_year - 1900;
+  cur.tm_isdst = -1;
   struct timeval tv={mktime(&cur),0}; settimeofday(&tv,nullptr);
   if (home_time_lbl) {
     char buf[6]; snprintf(buf,sizeof(buf),"%02d:%02d",edit_hour,edit_min);
     lv_label_set_text(home_time_lbl,buf);
   }
-  Serial.printf("[SETTINGS] RTC set to %02d:%02d\n",edit_hour,edit_min);
+  Serial.printf("[SETTINGS] RTC set to %04d-%02d-%02d %02d:%02d\n",
+                edit_year,edit_month,edit_day,edit_hour,edit_min);
 }
 static void close_timer_editor()
 {
@@ -1615,6 +1794,7 @@ static void close_alarm_editor()
 static void modal_close()
 {
   se_hour_lbl=se_min_lbl=se_onoff_lbl=nullptr;
+  se_day_lbl=se_mon_lbl=se_yr_lbl=nullptr;
   editor_cont=nullptr;
   if (modal_cont) { lv_obj_del(modal_cont); modal_cont=nullptr; alarm_cont=nullptr; }
 }
@@ -1639,9 +1819,7 @@ static void carousel_tap_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
   switch (carousel_idx) {
-    case 0: { // Clock — pre-load current RTC time
-      time_t n=time(nullptr); struct tm t; localtime_r(&n,&t);
-      open_editor(t.tm_hour,t.tm_min,false,false); } break;
+    case 0: open_clock_editor(); break;
     case 1: // Timer — always open with Not yet
       open_editor(cfg.timer_hours,cfg.timer_minutes,false,true); break;
     case 2: // Alarm

@@ -528,6 +528,103 @@ static void load_config()
   Serial.printf("[CFG] Done. (%d lines read)\n", lineNum);
 }
 
+static void restore_time_from_log() {
+  if (!sdCardAvailable) return;
+
+  File f = SD.open("/last_seen.txt", FILE_READ);
+  if (!f) {
+    Serial.println("[RTC] No last_seen.txt found. Skipping restore.");
+    return;
+  }
+
+  // The log format is: "YYYY-MM-DD HH:MM:SS (X.XXV)\n" (~30 chars)
+  // We'll read the last 128 bytes to ensure we capture the full last line.
+  size_t size = f.size();
+  if (size < 19) { // Too small to contain a timestamp
+    f.close();
+    return;
+  }
+
+  size_t seekPos = (size > 128) ? size - 128 : 0;
+  f.seek(seekPos);
+
+  char buffer[129];
+  size_t bytesRead = f.readBytes(buffer, 128);
+  buffer[bytesRead] = '\0';
+  f.close();
+
+  // Find the last occurrence of a year-like string (starts with "20")
+  char *lastLine = nullptr;
+  char *ptr = strstr(buffer, "20"); 
+  while (ptr != nullptr) {
+    lastLine = ptr;
+    ptr = strstr(ptr + 1, "20");
+  }
+
+  if (lastLine) {
+    int yr, mn, dy, hr, min, sec;
+    // Parse: 2026-03-23 15:30:45
+    if (sscanf(lastLine, "%d-%02d-%02d %02d:%02d:%02d", &yr, &mn, &dy, &hr, &min, &sec) == 6) {
+      struct tm tm_new;
+      tm_new.tm_year = yr - 1900;
+      tm_new.tm_mon  = mn - 1;
+      tm_new.tm_mday = dy;
+      tm_new.tm_hour = hr;
+      tm_new.tm_min  = min;
+      tm_new.tm_sec  = sec;
+      tm_new.tm_isdst = -1;
+
+      time_t t = mktime(&tm_new);
+      if (t > 0) {
+        struct timeval now_tv = { .tv_sec = t, .tv_usec = 0 };
+        settimeofday(&now_tv, NULL);
+        Serial.printf("[RTC] Restored time from log: %04d-%02d-%02d %02d:%02d:%02d\n", 
+                      yr, mn, dy, hr, min, sec);
+        return;
+      }
+    }
+  }
+  Serial.println("[RTC] Could not parse last timestamp from log.");
+}
+
+static void log_last_seen() {
+  // 1. Voltage Check: Measure battery voltage
+  uint16_t mv = analogReadMilliVolts(BAT_PIN);
+  float voltage = mv * 3.0f / 1000.0f;
+  
+  // Stop writing if voltage is below 3.4V
+  if (voltage < 3.4f) {
+    Serial.printf("[LOG] Battery low (%.2fV). Logging skipped.\n", voltage);
+    return;
+  }
+
+  // 2. Get current time
+  time_t now = time(nullptr);
+  struct tm t;
+  localtime_r(&now, &t);
+
+  // Only log if time is synced (sane year > 2026)
+  if (now < 1735689600UL) return; 
+
+  // 3. Format timestamp: YYYY-MM-DD HH:MM:SS
+  char log_buf[32];
+  snprintf(log_buf, sizeof(log_buf), "%04d-%02d-%02d %02d:%02d:%02d (%.2fV)\n",
+           t.tm_year + 1900, t.tm_mon + 1, t.tm_mday,
+           t.tm_hour, t.tm_min, t.tm_sec, voltage);
+
+  // 4. Append Mode: Write to last_seen.txt
+  // FILE_WRITE on ESP32 SD library defaults to appending/creating if it exists.
+  File logFile = SD.open("/last_seen.txt", FILE_APPEND);
+  if (logFile) {
+    logFile.print(log_buf);
+    logFile.close();
+    Serial.print("[LOG] Appended: ");
+    Serial.print(log_buf);
+  } else {
+    Serial.println("[LOG] Failed to open last_seen.txt");
+  }
+}
+
 static void save_config()
 {
   // Re-read existing config line by line, rewrite with updated [alarm] section.
@@ -586,6 +683,9 @@ static void save_config()
   fw.close();
 
   Serial.println("[CFG] Saved wifi/alarm/timer.");
+  
+  // Save the current timestamp to the log file as well
+  log_last_seen();
 }
 
 // ── WiFi runtime toggle ───────────────────────────────────────────────────────
@@ -1115,8 +1215,13 @@ static void clock_tick_cb(lv_timer_t * /*t*/)
   // if (timeSynced) {
   //   run_daily_automation(tm_info.tm_hour, tm_info.tm_min);
   // }
-  if (now > 1735689600UL) {   // RTC holds a sane time (> 2020-01-01)
+  if (now > 1735689600UL) {   // RTC holds a sane time (> 2026-01-01)
     run_daily_automation(tm_info.tm_hour, tm_info.tm_min);
+  }
+
+  // Hourly Log: Trigger exactly at the start of the hour (00 mins, 00 secs)
+  if (tm_info.tm_min == 0 && tm_info.tm_sec == 0) {
+    log_last_seen();
   }
 }
 
@@ -1279,7 +1384,7 @@ static void show_status_screen(void)
     time_t    now = time(nullptr);
     struct tm t;
     localtime_r(&now, &t);
-    if (now > 1735689600UL) {  // RTC sane (> 2020) — show date
+    if (now > 1735689600UL) {  // RTC sane (> 2026) — show date
       static const char *wday[]  = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
       static const char *month[] = {"Jan","Feb","Mar","Apr","May","Jun",
                                      "Jul","Aug","Sep","Oct","Nov","Dec"};
@@ -1465,7 +1570,7 @@ static int  edit_min            = 0;
 static bool edit_enabled        = false;
 static int  edit_day            = 1;
 static int  edit_month          = 1;   // 1-12
-static int  edit_year           = 2024;
+static int  edit_year           = 2026;
 static lv_obj_t *se_day_lbl     = nullptr;
 static lv_obj_t *se_mon_lbl     = nullptr;
 static lv_obj_t *se_yr_lbl      = nullptr;
@@ -1543,7 +1648,7 @@ static void se_day_dn(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){i
 static void se_mon_up(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){edit_month=edit_month%12+1;int d=days_in_month(edit_month,edit_year);if(edit_day>d)edit_day=d;se_refresh();}}
 static void se_mon_dn(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){edit_month=(edit_month-2+12)%12+1;int d=days_in_month(edit_month,edit_year);if(edit_day>d)edit_day=d;se_refresh();}}
 static void se_yr_up(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){edit_year++;se_refresh();}}
-static void se_yr_dn(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){if(edit_year>2020)edit_year--;se_refresh();}}
+static void se_yr_dn(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){if(edit_year>2026)edit_year--;se_refresh();}}
 
 // ── Clock editor: HH:MM on top row + DD/MON/YYYY on second row ───────────────
 static void open_clock_editor()
@@ -1793,6 +1898,7 @@ static void close_clock_editor()
   }
   Serial.printf("[SETTINGS] RTC set to %04d-%02d-%02d %02d:%02d\n",
                 edit_year,edit_month,edit_day,edit_hour,edit_min);
+  log_last_seen();
 }
 static void close_timer_editor()
 {
@@ -2119,8 +2225,6 @@ static void home_screen_init(void)
   wifi_timer    = lv_timer_create(wifi_poll_cb, 5000, nullptr);
 }
 
-
-
 // ══════════════════════════════════════════════════════════════════════════════
 //  SETUP
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2134,7 +2238,7 @@ void setup()
   // Snapshot RTC time immediately if waking from sleep
   if (boot_from_sleep) {
     time_t rtc_now = time(nullptr);
-    // Sanity: RTC epoch must be > 2020-01-01; if not, battery died during sleep
+    // Sanity: RTC epoch must be > 2026-01-01; if not, battery died during sleep
     if (rtc_now < 1735689600UL) boot_from_sleep = false;
   }
 
@@ -2232,6 +2336,7 @@ void setup()
 
     // ── Load config.ini ──────────────────────────────────────────────────
     load_config();
+    restore_time_from_log();
 
     // Verify GIF file exists
     Serial.printf("    Checking for GIF at: %s\n", "/cruzr_emotions/cruzr_smile.gif");

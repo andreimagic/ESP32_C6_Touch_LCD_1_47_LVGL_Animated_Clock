@@ -614,6 +614,7 @@ static void countdown_tick_cb(lv_timer_t * /*t*/)
     Serial.println("[TIMER] Done.");
     // Hide the 00:00 label immediately — GIF animation takes over
     if (home_timer_lbl) lv_obj_add_flag(home_timer_lbl, LV_OBJ_FLAG_HIDDEN);
+    close_scheduled_gif();  // evict any running scheduled animation
     show_gif_fullscreen(GIF_TIMER_PATH);
     buzzer_start_timer();
   }
@@ -988,6 +989,21 @@ static void sched_gif_close_cb(lv_timer_t *t)
   lv_anim_start(&a);
 }
 
+// Force-close a scheduled GIF overlay so alarm/timer can take priority.
+// Cancels the fade timer and deletes the overlay synchronously.
+static void close_scheduled_gif()
+{
+  if (sched_close_timer) {
+    lv_timer_del(sched_close_timer);
+    sched_close_timer = nullptr;
+  }
+  if (overlay_cont) {
+    lv_obj_del(overlay_cont);
+    overlay_cont = nullptr;
+    Serial.println("[SCHED] Scheduled GIF closed — alarm/timer taking priority");
+  }
+}
+
 static void run_scheduled_animation(int hour)
 {
   if (!cfg.anim_schedule_enabled) return;
@@ -1018,7 +1034,11 @@ static void run_daily_automation(int hour, int minute)
   Serial.printf("[SCHED] %02d:%02d\n", hour, minute);
 
   // ── Scheduled animation every 2 minutes ──────────────────────────────────
-  if (minute % 2 == 0) run_scheduled_animation(hour);
+  // Skip if alarm fires this same minute — alarm takes priority
+  bool alarm_fires_now = cfg.alarm_enabled
+                         && hour   == cfg.alarm_hour
+                         && minute == cfg.alarm_minute;
+  if (minute % 2 == 0 && !alarm_fires_now) run_scheduled_animation(hour);
 
   // ── Evening dimming ───────────────────────────────────────────────────────
   if (hour == 19 && minute ==  0) set_brightness(25);
@@ -1053,6 +1073,7 @@ static void run_daily_automation(int hour, int minute)
       && hour   == cfg.alarm_hour
       && minute == cfg.alarm_minute) {
     Serial.printf("[SCHED] Alarm at %02d:%02d\n", hour, minute);
+    close_scheduled_gif();  // evict any running scheduled animation
     set_brightness(50);
     show_gif_fullscreen(GIF_ALARM_PATH);
     buzzer_start_alarm();

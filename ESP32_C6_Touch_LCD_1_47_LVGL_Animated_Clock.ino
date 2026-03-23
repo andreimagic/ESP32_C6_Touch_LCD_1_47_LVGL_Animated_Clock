@@ -337,7 +337,16 @@ static void buzzer_start_alarm()
   buzzer_fade_after = (cfg.alarm_beep_sequences > 0); // only when finite
   buzzer_start(cfg.alarm_beep_sequences);
 }
-static void buzzer_start_timer() { buzzer_start(cfg.timer_beep_sequences); }
+
+// This will keep the animation on screen after the alarm is done
+// static void buzzer_start_timer() { buzzer_start(cfg.timer_beep_sequences); }
+
+// This fades the animation after the alarm is done
+static void buzzer_start_timer()
+{
+  buzzer_fade_after = (cfg.timer_beep_sequences > 0);
+  buzzer_start(cfg.timer_beep_sequences);
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  BACKLIGHT PWM
@@ -1106,7 +1115,7 @@ static void clock_tick_cb(lv_timer_t * /*t*/)
   // if (timeSynced) {
   //   run_daily_automation(tm_info.tm_hour, tm_info.tm_min);
   // }
-  if (now > 1577836800UL) {   // RTC holds a sane time (> 2020-01-01)
+  if (now > 1735689600UL) {   // RTC holds a sane time (> 2020-01-01)
     run_daily_automation(tm_info.tm_hour, tm_info.tm_min);
   }
 }
@@ -1270,7 +1279,7 @@ static void show_status_screen(void)
     time_t    now = time(nullptr);
     struct tm t;
     localtime_r(&now, &t);
-    if (now > 1577836800UL) {  // RTC sane (> 2020) — show date
+    if (now > 1735689600UL) {  // RTC sane (> 2020) — show date
       static const char *wday[]  = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
       static const char *month[] = {"Jan","Feb","Mar","Apr","May","Jun",
                                      "Jul","Aug","Sep","Oct","Nov","Dec"};
@@ -2126,7 +2135,7 @@ void setup()
   if (boot_from_sleep) {
     time_t rtc_now = time(nullptr);
     // Sanity: RTC epoch must be > 2020-01-01; if not, battery died during sleep
-    if (rtc_now < 1577836800UL) boot_from_sleep = false;
+    if (rtc_now < 1735689600UL) boot_from_sleep = false;
   }
 
   Serial.begin(115200);

@@ -18,6 +18,7 @@ A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47
 | **Alarm** | Configurable wake-up time, custom buzzer pattern, `alarm_animation.gif`, fades out after beeping |
 | **Countdown timer** | Set HH:MM in the carousel, live `MM:SS` on clock face, `timer_animation.gif` on completion |
 | **Animation priority** | Alarm and timer always evict any running scheduled animation before playing |
+| **Emotion tilt** | While the smile GIF plays (upper-left tap), tilt the device to change emotion in real-time |
 | **Carousel settings** | Long-press → swipe through Clock / Timer / Alarm / WiFi settings |
 | **Clock editor** | Sets HH:MM **and** DD/MON/YYYY — full date+time offline, no WiFi needed |
 | **Brightness schedule** | Auto-dims at 19:00 → 19:30 → 20:00, brightens at 06:00 → 07:00 |
@@ -156,8 +157,10 @@ SD root/
 ├── config.ini
 ├── last_seen.txt            ← created automatically by the firmware
 └── cruzr_emotions/
-    ├── cruzr_smile.gif          ← 160 × 86 px  (scheduled day animation)
-    ├── cruzr_sleep.gif          ← 160 × 86 px  (scheduled night animation)
+    ├── cruzr_smile.gif          ← 160 × 86 px  (scheduled day animation + emotion: upright)
+    ├── cruzr_sleep.gif          ← 160 × 86 px  (scheduled night animation + emotion: tilt back)
+    ├── cruzr_sad.gif            ← 160 × 86 px  (emotion: tilt forward)
+    ├── cruzr_joy.gif            ← 160 × 86 px  (emotion: tilt left or right)
     ├── alarm_animation.gif      ← 160 × 86 px  (plays when alarm fires)
     └── timer_animation.gif      ← 160 × 86 px  (plays when countdown reaches zero)
 ```
@@ -338,6 +341,25 @@ Opens the corresponding GIF fullscreen. Tap anywhere to return to the clock.
 
 ---
 
+## Emotion Tilt — Interactive GIF Mode
+
+Tapping the **upper-left** zone opens the smile GIF as usual. While this GIF is playing, if the IMU is available, tilting the device changes the emotion in real-time without touching the screen:
+
+| Device orientation | GIF shown |
+|---|---|
+| Upright (flat / normal) | `cruzr_smile.gif` |
+| Tilt backwards (top away from you) | `cruzr_sleep.gif` |
+| Tilt forward (top toward you) | `cruzr_sad.gif` |
+| Tilt left or right | `cruzr_joy.gif` |
+
+The swap happens in-place — the GIF changes without closing the overlay or any visible flicker. The tilt is polled every 400 ms. A threshold of 0.4 g on the X axis (forward/backward) and Y axis (left/right) must be exceeded for the emotion to change, so small accidental movements are ignored.
+
+Tapping the screen dismisses the animation and returns to the clock, as usual.
+
+> The upper-right zone always opens `cruzr_sleep.gif` directly with no tilt interaction — tilt emotion mode is exclusive to the upper-left zone.
+
+---
+
 ## Power Off and Wake
 
 ### Powering off
@@ -503,6 +525,7 @@ Both alarm and timer use the same pattern: **4 × (200 ms ON + 100 ms OFF) + 100
 - **Carousel** — a full-screen LVGL modal opened by long-press. Each tap on ◀/▶ calls `lv_obj_clean()` and rebuilds the view in place. The centre zone uses `LV_EVENT_CLICKED` (not `LV_EVENT_PRESSED`) so long-press and tap are mutually exclusive — the editor never opens before the long-press exit fires.
 - **Shared editor** — `open_editor()` builds the HH:MM widget for Timer and Alarm. `open_clock_editor()` builds the full two-row date+time widget. `modal_longpress_cb()` dispatches to the correct save function based on `carousel_idx`.
 - **Animation priority** — `close_scheduled_gif()` forcefully tears down any scheduled overlay (cancels fade timer, deletes overlay synchronously) before alarm or timer open their GIF. Scheduled animation is also skipped entirely if the alarm fires on the same minute.
+- **Emotion tilt** — `zone_ul_cb` sets `emotion_tilt_active = true` and starts `tilt_timer` after opening the smile GIF. `tilt_poll_cb` branches on this flag: in emotion mode it reads both `accelX` (forward/back) and `accelY` (left/right), determines the desired GIF path, and calls `lv_gif_set_src()` on the existing widget (retrieved from `overlay_cont` user data) only when the path changes. This swaps the animation in-place with no overlay rebuild. Both the flag and the timer are cleared by `overlay_close_event_cb`.
 - **Buzzer state machine** — a single 9-step table drives both alarm and timer patterns. `buzzer_fade_after` is set by the caller for finite sequences; `buzzer_stop()` triggers `overlay_fade_and_close()` automatically after the last beep.
 - **WiFi reconnect guard** — `wifi_poll_cb()` skips `wifiMulti.run()` when any modal or overlay is open, when WiFi is manually disabled (`cfg.wifi_enabled`), and reduces attempts to every 30 s when disconnected — preventing radio lock stalls from blocking UI interaction.
 - **Automation gate** — `run_daily_automation()` fires when `now > 2026-01-01` (RTC sanity check) instead of `timeSynced`, so brightness schedules, alarms, and animations all work correctly when WiFi is disabled or the time was set manually.
@@ -519,6 +542,7 @@ Both alarm and timer use the same pattern: **4 × (200 ms ON + 100 ms OFF) + 100
 | v1.1 | ✅ released | Scheduled animation (smile/sleep, configurable interval, 800 ms fade) |
 | v1.2 | ✅ released | Carousel settings menu, countdown timer, WiFi toggle, manual time set |
 | v1.3.0 | ✅ released | Full date editor, RTC persistence via SD log, animation priority fix, automation without WiFi |
+| v1.4.0 | ✅ released | Emotion tilt GIF mode on upper-left tap (smile/sleep/sad/joy via IMU) |
 
 ## License
 

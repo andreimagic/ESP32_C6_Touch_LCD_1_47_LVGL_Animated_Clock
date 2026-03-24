@@ -2336,7 +2336,13 @@ void setup()
 
     // ── Load config.ini ──────────────────────────────────────────────────
     load_config();
-    restore_time_from_log();
+
+    // BUG FIX: Only restore time from log if NOT waking from a scheduled alarm
+    if (!boot_from_sleep) {
+      restore_time_from_log();
+    } else {
+      Serial.println("    [TIME] Wakeup from alarm: skipping file restore to keep RTC sync.");
+    }
 
     // Verify GIF file exists
     Serial.printf("    Checking for GIF at: %s\n", "/cruzr_emotions/cruzr_smile.gif");

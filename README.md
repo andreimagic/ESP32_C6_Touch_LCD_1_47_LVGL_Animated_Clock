@@ -2,7 +2,7 @@
 
 [![GitHub](https://img.shields.io/badge/github-andreimagic%2FESP32__C6__Touch__LCD__1__47__LVGL__Animated__Clock-blue?logo=github)](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock)
 
-A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47"** board, driven by **LVGL v9**. It displays the time in a large custom font, plays animated GIF emotions on a schedule, sounds a buzzer alarm, and controls display brightness via device tilt — all configured from a plain `config.ini` file on the SD card, no recompile needed.
+A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47"** board, driven by **LVGL v9**. It displays the time in a large custom font, plays animated GIF emotions on a schedule, sounds configurable buzzer alarms, runs a countdown timer, manages display brightness via device tilt, and supports a full software power-off — all configured from a plain `config.ini` file on the SD card, no recompile needed.
 
 ---
 
@@ -11,19 +11,24 @@ A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47
 | Feature | Details |
 |---|---|
 | **Big clock face** | HH:MM in a full-screen custom font (Montserrat 96px) |
-| **Hello! splash** | "Hello!" shown for 2.5 s on cold boot; "Welcome back!" for 1 s when waking from deep sleep |
+| **Splash screen** | "Hello!" on cold boot (2.5 s); "Salut!" on wake from sleep (1 s) |
 | **Animated GIFs** | Smile (day) and Sleep (night) emotions from SD card |
-| **Scheduled animation** | GIF plays every 5 min (configurable duration), 800 ms fade back to clock |
+| **Scheduled animation** | GIF plays on a configurable minute interval, 800 ms fade back to clock |
 | **Night mode** | Sleep GIF used automatically between 20:00 and 07:00 |
-| **Alarm** | Configurable wake-up time, buzzer beeps, smile GIF, stops on touch |
+| **Alarm** | Configurable wake-up time, custom buzzer pattern, `alarm_animation.gif`, fades out after beeping |
+| **Countdown timer** | Set HH:MM in the carousel, live `MM:SS` on clock face, `timer_animation.gif` on completion |
+| **Animation priority** | Alarm and timer always evict any running scheduled animation before playing |
+| **Carousel settings** | Long-press → swipe through Clock / Timer / Alarm / WiFi settings |
+| **Clock editor** | Sets HH:MM **and** DD/MON/YYYY — full date+time offline, no WiFi needed |
 | **Brightness schedule** | Auto-dims at 19:00 → 19:30 → 20:00, brightens at 06:00 → 07:00 |
-| **Tilt brightness** | Tilt device left/right in the Status screen to adjust brightness |
-| **WiFi + NTP** | Connects at boot, syncs time automatically |
-| **Status screen** | Shows WiFi SSID, NTP sync status, date, and current brightness |
-| **Battery monitor** | Shows ADC raw value, calculated voltage, and percentage; icon updates live |
-| **Battery colour** | Clock digits turn orange at ≤25%, red at ≤10% to warn of low charge |
-| **Auto power-off** | At ≤10% battery, a 60-second countdown opens automatically and sleeps the device |
-| **Deep sleep** | Long-press in the Battery screen starts a 5-second shutdown countdown; if an alarm is set the device wakes automatically 30 s before alarm time via timer wakeup |
+| **Tilt brightness** | Tilt device left/right in the Status screen to adjust brightness in 10% steps |
+| **WiFi + NTP** | Connects at boot, syncs time automatically; can be disabled from the carousel |
+| **RTC persistence** | Hourly timestamp log on SD card (`/last_seen.txt`) restores time on cold boot without WiFi |
+| **Status screen** | Today's date in the title, WiFi SSID, NTP sync state, current brightness |
+| **Battery monitor** | Live percentage, voltage, ADC raw — with LiPo discharge curve |
+| **Battery warning** | Clock text turns orange ≤ 25%, red ≤ 10%; auto-poweroff countdown at ≤ 10% |
+| **Software power-off** | Long-press battery screen → 5 s countdown → deep sleep; RESET button to wake |
+| **Alarm auto-wake** | If alarm is set, device wakes from deep sleep automatically 30 s before alarm time |
 | **SD card config** | All settings in `/config.ini` — no recompile needed |
 | **LVGL v9** | Hardware-accelerated UI, zero blocking in the main loop |
 
@@ -35,7 +40,7 @@ A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47
 
 **Waveshare ESP32-C6 Touch LCD 1.47"**
 
-Select **ESP32C6 Dev Module** in Arduino IDE. The board integrates the ST7789 display, AXS5106L touch controller, QMI8658 IMU and SD card slot on a single compact PCB.
+Select **ESP32C6 Dev Module** in Arduino IDE. The board integrates the ST7789 display, AXS5106L touch controller, QMI8658 IMU, ETA6098 battery charger, and SD card slot on a single compact PCB.
 
 ### Display
 
@@ -67,6 +72,12 @@ Select **ESP32C6 Dev Module** in Arduino IDE. The board integrates the ST7789 di
 | Passive Buzzer | **5** → GND |
 
 > The display, SD card and buzzer share the same SPI bus (SCK=1, MOSI=2). The SD card additionally needs MISO=3. Each device uses its own CS pin.
+
+### Battery & Charging
+
+The board includes an **ETA6098** switching-mode CC/CV charger. It handles charging automatically in hardware — pre-charge, constant current, constant voltage, and end-of-charge termination. Leaving the device plugged in permanently is safe; the IC stops charging and monitors the battery without any firmware involvement.
+
+The firmware reads battery voltage through a ÷3 ADC voltage divider on GPIO0 and maps it to percentage using a piecewise LiPo discharge curve (4.20V = 100%, 3.00V = 0%). A small voltage offset while USB is connected is normal and not a firmware bug.
 
 ### Buzzer Wiring
 
@@ -143,9 +154,12 @@ Format the SD card as **FAT32**. Create the following structure:
 ```
 SD root/
 ├── config.ini
+├── last_seen.txt            ← created automatically by the firmware
 └── cruzr_emotions/
-    ├── cruzr_smile.gif     ← 160 × 86 px
-    └── cruzr_sleep.gif     ← 160 × 86 px
+    ├── cruzr_smile.gif          ← 160 × 86 px  (scheduled day animation)
+    ├── cruzr_sleep.gif          ← 160 × 86 px  (scheduled night animation)
+    ├── alarm_animation.gif      ← 160 × 86 px  (plays when alarm fires)
+    └── timer_animation.gif      ← 160 × 86 px  (plays when countdown reaches zero)
 ```
 
 ### GIF Requirements
@@ -156,12 +170,23 @@ GIF files **must be resized to 160 × 86 pixels** before copying to the SD card.
 
 The firmware scales them 2× at render time to fill the 320 × 172 screen.
 
+### RTC Persistence Log
+
+The firmware automatically creates and maintains `/last_seen.txt` on the SD card. Every hour (and whenever the clock or config is saved) it appends a line like:
+
+```
+2026-03-23 07:30:00 (3.92V)
+```
+
+On cold boot with no WiFi, the firmware reads the last line of this file and restores the RTC to that timestamp. This means the clock shows a close approximation of the real time even without a network connection — typically accurate to within a few minutes of the last hourly log entry. Logging stops automatically if battery voltage drops below 3.4V to protect the SD card during low-power conditions.
+
 ---
 
 ## config.ini Reference
 
 ```ini
 [wifi]
+enabled = true
 ssid = myhomewifi
 password = changeme
 
@@ -171,14 +196,20 @@ password = changeme
 gmt_offset = 1
 ntp_server = pool.ntp.org
 
-# Comment lines start with #
-
 [alarm]
 enabled = true
 time = 07:10
+# Number of 4-beep sequences before auto-stop. 0 = beep until screen is touched.
+beep_sequences = 5
+
+[timer]
+# Last used countdown duration (HH:MM). Saved automatically when you set the timer.
+duration = 00:05
+# Number of beep sequences when timer reaches zero. 0 = until screen is touched.
+beep_sequences = 3
 
 [animation]
-# Play smile GIF (day) or sleep GIF (night) automatically every 5 minutes
+# Play smile GIF (day) or sleep GIF (night) automatically
 # set schedule = false to disable
 schedule = true
 # Seconds the GIF plays before fading back to the clock (3-60)
@@ -187,22 +218,26 @@ duration = 10
 
 | Section | Key | Type | Default | Description |
 |---|---|---|---|---|
+| `[wifi]` | `enabled` | bool | `true` | Enable WiFi and NTP sync |
 | `[wifi]` | `ssid` | string | `myhomewifi` | WiFi network name |
 | `[wifi]` | `password` | string | `changeme` | WiFi password |
-| `[clock]` | `gmt_offset` | int (-12–14) | `1` | UTC offset in hours (e.g. `1` = UTC+1, `-5` = UTC-5) |
+| `[clock]` | `gmt_offset` | int (-12–14) | `1` | UTC offset in hours |
 | `[clock]` | `ntp_server` | string | `pool.ntp.org` | NTP time server |
 | `[alarm]` | `enabled` | bool | `false` | Enable morning alarm |
 | `[alarm]` | `time` | `HH:MM` | `07:00` | Alarm time |
-| `[animation]` | `schedule` | bool | `true` | Enable periodic GIF every 5 min |
-| `[animation]` | `duration` | int (3–60) | `10` | Seconds each GIF plays before fading |
+| `[alarm]` | `beep_sequences` | int | `5` | Repeat count for alarm buzzer (0 = until touch) |
+| `[timer]` | `duration` | `HH:MM` | `00:00` | Last countdown duration (saved automatically) |
+| `[timer]` | `beep_sequences` | int | `3` | Repeat count for timer buzzer (0 = until touch) |
+| `[animation]` | `schedule` | bool | `true` | Enable periodic GIF animation |
+| `[animation]` | `duration` | int (3–60) | `10` | Seconds each scheduled GIF plays before fading |
 
 > If `config.ini` is missing the firmware boots with the hardcoded defaults shown above.
 
 ---
 
-## Touch Zones — Home Screen
+## Home Screen Touch Zones
 
-The home screen has **four invisible touch zones**. Tap to open a sub-screen, **long-press anywhere** to open the Alarm editor.
+The home screen has **four invisible touch zones**. Tap to open a sub-screen. **Long-press anywhere** to open the Carousel settings menu.
 
 ```
 ┌─────────────────────────────────────────┐
@@ -216,74 +251,154 @@ The home screen has **four invisible touch zones**. Tap to open a sub-screen, **
 │   (lower-left)    │    (lower-right)    │
 │                   │                     │
 └─────────────────────────────────────────┘
-         LONG-PRESS anywhere → Alarm editor
+         LONG-PRESS anywhere → Carousel menu
 ```
+
+When the countdown timer is running, a small `⏹ MM:SS` label appears in the bottom-left corner of the clock face. When the alarm is enabled, a 🔔 bell icon with the alarm time appears in the bottom-right corner.
+
+---
+
+## Carousel Settings Menu
+
+Long-press anywhere on the clock face opens the carousel. Use the **◀ ▶** arrows on the left and right edges to cycle through the four items. The current position is shown as dots at the bottom.
+
+```
+┌─────────────────────────────────────────┐
+│                                         │
+│  ◀         [ ICON ]           ▶         │
+│             NAME                        │
+│           description                  │
+│                                         │
+│        tap  ·  hold to exit             │
+│              ● ○ ○ ○                    │
+└─────────────────────────────────────────┘
+```
+
+**Tap** the centre area to enter the selected item. **Long-press** anywhere to exit back to the clock with no changes.
+
+### Clock — set date and time
+
+Opens a two-row editor pre-loaded with the current RTC values:
+
+```
+┌─────────────────────────────────────────┐
+│    ▲              ▲                     │
+│  [ HH ]  :  [ MM ]                      │  montserrat_48
+│    ▼              ▼                     │
+│  ─────────────────────────────────────  │
+│   ▲      ▲        ▲                     │
+│  [22]  /[Mar]/ [2026]                   │  montserrat_16
+│   ▼      ▼        ▼                     │
+│        hold to save & exit              │
+└─────────────────────────────────────────┘
+```
+
+Adjust all five values with ▲/▼. Day wraps correctly when the month changes (e.g. Jan 31 → Feb clips to 28 or 29). Long-press commits both date and time to the ESP32 RTC via `settimeofday()` and logs the new timestamp to `last_seen.txt`. NTP will correct the time on the next sync when WiFi is available.
+
+### Timer — countdown
+
+Opens the HH:MM editor with a **Ready! / Not yet** toggle. The timer always opens as "Not yet" so you must explicitly enable it before saving.
+
+Long-press with **Ready!** selected starts the countdown immediately and returns to the clock face. The remaining time shows as `⏹ MM:SS` (or `H:MM:SS` for durations over one hour) in the bottom-left corner.
+
+When the countdown reaches zero, any running scheduled animation is first dismissed, then `timer_animation.gif` plays fullscreen and the buzzer sounds `beep_sequences` times. The animation fades out automatically after the last beep.
+
+To stop a running timer: open the carousel → Timer → set to **Not yet** → long-press. The label disappears from the clock face.
+
+### Alarm — wake-up alarm
+
+Opens the HH:MM editor with an **ON / OFF** toggle. Long-press saves to `config.ini`. When enabled, at the configured time any running scheduled animation is first dismissed, then the device raises brightness to 80%, plays `alarm_animation.gif` fullscreen, and sounds the buzzer `beep_sequences` times. The animation fades out automatically after the last beep. Touching the screen dismisses the alarm early.
+
+### WiFi — inline toggle
+
+Tap the centre to toggle WiFi on or off. No sub-screen. The description updates to green **ON** or red **OFF** immediately, and the change is saved to `config.ini`. When WiFi is disabled, NTP sync is suspended and reconnect attempts are skipped entirely.
 
 ---
 
 ## Sub-screens
 
 ### Status (lower-left tap)
-Shows WiFi connection status (SSID or disconnected), NTP sync state, today's date, and current brightness level. **Tilt the device left or right** while this screen is open to decrease or increase brightness in 10% steps.
+Title shows today's date (e.g. `Mon 23 Mar 2026`) when the RTC holds a valid time, falling back to `Status` on a fresh unconfigured boot. Shows WiFi connection status (SSID or disconnected), NTP sync state, and current brightness level. **Tilt the device left or right** while this screen is open to decrease or increase brightness in 10% steps.
 
 ### Battery (lower-right tap)
-Shows the battery icon, percentage, raw ADC reading, and calculated voltage. Values update every second. The clock digits change colour based on charge: white above 25%, orange at 11–25%, and red at ≤10%. **Long-press** the battery screen to open a 5-second shutdown countdown — tap **Cancel** to abort. If an alarm is configured, the device will wake automatically 30 s before alarm time via ESP32 timer wakeup. To wake at any other time, press the **RESET** button.
+Shows live battery percentage (using a LiPo discharge curve), voltage to two decimal places, and raw ADC value — all updated every second.
+
+**Long-press** on the battery screen opens a shutdown confirmation popup with a 5-second countdown and a **Cancel** button. If not cancelled, the device enters deep sleep.
+
+Battery level is also reflected in the clock face text colour:
+
+| Level | Clock colour |
+|---|---|
+| > 25% | White |
+| 11–25% | Orange |
+| ≤ 10% | Red + auto-poweroff countdown (60 s) |
 
 ### GIF animations (upper taps)
 Opens the corresponding GIF fullscreen. Tap anywhere to return to the clock.
 
-### Alarm editor (long-press anywhere)
-```
-┌─────────────────────────────────────────┐
-│  🔔  Set Alarm                           │
-│  ─────────────────────────────────────  │
-│        ▲          ▲          ▲          │
-│      [07]  :    [10]      [ ON ]        │
-│        ▼          ▼          ▼          │
-│                                         │
-│          hold to save & exit            │
-└─────────────────────────────────────────┘
-```
-- Tap the **top half** of a column to increase the value
-- Tap the **bottom half** to decrease
-- Tap **ON / OFF** to toggle the alarm
-- **Long-press** anywhere to save changes to `config.ini` and return to the clock
-- A 🔔 bell icon with the alarm time appears in the bottom-right corner of the clock face when the alarm is enabled
+---
+
+## Power Off and Wake
+
+### Powering off
+Long-press the battery screen to open the shutdown popup. After the countdown (or immediately if not cancelled) the device enters deep sleep drawing ~10 µA.
+
+### Waking up
+Press the **RESET** button on the device body. This always causes a clean reboot through the full boot sequence.
+
+> The BOOT button on this board is wired to GPIO9, which is not a low-power GPIO on the ESP32-C6 and cannot trigger a wake-from-deep-sleep interrupt. RESET is the reliable wake method.
+
+### Alarm auto-wake
+If an alarm is configured and enabled, the firmware sets a timer wakeup before entering deep sleep. The device wakes automatically 30 seconds before the alarm time, completing the boot sequence so the alarm fires at the correct moment. If no alarm is set, the device sleeps indefinitely until RESET is pressed.
+
+The RTC keeps running during deep sleep from the battery. On wake, the correct time is shown immediately without waiting for NTP.
+
+### Boot behaviour
+
+| Scenario | Splash | Duration | Clock display |
+|---|---|---|---|
+| Cold boot / RESET, WiFi available | `Hello!` (large) | 2.5 s | `--:--` until NTP syncs |
+| Cold boot / RESET, no WiFi, log exists | `Hello!` (large) | 2.5 s | Time restored from `last_seen.txt` |
+| Cold boot / RESET, no WiFi, no log | `Hello!` (large) | 2.5 s | `--:--` until manually set |
+| Wake from deep sleep (alarm timer) | `⌂ Salut!` (small) | 1.0 s | RTC time shown immediately |
 
 ---
 
 ## Daily Automation Schedule
 
-All times are local time. Timezone is set via `gmt_offset` in `[clock]` in `config.ini`.
+All times are local time, set via `gmt_offset` in `[clock]`. Automation runs whenever the RTC holds a valid time (epoch > 2026-01-01), regardless of WiFi or NTP status.
 
 | Time | Action |
 |---|---|
 | 06:00 | Brightness → 10% |
 | 06:30 | Brightness → 25% |
 | 07:00 | Brightness → 50% |
-| Alarm time | Brightness → 80%, smile GIF, buzzer starts |
+| Alarm time | Dismiss any scheduled GIF, brightness → 80%, `alarm_animation.gif`, buzzer |
+| Every N min | Scheduled GIF animation (if enabled, skipped when alarm fires same minute) |
 | 19:00 | Brightness → 25% |
 | 19:30 | Brightness → 10% |
 | 20:00 | Brightness → 1% |
 | 20:15 | Sleep GIF starts automatically |
 | 21:00 | Sleep GIF closes automatically (if not already dismissed) |
 
-**Buzzer:** plays a `beep-beep-beep … pause` pattern (3 × 200 ms on, 700 ms pause) until the screen is touched.
-
 ---
 
 ## Scheduled Animation
 
-When `[animation] schedule = true`, a GIF plays automatically every 5 minutes for the configured duration, then fades back to the clock over 800 ms.
+When `[animation] schedule = true`, a GIF plays automatically on the configured minute interval for the configured duration, then fades back to the clock over 800 ms.
 
 | Time of day | GIF played |
 |---|---|
 | Day (07:00–19:59) | `cruzr_smile.gif` |
 | Night (20:00–06:59) | `cruzr_sleep.gif` |
 
-- Skipped silently if any sub-screen is already open
-- Touch the screen at any time to dismiss immediately
-- The GIF fades out over 800 ms when the timer expires
+Skipped silently if any sub-screen, overlay, or carousel is already open. When the alarm or timer fires at the same time as a scheduled animation, the scheduled animation is immediately dismissed and the alarm/timer animation takes over. Touch the screen at any time to dismiss immediately.
+
+---
+
+## Buzzer Pattern
+
+Both alarm and timer use the same pattern: **4 × (200 ms ON + 100 ms OFF) + 1000 ms pause** = one sequence. The number of sequences before auto-stop is configured independently for alarm and timer in `config.ini`. Setting `beep_sequences = 0` means the buzzer repeats until the screen is touched. When the sequence count is finite, the animation fades out automatically after the last beep.
 
 ---
 
@@ -319,18 +434,18 @@ When `[animation] schedule = true`, a GIF plays automatically every 5 minutes fo
    > **Flash Size and Partition Scheme must match** — the 3MB APP partition is required to fit the firmware with LVGL v9 and all libraries.
 
 5. Set the correct **Port** (e.g. `COM3` on Windows, `/dev/ttyUSB0` on Linux/macOS)
-6. Set the correct **Port** (e.g. `COM3` on Windows, `/dev/ttyUSB0` on Linux/macOS)
-7. Install all libraries listed in [Software Dependencies](#software-dependencies)
-8. Edit `lv_conf.h` as described in [lv_conf.h Settings](#lv_confh-settings)
-9. Place `montserrat_96.c` in the sketch folder
-10. Prepare the SD card as described in [SD Card Setup](#sd-card-setup)
-11. Open `ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock.ino`, click **Upload**
-12. Open Serial Monitor at **115200 baud** to watch the boot log
+6. Install all libraries listed in [Software Dependencies](#software-dependencies)
+7. Edit `lv_conf.h` as described in [lv_conf.h Settings](#lv_confh-settings)
+8. Place `montserrat_96.c` in the sketch folder
+9. Prepare the SD card as described in [SD Card Setup](#sd-card-setup)
+10. Open `ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock.ino`, click **Upload**
+11. Open Serial Monitor at **115200 baud** to watch the boot log
 
 ### Expected Boot Log
 
 ```
 ========== BOOT ==========
+[BOOT] Wake cause: cold boot / RESET button
 [1] Pulling CS pins HIGH...
 [2] SPI.begin(SCK=1, MISO=3, MOSI=2, CS=4)...
 [3] Initialising display...
@@ -340,13 +455,14 @@ When `[animation] schedule = true`, a GIF plays automatically every 5 minutes fo
     IMU ready.
 [5] Mounting SD card...
     SD mounted OK — type: SD  size: 244 MB
-    GIF found — XXXXX bytes
 [CFG] Loading /config.ini...
-[CFG]   wifi.ssid     = myhomewifi
-[CFG]   wifi.password = (hidden)
+[CFG]   wifi.enabled       = true
+[CFG]   wifi.ssid          = myhomewifi
+[CFG]   wifi.password      = (hidden)
+[RTC] Restored time from log: 2026-03-23 07:29:00
 [6] Initialising LVGL...
 [7] Registering LVGL SD filesystem driver...
-[7b] Starting WiFi + NTP client (non-blocking)...
+[7b] Applying WiFi state from config...
 [8] Building UI...
 ========== SETUP DONE ==========
 ```
@@ -362,27 +478,36 @@ When `[animation] schedule = true`, a GIF plays automatically every 5 minutes fo
 | `GIF not found` | Wrong filename or path | Path is case-sensitive: `/cruzr_emotions/cruzr_smile.gif` |
 | GIF shows but wrong size | GIF not resized | Resize to 160 × 86 px using ezgif.com/resize |
 | `Not enough RAM for GIF` | GIF still full-size | Must be 160 × 86 px — see [GIF Requirements](#gif-requirements) |
-| Clock shows `--:--` permanently | NTP not synced | Check WiFi credentials in `config.ini`; check serial for connection errors |
+| Clock shows `--:--` permanently | No WiFi, no log, no manual set | Set date+time via Carousel → Clock editor |
+| Clock shows wrong time after RESET | Log entry is old | Set time manually or re-enable WiFi for NTP sync |
+| Status shows "Status" not date | RTC not yet valid | Cold boot with no WiFi and no log; set time via Clock editor |
 | Touch zones unresponsive | Touch controller not detected | Check I²C wiring on pins 18/19; watch for `read: 8161` in log (normal) |
 | IMU not working | Address mismatch or wiring | Confirm `IMU_ADDRESS = 0x6B`; check serial for IMU error code |
-| Alarm not firing | `enabled = false` | Set `enabled = true` in `config.ini` |
+| Alarm not firing | `enabled = false` or device was asleep | Set `enabled = true`; check deep sleep timer wakeup fired in boot log |
+| Alarm GIF replaced by scheduled GIF | Timing conflict (old firmware) | Fixed in v1.3.0 — `close_scheduled_gif()` evicts scheduled animation first |
 | Buzzer silent | Wrong pin or active buzzer | Must be a **passive** buzzer on GPIO 5; active buzzers don't work with PWM |
+| BOOT button doesn't wake from sleep | Hardware limitation | GPIO9 is not an LP GPIO on ESP32-C6; press **RESET** instead |
+| UI stutters briefly | WiFi reconnect stall | Suppressed while carousel/editors open; reduced to every 30 s when disconnected |
+| Battery % jumps on unplug | ADC reads elevated USB voltage | Normal — LiPo voltage estimate is slightly elevated while USB powers the system |
+| `last_seen.txt` not created | SD write error or low battery | Check SD card is writable FAT32; battery must be above 3.4V for logging |
 | Font not found (compile error) | `montserrat_96.c` missing | Generate and place the file as described in [Custom Font](#custom-font) |
-| Device won't wake after deep sleep | No alarm set | Press the **RESET** button; if alarm is set, confirm `enabled = true` and correct time in `config.ini` |
-| Clock shows correct time after reset but `--:--` briefly | RTC battery valid but NTP not yet re-synced | Normal on cold boot; clock pre-populates from RTC when waking from sleep |
-| Shutdown popup appears unexpectedly | Battery ≤10% auto-poweroff triggered | Charge the device; the countdown can be cancelled by tapping **Cancel** |
 
 ---
 
 ## Architecture Notes
 
-- **No blocking calls in `loop()`** — `loop()` only calls `lv_timer_handler()` + `delay(5)`. All WiFi polling, clock ticks, brightness schedules, buzzer patterns and animations run as LVGL timer callbacks.
-- **SD ↔ LVGL filesystem bridge** — a custom `lv_fs_drv_t` registered under drive letter `'S'` forwards all LVGL file operations to the Arduino `SD` library. This lets `lv_gif_set_src()` open files directly from the card.
+- **No blocking calls in `loop()`** — `loop()` only calls `lv_timer_handler()` + `delay(5)`. All WiFi polling, clock ticks, brightness schedules, buzzer patterns, countdown timer, and animations run as LVGL timer callbacks.
+- **SD ↔ LVGL filesystem bridge** — a custom `lv_fs_drv_t` registered under drive letter `'S'` forwards all LVGL file operations to the Arduino `SD` library. This lets `lv_gif_set_src()` open files directly from the card with the prefix `S:/`.
 - **GIF memory management** — the LVGL GIF decoder needs a contiguous block for its canvas. GIFs are pre-scaled to 160×86 px (55 KB canvas) so they fit alongside the WiFi stack. The render buffer uses 20 scan lines for good throughput without exhausting RAM.
-- **Deep sleep & timer wakeup** — `show_shutdown_popup()` opens a 5-second countdown card (cancelled by tap). On `shutdown_execute()`, if an alarm is configured the ESP32 timer wakeup is set for `alarm_time − 30 s` so the boot sequence completes before the alarm fires. If no alarm is set the device sleeps indefinitely until the RESET button is pressed. On wakeup the boot path detects `ESP_SLEEP_WAKEUP_TIMER`, validates the RTC epoch, and shortens the splash to 1 s.
-- **Battery monitoring & auto-poweroff** — `battery_timer_callback()` runs every second. It maps the ADC millivolt reading (through a ÷3 divider) onto a LiPo discharge curve to produce a percentage, updates the battery screen labels and icon, and colours the clock digits (white → orange at ≤25% → red at ≤10%). A one-shot `low_bat_triggered` flag prevents re-entry; at ≤10% it opens the battery screen and immediately starts a 60-second `shutdown_execute()` countdown.
-- **config.ini** — parsed once at boot with a hand-rolled INI reader (no external library). Comments (`#`), blank lines and whitespace around `=` are all handled. The `[alarm]` section is rewritten on save while preserving all other sections and comments.
-- **Scheduled animation** — `run_scheduled_animation()` fires on `minute % 5 == 0` inside `run_daily_automation()`. A one-shot LVGL timer triggers `sched_gif_close_cb()` after the configured duration, which fades opacity 100→0% over 800 ms via `lv_anim` then deletes the overlay. Touching the screen cancels the timer before it fires.
+- **RTC persistence** — `log_last_seen()` appends a timestamped voltage reading to `/last_seen.txt` every hour, on every config save, and when the clock editor is used. On cold boot, `restore_time_from_log()` reads the last entry and sets the RTC, providing approximate time without WiFi. Waking from deep sleep skips the log restore since the RTC kept running from battery.
+- **Carousel** — a full-screen LVGL modal opened by long-press. Each tap on ◀/▶ calls `lv_obj_clean()` and rebuilds the view in place. The centre zone uses `LV_EVENT_CLICKED` (not `LV_EVENT_PRESSED`) so long-press and tap are mutually exclusive — the editor never opens before the long-press exit fires.
+- **Shared editor** — `open_editor()` builds the HH:MM widget for Timer and Alarm. `open_clock_editor()` builds the full two-row date+time widget. `modal_longpress_cb()` dispatches to the correct save function based on `carousel_idx`.
+- **Animation priority** — `close_scheduled_gif()` forcefully tears down any scheduled overlay (cancels fade timer, deletes overlay synchronously) before alarm or timer open their GIF. Scheduled animation is also skipped entirely if the alarm fires on the same minute.
+- **Buzzer state machine** — a single 9-step table drives both alarm and timer patterns. `buzzer_fade_after` is set by the caller for finite sequences; `buzzer_stop()` triggers `overlay_fade_and_close()` automatically after the last beep.
+- **WiFi reconnect guard** — `wifi_poll_cb()` skips `wifiMulti.run()` when any modal or overlay is open, when WiFi is manually disabled (`cfg.wifi_enabled`), and reduces attempts to every 30 s when disconnected — preventing radio lock stalls from blocking UI interaction.
+- **Automation gate** — `run_daily_automation()` fires when `now > 2026-01-01` (RTC sanity check) instead of `timeSynced`, so brightness schedules, alarms, and animations all work correctly when WiFi is disabled or the time was set manually.
+- **Deep sleep** — `esp_deep_sleep_start()` with `esp_sleep_enable_timer_wakeup()` set 30 s before the next alarm. If no alarm is configured, the device sleeps indefinitely until RESET.
+- **config.ini** — parsed once at boot with a hand-rolled INI reader (no external library). On save, `[wifi]`, `[alarm]`, and `[timer]` sections are fully rewritten; all other sections and comments are preserved verbatim.
 
 ---
 
@@ -391,12 +516,9 @@ When `[animation] schedule = true`, a GIF plays automatically every 5 minutes fo
 | Version | Status | Feature |
 |---|---|---|
 | v1.0 | ✅ released | Clock, alarms, GIF on tap, buzzer, brightness tilt, config.ini |
-| v1.1 | ✅ released | Scheduled animation (smile/sleep every 5 min, 800 ms fade) |
-| v1.2 | ✅ released | Deep sleep / power-off, timer wakeup before alarm, battery % + colour indicator, auto power-off at low battery |
-
-## Contributing
-
-Pull requests are welcome. For major changes please open an issue first.
+| v1.1 | ✅ released | Scheduled animation (smile/sleep, configurable interval, 800 ms fade) |
+| v1.2 | ✅ released | Carousel settings menu, countdown timer, WiFi toggle, manual time set |
+| v1.3.0 | ✅ released | Full date editor, RTC persistence via SD log, animation priority fix, automation without WiFi |
 
 ## License
 

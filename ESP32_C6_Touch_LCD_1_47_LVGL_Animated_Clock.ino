@@ -574,7 +574,7 @@ static void restore_time_from_log() {
       tm_new.tm_sec  = sec;
       tm_new.tm_isdst = -1;
 
-      time_t t = mktime(&tm_new);
+      time_t t = mktime(&tm_new) - (cfg.gmt_offset_hours * 3600L);
       if (t > 0) {
         struct timeval now_tv = { .tv_sec = t, .tv_usec = 0 };
         settimeofday(&now_tv, NULL);

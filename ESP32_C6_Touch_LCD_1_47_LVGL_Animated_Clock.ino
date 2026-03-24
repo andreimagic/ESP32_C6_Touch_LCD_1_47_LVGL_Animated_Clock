@@ -2171,11 +2171,11 @@ static void home_screen_init(void)
   lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
-  // ── Splash: "Hello!" on cold boot, brief "Welcome back!" on wake-from-sleep
+  // ── Splash: "Hello!" on cold boot, brief "Salut!" on wake-from-sleep
   home_hello_lbl = lv_label_create(scr);
   if (boot_from_sleep) {
-    lv_label_set_text(home_hello_lbl, LV_SYMBOL_HOME "  Welcome back!");
-    lv_obj_set_style_text_font(home_hello_lbl, &lv_font_montserrat_16, 0);
+    lv_label_set_text(home_hello_lbl, LV_SYMBOL_HOME "  Salut!");
+    lv_obj_set_style_text_font(home_hello_lbl, &lv_font_montserrat_48, 0);
   } else {
     lv_label_set_text(home_hello_lbl, "Hello!");
     lv_obj_set_style_text_font(home_hello_lbl, &lv_font_montserrat_48, 0);

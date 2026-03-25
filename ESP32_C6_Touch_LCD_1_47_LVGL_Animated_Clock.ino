@@ -82,6 +82,8 @@ struct AppConfig {
 // ─── GIF paths — SD card root is mapped to LVGL drive letter "S" ──────────────
 #define GIF_SMILE_PATH  "S:/cruzr_emotions/cruzr_smile.gif"
 #define GIF_SLEEP_PATH  "S:/cruzr_emotions/cruzr_sleep.gif"
+#define GIF_SAD_PATH    "S:/cruzr_emotions/cruzr_sad.gif"
+#define GIF_JOY_PATH    "S:/cruzr_emotions/cruzr_joy.gif"
 #define GIF_ALARM_PATH  "S:/cruzr_emotions/alarm_animation.gif"
 #define GIF_TIMER_PATH  "S:/cruzr_emotions/timer_animation.gif"
 
@@ -155,7 +157,9 @@ bool      imuReady  = false;
 
 // ─── Brightness + tilt timer handles — valid only while Status screen is open ─
 lv_obj_t   *label_brightness = nullptr;
-lv_timer_t *tilt_timer       = nullptr;
+lv_timer_t *tilt_timer         = nullptr;
+bool        emotion_tilt_active = false;   // true while UL smile GIF is open
+const char *emotion_current_gif = nullptr; // tracks which GIF is showing
 lv_timer_t *buzzer_timer      = nullptr;  // alarm beep pattern timer
 bool        buzzer_active     = false;
 lv_timer_t *sched_close_timer = nullptr;  // auto-close timer for scheduled GIF
@@ -1240,11 +1244,13 @@ static void overlay_close_event_cb(lv_event_t *e)
     if (shutdown_popup) { lv_obj_del(shutdown_popup); shutdown_popup = nullptr; }
     shutdown_cntdown_lbl = nullptr;
     shutdown_count = 5;
-    // Stop tilt timer if status screen was open
+    // Stop tilt timer (status screen brightness or emotion GIF mode)
     if (tilt_timer) {
       lv_timer_del(tilt_timer);
       tilt_timer = nullptr;
     }
+    emotion_tilt_active = false;
+    emotion_current_gif = nullptr;
     label_brightness = nullptr;  // label is about to be destroyed
     // Cancel scheduled GIF auto-close if user taps during animation
     if (sched_close_timer) { lv_timer_del(sched_close_timer); sched_close_timer = nullptr; }
@@ -1358,15 +1364,50 @@ static void tilt_poll_cb(lv_timer_t * /*t*/)
 
   imu.update();
   imu.getAccel(&accelData);
-  float y = accelData.accelY;
 
-  // Tilt left  (Y > 0.5) → decrease brightness
-  if (y > 0.5f) {
-    set_brightness(brightnessPercent - 10);
-  }
-  // Tilt right (Y < -0.5) → increase brightness
-  else if (y < -0.5f) {
-    set_brightness(brightnessPercent + 10);
+  if (emotion_tilt_active) {
+    // ── Emotion GIF mode (upper-left tap) ─────────────────────────────
+    // Axes on this board (landscape, screen facing user):
+    //   accelX > +0.4  → tilt backwards  → sleep
+    //   accelX < -0.4  → tilt forward     → sad
+    //   |accelY| > 0.4 → tilt left/right  → joy
+    //   all near zero  → upright           → smile
+    float x = accelData.accelX;
+    float y = accelData.accelY;
+
+    const char *desired = GIF_SMILE_PATH;  // safe default
+    
+    // DEAD_ZONE = 0.2 → more sensitive  
+    // DEAD_ZONE = 0.3 → more stable
+    const float DEAD_ZONE = 0.2f;
+
+    if (fabsf(x) < DEAD_ZONE && fabsf(y) < DEAD_ZONE) {
+      desired = GIF_SLEEP_PATH;   // one extreme
+    }
+    else if (x > 0.5f) {
+      desired = GIF_SMILE_PATH;   // upright / neutral
+    }
+    else if (x < -0.5f) {
+      desired = GIF_SAD_PATH;     // opposite extreme
+    }
+    else if (fabsf(y) > 0.5f) {
+      desired = GIF_JOY_PATH;     // side tilt
+    }
+
+    if (desired && (!emotion_current_gif || strcmp(desired, emotion_current_gif) != 0)) {
+      emotion_current_gif = desired;
+      // Swap GIF in-place using the widget stored as overlay user_data
+      lv_obj_t *gif = (lv_obj_t *)lv_obj_get_user_data(overlay_cont);
+      if (gif) {
+        lv_gif_set_src(gif, desired);
+        Serial.printf("[EMOTION] GIF → %s\n", desired);
+      }
+    }
+  } else {
+    // ── Brightness mode (status screen) ───────────────────────────────
+    float y = accelData.accelY;
+    if      (y >  0.5f) set_brightness(brightnessPercent - 10);
+    else if (y < -0.5f) set_brightness(brightnessPercent + 10);
   }
 }
 
@@ -2153,7 +2194,18 @@ static void clock_face_show(lv_timer_t *t)
 
 // Zone callbacks
 static void zone_ul_cb(lv_event_t *e)
-{ if (lv_event_get_code(e) == LV_EVENT_CLICKED) show_gif_fullscreen(GIF_SMILE_PATH); }
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  show_gif_fullscreen(GIF_SMILE_PATH);
+  // Start emotion-tilt mode: tilt the device to change the GIF
+  if (overlay_cont && imuReady) {
+    emotion_tilt_active  = true;
+    emotion_current_gif  = GIF_SMILE_PATH;
+    if (!tilt_timer)
+      tilt_timer = lv_timer_create(tilt_poll_cb, 400, nullptr);
+    Serial.println("[EMOTION] Tilt mode active");
+  }
+}
 
 static void zone_ur_cb(lv_event_t *e)
 { if (lv_event_get_code(e) == LV_EVENT_CLICKED) show_gif_fullscreen(GIF_SLEEP_PATH); }

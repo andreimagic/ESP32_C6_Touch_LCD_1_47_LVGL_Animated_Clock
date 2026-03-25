@@ -1394,7 +1394,7 @@ static void tilt_poll_cb(lv_timer_t * /*t*/)
       desired = GIF_JOY_PATH;     // side tilt
     }
 
-    if (desired && strlen(desired) > 0 && desired != emotion_current_gif) {
+    if (desired && (!emotion_current_gif || strcmp(desired, emotion_current_gif) != 0)) {
       emotion_current_gif = desired;
       // Swap GIF in-place using the widget stored as overlay user_data
       lv_obj_t *gif = (lv_obj_t *)lv_obj_get_user_data(overlay_cont);

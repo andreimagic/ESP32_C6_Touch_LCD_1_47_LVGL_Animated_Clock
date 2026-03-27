@@ -543,6 +543,7 @@ Both alarm and timer use the same pattern: **4 × (200 ms ON + 100 ms OFF) + 100
 | v1.2 | ✅ released | Carousel settings menu, countdown timer, WiFi toggle, manual time set |
 | v1.3.0 | ✅ released | Full date editor, RTC persistence via SD log, animation priority fix, automation without WiFi |
 | v1.4.0 | ✅ released | Emotion tilt GIF mode on upper-left tap (smile/sleep/sad/joy via IMU) |
+| v1.4.1 | ✅ released | Bugfix: Fix RTC drift after long deep sleep in the event of an alarm set, allow time for NTP sync |
 
 ## License
 

@@ -132,7 +132,9 @@ lv_obj_t   *home_bell_lbl  = nullptr;  // bell icon shown on home when alarm ON
 lv_obj_t   *alarm_cont     = nullptr;  // alarm editor screen
 
 bool sdCardAvailable  = false;
-bool boot_from_sleep  = false;  // true when waking from deep sleep via BOOT btn
+bool boot_from_sleep      = false;  // true when waking from deep sleep via BOOT btn
+uint32_t boot_millis       = 0;     // millis() captured at start of setup()
+bool     alarm_ntp_pending = false; // alarm held waiting for NTP sync after wake
 
 lv_obj_t   *label_percent        = nullptr;  // battery % in title bar
 lv_obj_t   *shutdown_popup       = nullptr;  // countdown confirmation card
@@ -914,17 +916,23 @@ static void shutdown_execute()
   Serial.println("[PWR] Entering deep sleep.");
   Serial.println("[PWR] Press RESET button to wake the device.");
   if (cfg.alarm_enabled) {
-    // Calculate seconds until alarm; wake 30s early to let boot complete
     time_t now = time(nullptr);
     struct tm t; localtime_r(&now, &t);
     int now_sec  = t.tm_hour * 3600 + t.tm_min * 60 + t.tm_sec;
     int alm_sec  = cfg.alarm_hour * 3600 + cfg.alarm_minute * 60;
     int diff_sec = alm_sec - now_sec;
     if (diff_sec <= 0) diff_sec += 86400;   // alarm is tomorrow
-    diff_sec = max(diff_sec - 30, 10);       // 30s early, minimum 10s
+    // If alarm is more than 5 min away: wake 5 min early so WiFi+NTP
+    // have time to sync before the alarm fires.
+    // If alarm is 5 min or less away: wake 30s early — no time for NTP,
+    // the fallback warning alarm will cover any drift.
+    const int EARLY_NTP  = 5 * 60;   // 300s = 5 min
+    const int EARLY_BOOT =      30;  // 30s  — just enough to boot
+    int early = (diff_sec > EARLY_NTP) ? EARLY_NTP : EARLY_BOOT;
+    diff_sec = max(diff_sec - early, 10);
     esp_sleep_enable_timer_wakeup((uint64_t)diff_sec * 1000000ULL);
-    Serial.printf("[PWR] Timer wakeup set for %ds (alarm at %02d:%02d)\n",
-                  diff_sec, cfg.alarm_hour, cfg.alarm_minute);
+    Serial.printf("[PWR] Timer wakeup set for %ds (%d min early, alarm at %02d:%02d)\n",
+                  diff_sec, early / 60, cfg.alarm_hour, cfg.alarm_minute);
   }
   Serial.flush();
   ledcWrite(GFX_BL, 0);  // blank display
@@ -1182,14 +1190,87 @@ static void run_daily_automation(int hour, int minute)
   if (hour ==  7 && minute ==  0) set_brightness(50);
 
   // ── Alarm (from config.ini [alarm]) ──────────────────────────────────────
-  if (cfg.alarm_enabled
-      && hour   == cfg.alarm_hour
-      && minute == cfg.alarm_minute) {
-    Serial.printf("[SCHED] Alarm at %02d:%02d\n", hour, minute);
-    close_scheduled_gif();  // evict any running scheduled animation
-    set_brightness(50);
-    show_gif_fullscreen(GIF_ALARM_PATH);
-    buzzer_start_alarm();
+  //
+  // NTP-guard logic after deep-sleep wakeup:
+  //
+  //  A) Uptime > 5 min  → device was already running before alarm time.
+  //     Time is assumed reliable. Fire normally.
+  //
+  //  B) Uptime ≤ 5 min AND alarm is HH:MM match:
+  //     B1) NTP synced   → time is accurate. Fire normally.
+  //     B2) NTP not synced yet → hold in alarm_ntp_pending = true.
+  //         The pending check runs every minute until NTP syncs or
+  //         15 min have passed (giving up with a warning alarm).
+  //
+  //  C) Uptime ≤ 5 min AND alarm is NOT yet at HH:MM (woke 5 min early)
+  //     → normal pre-alarm window, let automation continue.
+  //
+  const uint32_t UPTIME_MS       = millis() - boot_millis;
+  const uint32_t FIVE_MIN_MS     = 5UL * 60 * 1000;
+  const uint32_t NTP_GIVE_UP_MS  = 15UL * 60 * 1000; // 15 min total uptime
+  bool           at_alarm_time   = cfg.alarm_enabled
+                                   && hour   == cfg.alarm_hour
+                                   && minute == cfg.alarm_minute;
+
+  // ── Pending alarm: check each minute whether NTP has synced ──────────
+  if (alarm_ntp_pending) {
+    if (timeSynced) {
+      // NTP finally synced — fire alarm now at the correct time
+      alarm_ntp_pending = false;
+      Serial.println("[ALARM] NTP synced — firing pending alarm");
+      close_scheduled_gif();
+      set_brightness(50);
+      show_gif_fullscreen(GIF_ALARM_PATH);
+      buzzer_start_alarm();
+    } else if (UPTIME_MS > NTP_GIVE_UP_MS) {
+      // 15 min elapsed, NTP never synced — show warning alarm
+      alarm_ntp_pending = false;
+      Serial.println("[ALARM] NTP timeout — showing warning alarm");
+      close_scheduled_gif();
+      set_brightness(80);
+      // Warning overlay: no GIF, just text
+      if (!overlay_cont) {
+        overlay_cont = make_overlay(lv_color_make(20, 20, 20));
+        lv_obj_t *h = lv_label_create(overlay_cont);
+        lv_label_set_text(h, "HELLO!");
+        lv_obj_set_style_text_font(h, &lv_font_montserrat_48, 0);
+        lv_obj_set_style_text_color(h, lv_color_white(), 0);
+        lv_obj_align(h, LV_ALIGN_CENTER, 0, -24);
+        lv_obj_t *w = lv_label_create(overlay_cont);
+        lv_label_set_text(w, "NTP not in sync\nCheck the time!");
+        lv_obj_set_style_text_font(w, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_color(w, lv_color_make(255, 180, 60), 0);
+        lv_label_set_long_mode(w, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(w, 280);
+        lv_obj_set_style_text_align(w, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(w, LV_ALIGN_CENTER, 0, 36);
+        lv_obj_add_event_cb(overlay_cont, overlay_close_event_cb, LV_EVENT_CLICKED, nullptr);
+      }
+      buzzer_start_alarm();
+    } else {
+      Serial.printf("[ALARM] Pending — waiting for NTP (uptime %lus)\n",
+                    UPTIME_MS / 1000);
+    }
+    return;  // pending state consumed this minute
+  }
+
+  // ── Normal alarm match ────────────────────────────────────────────────
+  if (at_alarm_time) {
+    bool long_uptime = (UPTIME_MS > FIVE_MIN_MS);
+    if (long_uptime || timeSynced) {
+      // Case A or B1: reliable time — fire immediately
+      Serial.printf("[ALARM] Firing at %02d:%02d (uptime=%lus, NTP=%s)\n",
+                    hour, minute, UPTIME_MS / 1000, timeSynced ? "yes" : "no");
+      close_scheduled_gif();
+      set_brightness(50);
+      show_gif_fullscreen(GIF_ALARM_PATH);
+      buzzer_start_alarm();
+    } else {
+      // Case B2: fresh boot, NTP not yet synced — hold
+      alarm_ntp_pending = true;
+      Serial.printf("[ALARM] Holding at %02d:%02d — waiting for NTP sync\n",
+                    hour, minute);
+    }
   }
 }
 
@@ -2284,6 +2365,7 @@ void setup()
 {
   // ── Wake cause — must be read before any peripheral init ───────────────────
   esp_sleep_wakeup_cause_t wakeup_cause = esp_sleep_get_wakeup_cause();
+  boot_millis = millis();
   // Timer wakeup = alarm auto-wake (only wakeup source configured)
   boot_from_sleep = (wakeup_cause == ESP_SLEEP_WAKEUP_TIMER);
 

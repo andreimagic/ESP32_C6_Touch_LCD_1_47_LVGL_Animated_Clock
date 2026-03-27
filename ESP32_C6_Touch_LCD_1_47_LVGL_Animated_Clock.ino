@@ -2904,7 +2904,7 @@ static void apps_carousel_build()
   // Description
   lv_obj_t *desc_lbl = lv_label_create(apps_cont);
   lv_label_set_text(desc_lbl, items[apps_idx].desc);
-  lv_obj_set_style_text_font(desc_lbl, &dejavu_mono_14, 0);
+  lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
   lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
 

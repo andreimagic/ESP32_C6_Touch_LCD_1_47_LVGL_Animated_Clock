@@ -2816,7 +2816,7 @@ static void dice_anim_tick_cb(lv_timer_t * /*t*/)
   if (app_anim_step < 3) {
     // Steps 0-2: show three shake frames (no text)
     lv_label_set_text(app_anim_lbl, dice_art_roll(app_anim_step + 1));
-    if (app_anim_step == 0) menu_tone_beep();  // beep when rolling starts
+    menu_tone_beep();
     app_anim_step++;
   } else {
     // Animation done — show final dice face

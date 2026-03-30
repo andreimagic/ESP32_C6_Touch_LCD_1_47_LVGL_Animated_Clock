@@ -47,10 +47,10 @@
 // These hardcoded values are the fallback when the card or file is absent.
 
 struct AppConfig {
-  char wifi_ssid[64]     = "myhomewifi";     // [wifi] ssid
-  char wifi_password[64] = "changeme";       // [wifi] password
-  char ntp_server[64]    = "pool.ntp.org";   // [clock] ntp_server
-  char tz_string[48]     = "CET-1CEST,M3.5.0,M10.5.0/3"; // [clock] tz (POSIX — set once, handles DST forever)
+  char wifi_ssid[64]          = "myhomewifi";     // [wifi] ssid
+  char wifi_password[64]      = "changeme";       // [wifi] password
+  char ntp_server[64]         = "pool.ntp.org";   // [clock] ntp_server
+  char tz_string[48]          = "CET-1CEST,M3.5.0,M10.5.0/3"; // [clock] tz (POSIX — set once, handles DST forever)
   bool wifi_enabled           = true;        // [wifi] enabled
   bool alarm_enabled          = false;       // [alarm] enabled
   int  alarm_hour             = 7;           // [alarm] time HH

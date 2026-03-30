@@ -61,6 +61,7 @@ struct AppConfig {
   int  timer_beep_sequences   = 3;           // [timer] beep_sequences
   bool anim_schedule_enabled  = true;        // [animation] schedule
   int  anim_duration_sec      = 10;          // [animation] duration
+  bool menu_sounds            = true;        // [menu] sounds
 } cfg;
 
 // ─── Pin definitions ─────────────────────────────────────────────────────────
@@ -170,6 +171,7 @@ lv_timer_t *sched_close_timer = nullptr;  // auto-close timer for scheduled GIF
 
 // ─── Carousel / modal settings ────────────────────────────────────────────────
 lv_obj_t   *modal_cont   = nullptr;  // carousel / editor full-screen modal
+lv_obj_t   *apps_cont    = nullptr;  // apps menu container
 static int  carousel_idx = 0;        // 0=Clock 1=Timer 2=Alarm 3=WiFi
 
 // ─── Countdown timer ─────────────────────────────────────────────────────────
@@ -528,6 +530,14 @@ static void load_config()
         Serial.printf("[CFG]   anim.duration  = %ds\n", cfg.anim_duration_sec);
       }
     }
+
+    // ── [menu] ─────────────────────────────────────────────────────────────
+    else if (strcmp(section, "menu") == 0) {
+      if (strcmp(key, "sounds") == 0) {
+        cfg.menu_sounds = (strcmp(val,"true")==0||strcmp(val,"1")==0);
+        Serial.printf("[CFG]   menu.sounds    = %s\n", cfg.menu_sounds?"true":"false");
+      }
+    }
   }
 
   f.close();
@@ -657,7 +667,8 @@ static void save_config()
       while (*trimmed == ' ' || *trimmed == '\t') trimmed++;
       if (strncmp(trimmed,"[wifi]", 6)==0||
           strncmp(trimmed,"[alarm]",7)==0||
-          strncmp(trimmed,"[timer]",7)==0) { inAlarm=true; continue; }
+          strncmp(trimmed,"[timer]",7)==0||
+          strncmp(trimmed,"[menu]", 6)==0) { inAlarm=true; continue; }
       if (*trimmed=='[') inAlarm=false;
       if (!inAlarm) lineCount++;
     }
@@ -687,9 +698,13 @@ static void save_config()
   fw.println("[timer]");
   fw.printf("duration = %02d:%02d\n",  cfg.timer_hours, cfg.timer_minutes);
   fw.printf("beep_sequences = %d\n",   cfg.timer_beep_sequences);
+
+  fw.println();
+  fw.println("[menu]");
+  fw.printf("sounds = %s\n", cfg.menu_sounds?"true":"false");
   fw.close();
 
-  Serial.println("[CFG] Saved wifi/alarm/timer.");
+  Serial.println("[CFG] Saved wifi/alarm/timer/menu.");
   
   // Save the current timestamp to the log file as well
   log_last_seen();
@@ -1074,7 +1089,7 @@ static void wifi_poll_cb(lv_timer_t *t)
     // FreeRTOS scheduler for 20-80ms, causing visible UI stutter.
     // Only attempt reconnect when no modal/editor is open, and slow
     // down to every 30s so the stall is infrequent.
-    if (!modal_cont && !overlay_cont && cfg.wifi_enabled) {
+    if (!modal_cont && !overlay_cont && !apps_cont && cfg.wifi_enabled) {
       wifiMulti.run(0);
     }
     lv_timer_set_period(t, 30000);  // 30s between reconnect attempts
@@ -2290,8 +2305,52 @@ static void clock_face_show(lv_timer_t *t)
 //         Long-press in carousel → close all, return to clock
 // ══════════════════════════════════════════════════════════════════════════════
 
+// ── Note frequencies and menu tone helpers ────────────────────────────────────
+// menu_tone() is a short blocking call — safe in LVGL timer callbacks because
+// the longest note (500ms) is still shorter than any LVGL watchdog threshold.
+#define NOTE_C4  262
+#define NOTE_G4  392
+#define NOTE_A4  440
+#define NOTE_B4  494
+#define NOTE_C5  523
+#define NOTE_D5  587
+#define NOTE_E5  659
+#define NOTE_A5  880
+#define NOTE_B5  988
+#define NOTE_HI  1046  // high C6
+
+static void menu_tone(int freq, int ms)
+{
+  if (!cfg.menu_sounds) return;
+  ledcAttach(BUZZER_PIN, freq, 8);
+  ledcWrite(BUZZER_PIN, 96);
+  delay(ms);
+  ledcWrite(BUZZER_PIN, 0);
+  ledcAttach(BUZZER_PIN, 2000, 8);  // restore alarm freq
+}
+
+static void menu_play_success()
+{
+  if (!cfg.menu_sounds) return;
+  // successMelody: A5 B5 C5 B5 C5 D5 C5 D5 E5 D5 E5 E5 @100ms each
+  static const int mel[] = {
+    880,988,523,494, 523,587,523,587, 659,587,659,659
+  };
+  for (int i = 0; i < 12; i++) menu_tone(mel[i], 100);
+}
+
+static void menu_play_failure()
+{
+  if (!cfg.menu_sounds) return;
+  menu_tone(NOTE_G4, 250);
+  menu_tone(NOTE_C4, 500);
+}
+
+static void menu_tone_beep() { menu_tone(NOTE_A4, 60); }
+static void menu_tone_hi()   { menu_tone(NOTE_HI, 80); }
+
 // ── Apps state ────────────────────────────────────────────────────────────────
-static lv_obj_t   *apps_cont     = nullptr;
+// apps_cont declared globally above wifi_poll_cb
 static int         apps_idx      = 0;   // 0=RPS  1=Dice  2=Coin
 static int         app_subphase  = 0;   // 0=carousel  1=game
 static lv_timer_t *app_anim_timer  = nullptr;
@@ -2364,9 +2423,11 @@ static void math_btn_cb(lv_event_t *e)
   if (math_cont) { lv_obj_del(math_cont); math_cont = nullptr; }
 
   if (chosen == math_answer) {
+    menu_play_success();
     math_close_overlay();
     show_apps();
   } else {
+    menu_play_failure();
     // Wrong: show big white X for 3 s, then return to clock
     math_cont = lv_obj_create(lv_scr_act());
     lv_obj_set_size(math_cont, 320, 172);
@@ -2466,9 +2527,9 @@ static void apps_longpress_cb(lv_event_t *e)
 }
 
 static void apps_left_cb(lv_event_t *e)
-{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+2)%3;apps_carousel_build();} }
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+3)%4;apps_carousel_build();} }
 static void apps_right_cb(lv_event_t *e)
-{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+1)%3;apps_carousel_build();} }
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+1)%4;apps_carousel_build();} }
 
 // Transparent full-screen tap zone helper for game screens
 static lv_obj_t *app_tapzone(lv_obj_t *p, lv_event_cb_t cb)
@@ -2691,6 +2752,7 @@ static void app_screen_result(int data)
     lv_obj_align(res, LV_ALIGN_BOTTOM_MID, 0, -36);
   } else {
     // Coin: data = 0=heads 1=tails
+    menu_tone_hi();  // hi-tone on flip result
     lv_label_set_text(art, coin_art(data == 0));
     lv_obj_align(art, LV_ALIGN_CENTER, 0, -16);
     lv_label_set_text(res, data==0 ? "HEADS!" : "TAILS!");
@@ -2712,6 +2774,7 @@ static void rps_anim_tick_cb(lv_timer_t * /*t*/)
     // Steps 0-5: up/down × 3, countdown 3-2-1
     bool up = (app_anim_step % 2 == 0);
     lv_label_set_text(app_anim_lbl, rps_art_shake(up));
+    if (!up) menu_tone_beep();  // beep on each DOWN move
     if (app_anim_num) {
       int count = 3 - (app_anim_step / 2);
       char buf[4]; snprintf(buf, sizeof(buf), "%d", count);
@@ -2720,6 +2783,7 @@ static void rps_anim_tick_cb(lv_timer_t * /*t*/)
     app_anim_step++;
   } else {
     // Animation done — reveal cpu art + GO!
+    menu_tone_hi();  // high tone on GO!
     app_anim_stop();
     lv_obj_clean(apps_cont);
     lv_obj_add_event_cb(apps_cont, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
@@ -2752,9 +2816,11 @@ static void dice_anim_tick_cb(lv_timer_t * /*t*/)
   if (app_anim_step < 3) {
     // Steps 0-2: show three shake frames (no text)
     lv_label_set_text(app_anim_lbl, dice_art_roll(app_anim_step + 1));
+    if (app_anim_step == 0) menu_tone_beep();  // beep when rolling starts
     app_anim_step++;
   } else {
     // Animation done — show final dice face
+    menu_tone_hi();  // hi-tone on result
     app_anim_stop();
     app_screen_result(app_anim_result);  // app_anim_result = 1-6
   }
@@ -2854,7 +2920,17 @@ static void app_screen_start()
 
 // ── Apps carousel tap (enter game) ───────────────────────────────────────────
 static void apps_tap_enter_cb(lv_event_t *e)
-{ if (lv_event_get_code(e)==LV_EVENT_CLICKED) app_screen_start(); }
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (apps_idx == 3) {
+    cfg.menu_sounds = !cfg.menu_sounds;
+    save_config();
+    if (cfg.menu_sounds) menu_tone_hi();  // confirm it's on
+    apps_carousel_build();
+  } else {
+    app_screen_start();
+  }
+}
 
 // ── Apps carousel builder ─────────────────────────────────────────────────────
 static void apps_carousel_build()
@@ -2863,10 +2939,11 @@ static void apps_carousel_build()
   app_subphase = 0;
   lv_obj_add_event_cb(apps_cont, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
 
-  static const struct { const char *name; const char *desc; } items[3] = {
+  static const struct { const char *name; const char *desc; } items[4] = {
     {"Rock Paper Scissors", "An interactive ASCII Game"},
     {"Rolling Dice",        "An interactive ASCII Dice"},
     {"Flip a Coin",         "An interactive ASCII Coin"},
+    {nullptr,               nullptr},  // item 3 = Sounds toggle
   };
 
   // Left arrow + zone
@@ -2897,22 +2974,38 @@ static void apps_carousel_build()
     lv_obj_add_event_cb(z,apps_right_cb,LV_EVENT_PRESSED,nullptr);
     lv_obj_add_event_cb(z,apps_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr); }
 
-  // Name (no icon — spec requirement)
-  lv_obj_t *name_lbl = lv_label_create(apps_cont);
-  lv_label_set_text(name_lbl, items[apps_idx].name);
-  lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_24, 0);
-  lv_obj_set_style_text_color(name_lbl, lv_color_white(), 0);
-  lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_WRAP);
-  lv_obj_set_width(name_lbl, 180);
-  lv_obj_set_style_text_align(name_lbl, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_align(name_lbl, LV_ALIGN_CENTER, 0, -14);
+  if (apps_idx == 3) {
+    // ── Sounds toggle (inline, mirrors WiFi toggle in settings) ──────────
+    lv_obj_t *sicon = lv_label_create(apps_cont);
+    lv_label_set_text(sicon, cfg.menu_sounds ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE);
+    lv_obj_set_style_text_font(sicon, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(sicon,
+      cfg.menu_sounds ? lv_color_make(80,200,120) : lv_color_make(180,60,60), 0);
+    lv_obj_align(sicon, LV_ALIGN_CENTER, 0, -18);
+    lv_obj_t *sdesc = lv_label_create(apps_cont);
+    lv_label_set_text(sdesc, cfg.menu_sounds ? "Sounds: ON" : "Sounds: OFF");
+    lv_obj_set_style_text_font(sdesc, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(sdesc,
+      cfg.menu_sounds ? lv_color_make(80,200,120) : lv_color_make(180,60,60), 0);
+    lv_obj_align(sdesc, LV_ALIGN_CENTER, 0, 28);
+  } else {
+    // ── Game item ─────────────────────────────────────────────────────────
+    lv_obj_t *name_lbl = lv_label_create(apps_cont);
+    lv_label_set_text(name_lbl, items[apps_idx].name);
+    lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(name_lbl, lv_color_white(), 0);
+    lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(name_lbl, 180);
+    lv_obj_set_style_text_align(name_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(name_lbl, LV_ALIGN_CENTER, 0, -14);
 
-  // Description
-  lv_obj_t *desc_lbl = lv_label_create(apps_cont);
-  lv_label_set_text(desc_lbl, items[apps_idx].desc);
-  lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
-  lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
+    // Description
+    lv_obj_t *desc_lbl = lv_label_create(apps_cont);
+    lv_label_set_text(desc_lbl, items[apps_idx].desc);
+    lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
+    lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
+  }
 
   // Centre tap zone — CLICKED enters, LONG_PRESSED exits
   { lv_obj_t *z = lv_obj_create(apps_cont);
@@ -2925,18 +3018,19 @@ static void apps_carousel_build()
 
   // Hint above dots
   lv_obj_t *hint = lv_label_create(apps_cont);
-  lv_label_set_text(hint, "tap to play  .  hold to exit");
+  lv_label_set_text(hint, apps_idx == 3 ? "tap to toggle  .  hold to exit"
+                                         : "tap to play  .  hold to exit");
   lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(hint, lv_color_make(70, 70, 95), 0);
   lv_obj_set_style_text_opa(hint, LV_OPA_60, 0);
   lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -18);
 
-  // 3 position dots
-  for (int i = 0; i < 3; i++) {
+  // 4 position dots
+  for (int i = 0; i < 4; i++) {
     lv_obj_t *dot = lv_label_create(apps_cont);
     lv_label_set_text(dot, i==apps_idx ? "\xe2\x97\x8f" : "\xe2\x97\x8b");
     lv_obj_set_style_text_color(dot, i==apps_idx ? lv_color_white() : lv_color_make(80,80,100), 0);
-    lv_obj_set_pos(dot, 144 + i * 14, 156);
+    lv_obj_set_pos(dot, 137 + i * 14, 156);
   }
 }
 

@@ -336,7 +336,7 @@ static void buzzer_start(int sequences)
   buzzer_seq_total = sequences;
   buzzer_seq_done  = 0;
   buzzer_step      = 0;
-  ledcAttach(BUZZER_PIN, 2000, 8);
+  ledcChangeFrequency(BUZZER_PIN, 2000, 8);  // ensure 2kHz alarm freq
   buzzer_active = true;
   buzzer_timer  = lv_timer_create(buzzer_tick_cb, 200, nullptr);
   Serial.printf("[BUZZ] Started (%d sequences)\n", sequences);
@@ -2322,11 +2322,11 @@ static void clock_face_show(lv_timer_t *t)
 static void menu_tone(int freq, int ms)
 {
   if (!cfg.menu_sounds) return;
-  ledcAttach(BUZZER_PIN, freq, 8);
+  ledcChangeFrequency(BUZZER_PIN, freq, 8);   // change freq on already-attached pin
   ledcWrite(BUZZER_PIN, 96);
   delay(ms);
   ledcWrite(BUZZER_PIN, 0);
-  ledcAttach(BUZZER_PIN, 2000, 8);  // restore alarm freq
+  ledcChangeFrequency(BUZZER_PIN, 2000, 8);   // restore alarm freq
 }
 
 static void menu_play_success()

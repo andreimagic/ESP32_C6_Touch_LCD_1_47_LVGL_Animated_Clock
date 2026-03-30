@@ -50,7 +50,7 @@ struct AppConfig {
   char wifi_ssid[64]     = "myhomewifi";     // [wifi] ssid
   char wifi_password[64] = "changeme";       // [wifi] password
   char ntp_server[64]    = "pool.ntp.org";   // [clock] ntp_server
-  int  gmt_offset_hours  = 1;                // [clock] gmt_offset  (e.g. 1 for UTC+1, -5 for UTC-5)
+  char tz_string[48]     = "CET-1CEST,M3.5.0,M10.5.0/3"; // [clock] tz (POSIX — set once, handles DST forever)
   bool wifi_enabled           = true;        // [wifi] enabled
   bool alarm_enabled          = false;       // [alarm] enabled
   int  alarm_hour             = 7;           // [alarm] time HH
@@ -461,18 +461,16 @@ static void load_config()
       }
     }
 
-    // ── [clock] — NTP server + timezone offset ────────────────────────────
+    // ── [clock] — NTP server + POSIX timezone string ─────────────────────
     else if (strcmp(section, "clock") == 0) {
       if (strcmp(key, "ntp_server") == 0) {
         strncpy(cfg.ntp_server, val, sizeof(cfg.ntp_server) - 1);
         Serial.printf("[CFG]   clock.ntp_server  = %s\n", cfg.ntp_server);
       }
-      else if (strcmp(key, "gmt_offset") == 0) {
-        cfg.gmt_offset_hours = atoi(val);
-        if (cfg.gmt_offset_hours < -12) cfg.gmt_offset_hours = -12;
-        if (cfg.gmt_offset_hours >  14) cfg.gmt_offset_hours =  14;
-        Serial.printf("[CFG]   clock.gmt_offset  = %+d (UTC%+d)\n",
-                      cfg.gmt_offset_hours, cfg.gmt_offset_hours);
+      else if (strcmp(key, "tz") == 0) {
+        strncpy(cfg.tz_string, val, sizeof(cfg.tz_string) - 1);
+        cfg.tz_string[sizeof(cfg.tz_string) - 1] = '\0';
+        Serial.printf("[CFG]   clock.tz           = %s\n", cfg.tz_string);
       }
     }
 
@@ -582,7 +580,8 @@ static void restore_time_from_log() {
       tm_new.tm_sec  = sec;
       tm_new.tm_isdst = -1;
 
-      time_t t = mktime(&tm_new) - (cfg.gmt_offset_hours * 3600L);
+      // TZ env var is set before this runs; mktime converts local→UTC correctly
+      time_t t = mktime(&tm_new);
       if (t > 0) {
         struct timeval now_tv = { .tv_sec = t, .tv_usec = 0 };
         settimeofday(&now_tv, NULL);
@@ -699,11 +698,18 @@ static void save_config()
 // ── WiFi runtime toggle ───────────────────────────────────────────────────────
 static void apply_wifi_state()
 {
+  // Apply POSIX TZ immediately — makes localtime_r correct even offline
+  setenv("TZ", cfg.tz_string, 1);
+  tzset();
+  Serial.printf("[TZ] Applied: %s\n", cfg.tz_string);
+
   if (cfg.wifi_enabled) {
     Serial.println("[WiFi] Enabling...");
     WiFi.mode(WIFI_STA);
     wifiMulti.addAP(cfg.wifi_ssid, cfg.wifi_password);
-    configTime(cfg.gmt_offset_hours * 3600L, 0, cfg.ntp_server);
+    // configTzTime sets TZ env var AND starts SNTP in one call.
+    // NTP delivers UTC; localtime_r converts to local using tz_string.
+    configTzTime(cfg.tz_string, cfg.ntp_server);
   } else {
     Serial.println("[WiFi] Disabled by user.");
     WiFi.disconnect(true);

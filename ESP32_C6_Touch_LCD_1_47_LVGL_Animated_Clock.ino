@@ -1251,7 +1251,7 @@ static void run_daily_automation(int hour, int minute)
       alarm_ntp_pending = false;
       Serial.println("[ALARM] NTP timeout — showing warning alarm");
       close_scheduled_gif();
-      set_brightness(80);
+      set_brightness(50);
       // Warning overlay: no GIF, just text
       if (!overlay_cont) {
         overlay_cont = make_overlay(lv_color_make(20, 20, 20));

@@ -47,10 +47,10 @@
 // These hardcoded values are the fallback when the card or file is absent.
 
 struct AppConfig {
-  char wifi_ssid[64]     = "myhomewifi";     // [wifi] ssid
-  char wifi_password[64] = "changeme";       // [wifi] password
-  char ntp_server[64]    = "pool.ntp.org";   // [clock] ntp_server
-  int  gmt_offset_hours  = 1;                // [clock] gmt_offset  (e.g. 1 for UTC+1, -5 for UTC-5)
+  char wifi_ssid[64]          = "myhomewifi";     // [wifi] ssid
+  char wifi_password[64]      = "changeme";       // [wifi] password
+  char ntp_server[64]         = "pool.ntp.org";   // [clock] ntp_server
+  char tz_string[48]          = "CET-1CEST,M3.5.0,M10.5.0/3"; // [clock] tz (POSIX — set once, handles DST forever)
   bool wifi_enabled           = true;        // [wifi] enabled
   bool alarm_enabled          = false;       // [alarm] enabled
   int  alarm_hour             = 7;           // [alarm] time HH
@@ -61,6 +61,7 @@ struct AppConfig {
   int  timer_beep_sequences   = 3;           // [timer] beep_sequences
   bool anim_schedule_enabled  = true;        // [animation] schedule
   int  anim_duration_sec      = 10;          // [animation] duration
+  bool menu_sounds            = true;        // [menu] sounds
 } cfg;
 
 // ─── Pin definitions ─────────────────────────────────────────────────────────
@@ -143,6 +144,9 @@ lv_timer_t *shutdown_timer       = nullptr;  // 1-second tick
 int         shutdown_count       = 5;
 
 LV_FONT_DECLARE(montserrat_96);
+LV_FONT_DECLARE(dejavu_mono_8);
+LV_FONT_DECLARE(dejavu_mono_14);
+LV_FONT_DECLARE(dejavu_mono_16);
 
 // ─── Backlight PWM ───────────────────────────────────────────────────────────
 #define BL_PWM_FREQ       5000
@@ -168,6 +172,7 @@ lv_timer_t *sched_close_timer = nullptr;  // auto-close timer for scheduled GIF
 
 // ─── Carousel / modal settings ────────────────────────────────────────────────
 lv_obj_t   *modal_cont   = nullptr;  // carousel / editor full-screen modal
+lv_obj_t   *apps_cont    = nullptr;  // apps menu container
 static int  carousel_idx = 0;        // 0=Clock 1=Timer 2=Alarm 3=WiFi
 
 // ─── Countdown timer ─────────────────────────────────────────────────────────
@@ -332,7 +337,7 @@ static void buzzer_start(int sequences)
   buzzer_seq_total = sequences;
   buzzer_seq_done  = 0;
   buzzer_step      = 0;
-  ledcAttach(BUZZER_PIN, 2000, 8);
+  ledcChangeFrequency(BUZZER_PIN, 2000, 8);  // ensure 2kHz alarm freq
   buzzer_active = true;
   buzzer_timer  = lv_timer_create(buzzer_tick_cb, 200, nullptr);
   Serial.printf("[BUZZ] Started (%d sequences)\n", sequences);
@@ -459,18 +464,16 @@ static void load_config()
       }
     }
 
-    // ── [clock] — NTP server + timezone offset ────────────────────────────
+    // ── [clock] — NTP server + POSIX timezone string ─────────────────────
     else if (strcmp(section, "clock") == 0) {
       if (strcmp(key, "ntp_server") == 0) {
         strncpy(cfg.ntp_server, val, sizeof(cfg.ntp_server) - 1);
         Serial.printf("[CFG]   clock.ntp_server  = %s\n", cfg.ntp_server);
       }
-      else if (strcmp(key, "gmt_offset") == 0) {
-        cfg.gmt_offset_hours = atoi(val);
-        if (cfg.gmt_offset_hours < -12) cfg.gmt_offset_hours = -12;
-        if (cfg.gmt_offset_hours >  14) cfg.gmt_offset_hours =  14;
-        Serial.printf("[CFG]   clock.gmt_offset  = %+d (UTC%+d)\n",
-                      cfg.gmt_offset_hours, cfg.gmt_offset_hours);
+      else if (strcmp(key, "tz") == 0) {
+        strncpy(cfg.tz_string, val, sizeof(cfg.tz_string) - 1);
+        cfg.tz_string[sizeof(cfg.tz_string) - 1] = '\0';
+        Serial.printf("[CFG]   clock.tz           = %s\n", cfg.tz_string);
       }
     }
 
@@ -528,6 +531,14 @@ static void load_config()
         Serial.printf("[CFG]   anim.duration  = %ds\n", cfg.anim_duration_sec);
       }
     }
+
+    // ── [menu] ─────────────────────────────────────────────────────────────
+    else if (strcmp(section, "menu") == 0) {
+      if (strcmp(key, "sounds") == 0) {
+        cfg.menu_sounds = (strcmp(val,"true")==0||strcmp(val,"1")==0);
+        Serial.printf("[CFG]   menu.sounds    = %s\n", cfg.menu_sounds?"true":"false");
+      }
+    }
   }
 
   f.close();
@@ -580,11 +591,12 @@ static void restore_time_from_log() {
       tm_new.tm_sec  = sec;
       tm_new.tm_isdst = -1;
 
-      time_t t = mktime(&tm_new) - (cfg.gmt_offset_hours * 3600L);
+      // TZ env var is set before this runs; mktime converts local→UTC correctly
+      time_t t = mktime(&tm_new);
       if (t > 0) {
         struct timeval now_tv = { .tv_sec = t, .tv_usec = 0 };
         settimeofday(&now_tv, NULL);
-        Serial.printf("[RTC] Restored time from log: %04d-%02d-%02d %02d:%02d:%02d\n", 
+        Serial.printf("[RTC] Restored UTC time from log: %04d-%02d-%02d %02d:%02d:%02d\n", 
                       yr, mn, dy, hr, min, sec);
         return;
       }
@@ -607,14 +619,14 @@ static void log_last_seen() {
   // 2. Get current time
   time_t now = time(nullptr);
   struct tm t;
-  localtime_r(&now, &t);
+  gmtime_r(&now, &t);
 
   // Only log if time is synced (sane year > 2026)
   if (now < 1735689600UL) return; 
 
   // 3. Format timestamp: YYYY-MM-DD HH:MM:SS
   char log_buf[32];
-  snprintf(log_buf, sizeof(log_buf), "%04d-%02d-%02d %02d:%02d:%02d (%.2fV)\n",
+  snprintf(log_buf, sizeof(log_buf), "%04d-%02d-%02d %02d:%02d:%02dZ (%.2fV)\n",
            t.tm_year + 1900, t.tm_mon + 1, t.tm_mday,
            t.tm_hour, t.tm_min, t.tm_sec, voltage);
 
@@ -656,7 +668,8 @@ static void save_config()
       while (*trimmed == ' ' || *trimmed == '\t') trimmed++;
       if (strncmp(trimmed,"[wifi]", 6)==0||
           strncmp(trimmed,"[alarm]",7)==0||
-          strncmp(trimmed,"[timer]",7)==0) { inAlarm=true; continue; }
+          strncmp(trimmed,"[timer]",7)==0||
+          strncmp(trimmed,"[menu]", 6)==0) { inAlarm=true; continue; }
       if (*trimmed=='[') inAlarm=false;
       if (!inAlarm) lineCount++;
     }
@@ -686,9 +699,13 @@ static void save_config()
   fw.println("[timer]");
   fw.printf("duration = %02d:%02d\n",  cfg.timer_hours, cfg.timer_minutes);
   fw.printf("beep_sequences = %d\n",   cfg.timer_beep_sequences);
+
+  fw.println();
+  fw.println("[menu]");
+  fw.printf("sounds = %s\n", cfg.menu_sounds?"true":"false");
   fw.close();
 
-  Serial.println("[CFG] Saved wifi/alarm/timer.");
+  Serial.println("[CFG] Saved wifi/alarm/timer/menu.");
   
   // Save the current timestamp to the log file as well
   log_last_seen();
@@ -697,11 +714,18 @@ static void save_config()
 // ── WiFi runtime toggle ───────────────────────────────────────────────────────
 static void apply_wifi_state()
 {
+  // Apply POSIX TZ immediately — makes localtime_r correct even offline
+  setenv("TZ", cfg.tz_string, 1);
+  tzset();
+  Serial.printf("[TZ] Applied: %s\n", cfg.tz_string);
+
   if (cfg.wifi_enabled) {
     Serial.println("[WiFi] Enabling...");
     WiFi.mode(WIFI_STA);
     wifiMulti.addAP(cfg.wifi_ssid, cfg.wifi_password);
-    configTime(cfg.gmt_offset_hours * 3600L, 0, cfg.ntp_server);
+    // configTzTime sets TZ env var AND starts SNTP in one call.
+    // NTP delivers UTC; localtime_r converts to local using tz_string.
+    configTzTime(cfg.tz_string, cfg.ntp_server);
   } else {
     Serial.println("[WiFi] Disabled by user.");
     WiFi.disconnect(true);
@@ -1066,7 +1090,7 @@ static void wifi_poll_cb(lv_timer_t *t)
     // FreeRTOS scheduler for 20-80ms, causing visible UI stutter.
     // Only attempt reconnect when no modal/editor is open, and slow
     // down to every 30s so the stall is infrequent.
-    if (!modal_cont && !overlay_cont && cfg.wifi_enabled) {
+    if (!modal_cont && !overlay_cont && !apps_cont && cfg.wifi_enabled) {
       wifiMulti.run(0);
     }
     lv_timer_set_period(t, 30000);  // 30s between reconnect attempts
@@ -1227,7 +1251,7 @@ static void run_daily_automation(int hour, int minute)
       alarm_ntp_pending = false;
       Serial.println("[ALARM] NTP timeout — showing warning alarm");
       close_scheduled_gif();
-      set_brightness(80);
+      set_brightness(50);
       // Warning overlay: no GIF, just text
       if (!overlay_cont) {
         overlay_cont = make_overlay(lv_color_make(20, 20, 20));
@@ -2175,13 +2199,14 @@ static void carousel_build()
   lv_label_set_text(hint,"tap in or hold to exit");
   lv_obj_set_style_text_color(hint,lv_color_make(80,80,100),0);
   lv_obj_set_style_text_opa(hint,LV_OPA_60,0);
-  lv_obj_set_style_text_font(hint,&lv_font_montserrat_14,0);
+  lv_obj_set_style_text_font(hint,&dejavu_mono_14,0);
   lv_obj_align(hint,LV_ALIGN_BOTTOM_MID,0,-18);  // above the dots
 
   // Position dots — bottom row
   for (int i=0;i<4;i++) {
     lv_obj_t*dot=lv_label_create(modal_cont);
-    lv_label_set_text(dot,i==carousel_idx?"●":"○");
+    lv_obj_set_style_text_font(dot, &dejavu_mono_14, 0);
+    lv_label_set_text(dot, i==carousel_idx ? "\xe2\x97\x8f" : "\xe2\x97\x8b"); // "●" : "○"
     lv_obj_set_style_text_color(dot,
       i==carousel_idx?lv_color_white():lv_color_make(80,80,100),0);
     lv_obj_set_pos(dot,137+i*14,156);
@@ -2273,6 +2298,783 @@ static void clock_face_show(lv_timer_t *t)
   clock_timer = lv_timer_create(clock_tick_cb, 1000, nullptr);
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  APPS MENU — long-press the smile GIF (upper-left tap) → math gate → 3 games
+//
+//  Flow:  UL tap → smile GIF opens → long-press GIF → math challenge
+//         Correct answer → apps carousel (RPS / Dice / Coin)
+//         Tap item → game  Tap to play again  Long-press to go back
+//         Long-press in carousel → close all, return to clock
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Note frequencies and menu tone helpers ────────────────────────────────────
+// menu_tone() is a short blocking call — safe in LVGL timer callbacks because
+// the longest note (500ms) is still shorter than any LVGL watchdog threshold.
+#define NOTE_C4  262
+#define NOTE_G4  392
+#define NOTE_A4  440
+#define NOTE_B4  494
+#define NOTE_C5  523
+#define NOTE_D5  587
+#define NOTE_E5  659
+#define NOTE_A5  880
+#define NOTE_B5  988
+#define NOTE_HI  1046  // high C6
+
+static void menu_tone(int freq, int ms)
+{
+  if (!cfg.menu_sounds) return;
+  ledcChangeFrequency(BUZZER_PIN, freq, 8);   // change freq on already-attached pin
+  ledcWrite(BUZZER_PIN, 96);
+  delay(ms);
+  ledcWrite(BUZZER_PIN, 0);
+  ledcChangeFrequency(BUZZER_PIN, 2000, 8);   // restore alarm freq
+}
+
+static void menu_play_success()
+{
+  if (!cfg.menu_sounds) return;
+  // successMelody: A5 B5 C5 B5 C5 D5 C5 D5 E5 D5 E5 E5 @100ms each
+  static const int mel[] = {
+    880,988,523,494, 523,587,523,587, 659,587,659,659
+  };
+  for (int i = 0; i < 12; i++) menu_tone(mel[i], 100);
+}
+
+static void menu_play_failure()
+{
+  if (!cfg.menu_sounds) return;
+  menu_tone(NOTE_G4, 250);
+  menu_tone(NOTE_C4, 500);
+}
+
+static void menu_tone_beep() { menu_tone(NOTE_A4, 60); }
+static void menu_tone_hi()   { menu_tone(NOTE_HI, 80); }
+
+// ── Apps state ────────────────────────────────────────────────────────────────
+// apps_cont declared globally above wifi_poll_cb
+static int         apps_idx      = 0;   // 0=RPS  1=Dice  2=Coin
+static int         app_subphase  = 0;   // 0=carousel  1=game
+static lv_timer_t *app_anim_timer  = nullptr;
+static int         app_anim_step   = 0;
+static int         app_anim_result = 0;  // cpu choice for RPS, roll for Dice
+static lv_obj_t   *app_anim_lbl    = nullptr;  // main art label
+static lv_obj_t   *app_anim_num    = nullptr;  // countdown number (RPS)
+static lv_obj_t   *math_cont     = nullptr;
+static int         math_answer   = 0;
+static lv_timer_t *math_fail_tmr = nullptr;
+
+// Forward declarations
+static void show_apps(void);
+static void apps_carousel_build(void);
+static void app_screen_start(void);
+static void app_screen_result(int data);
+static void app_anim_stop(void);
+
+// ── Math problem generator ────────────────────────────────────────────────────
+static void math_generate(char *buf, int blen, int opts[4])
+{
+  int a, b, op = random(4);
+  switch (op) {
+    case 0: math_answer = random(5, 94); a = random(1, math_answer); b = math_answer - a;
+            snprintf(buf, blen, "%d + %d = ?", a, b); break;
+    case 1: a = random(11, 99); b = random(1, a - 1); math_answer = a - b;
+            snprintf(buf, blen, "%d - %d = ?", a, b); break;
+    case 2: a = random(2, 9); b = random(2, max(2, (int)(99 / a)));
+            math_answer = a * b; snprintf(buf, blen, "%d x %d = ?", a, b); break;
+    default: math_answer = random(2, 15); b = random(2, 8); a = math_answer * b;
+             snprintf(buf, blen, "%d / %d = ?", a, b); break;
+  }
+  opts[0] = math_answer;
+  int wi = 1;
+  while (wi < 4) {
+    int delta = (random(2) ? 1 : -1) * random(1, 19);
+    int cand  = math_answer + delta;
+    if (cand < 1)  cand = math_answer + wi * 13;
+    if (cand > 99) cand = math_answer - wi * 11;
+    if (cand < 1)  cand = wi + 2;
+    bool dup = false;
+    for (int k = 0; k < wi; k++) if (opts[k] == cand) { dup = true; break; }
+    if (!dup) opts[wi++] = cand;
+  }
+  // Fisher-Yates shuffle
+  for (int i = 3; i > 0; i--) {
+    int j = random(i + 1), t = opts[i]; opts[i] = opts[j]; opts[j] = t;
+  }
+}
+
+static void math_close_overlay()
+{
+  if (tilt_timer) { lv_timer_del(tilt_timer); tilt_timer = nullptr; }
+  emotion_tilt_active = false; emotion_current_gif = nullptr;
+  buzzer_stop();
+  if (overlay_cont) { lv_obj_del(overlay_cont); overlay_cont = nullptr; }
+}
+
+static void math_fail_cb(lv_timer_t *t)
+{
+  lv_timer_del(t); math_fail_tmr = nullptr;
+  if (math_cont) { lv_obj_del(math_cont); math_cont = nullptr; }
+  math_close_overlay();
+}
+
+static void math_btn_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  int chosen = (int)(intptr_t)lv_event_get_user_data(e);
+  if (math_cont) { lv_obj_del(math_cont); math_cont = nullptr; }
+
+  if (chosen == math_answer) {
+    menu_play_success();
+    math_close_overlay();
+    show_apps();
+  } else {
+    menu_play_failure();
+    // Wrong: show big white X for 3 s, then return to clock
+    math_cont = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(math_cont, 320, 172);
+    lv_obj_align(math_cont, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(math_cont, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(math_cont, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(math_cont, 0, 0);
+    lv_obj_set_style_pad_all(math_cont, 0, 0);
+    lv_obj_clear_flag(math_cont, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *xl = lv_label_create(math_cont);
+    lv_label_set_text(xl, "X");
+    lv_obj_set_style_text_font(xl, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(xl, lv_color_white(), 0);
+    lv_obj_align(xl, LV_ALIGN_CENTER, 0, 0);
+    math_fail_tmr = lv_timer_create(math_fail_cb, 3000, nullptr);
+    lv_timer_set_repeat_count(math_fail_tmr, 1);
+  }
+}
+
+static void show_math_challenge()
+{
+  if (math_cont) return;
+  char prob[32]; int opts[4];
+  math_generate(prob, sizeof(prob), opts);
+
+  math_cont = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(math_cont, 310, 162);
+  lv_obj_align(math_cont, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(math_cont, lv_color_make(6, 6, 28), 0);
+  lv_obj_set_style_bg_opa(math_cont, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(math_cont, lv_color_make(60, 80, 220), 0);
+  lv_obj_set_style_border_width(math_cont, 2, 0);
+  lv_obj_set_style_radius(math_cont, 6, 0);
+  lv_obj_set_style_pad_all(math_cont, 0, 0);
+  lv_obj_clear_flag(math_cont, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *title = lv_label_create(math_cont);
+  lv_label_set_text(title, "Solve to enter:");
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(title, lv_color_make(140, 140, 210), 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
+
+  lv_obj_t *prob_lbl = lv_label_create(math_cont);
+  lv_label_set_text(prob_lbl, prob);
+  lv_obj_set_style_text_font(prob_lbl, &lv_font_montserrat_48, 0);
+  lv_obj_set_style_text_color(prob_lbl, lv_color_white(), 0);
+  lv_obj_align(prob_lbl, LV_ALIGN_CENTER, 0, -18);
+
+  for (int i = 0; i < 4; i++) {
+    lv_obj_t *btn = lv_btn_create(math_cont);
+    lv_obj_set_size(btn, 60, 32);
+    lv_obj_set_pos(btn, 20 + i * 68, 120);
+    lv_obj_set_style_bg_color(btn, lv_color_make(30, 50, 160), 0);
+    lv_obj_set_style_radius(btn, 4, 0);
+    lv_obj_add_event_cb(btn, math_btn_cb, LV_EVENT_CLICKED, (void*)(intptr_t)opts[i]);
+    lv_obj_t *lbl = lv_label_create(btn);
+    char ns[8]; snprintf(ns, sizeof(ns), "%d", opts[i]);
+    lv_label_set_text(lbl, ns);
+    lv_obj_set_style_text_font(lbl, &dejavu_mono_14, 0);
+    lv_obj_center(lbl);
+  }
+}
+
+static void apps_gif_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  lv_indev_wait_release(lv_indev_get_act());
+  show_math_challenge();
+}
+
+// ── Apps lifecycle ────────────────────────────────────────────────────────────
+static void app_anim_stop()
+{
+  if (app_anim_timer) { lv_timer_del(app_anim_timer); app_anim_timer = nullptr; }
+  app_anim_lbl = nullptr;
+  app_anim_num = nullptr;
+  app_anim_step = 0;
+}
+
+static void apps_close()
+{
+  app_anim_stop();
+  if (apps_cont) { lv_obj_del(apps_cont); apps_cont = nullptr; }
+  app_subphase = 0;
+}
+
+static void apps_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  lv_indev_wait_release(lv_indev_get_act());
+  if (app_subphase > 0) {
+    app_subphase = 0;
+    apps_carousel_build();
+  } else {
+    apps_close();
+  }
+}
+
+static void apps_left_cb(lv_event_t *e)
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+3)%4;apps_carousel_build();} }
+static void apps_right_cb(lv_event_t *e)
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+1)%4;apps_carousel_build();} }
+
+// Transparent full-screen tap zone helper for game screens
+static lv_obj_t *app_tapzone(lv_obj_t *p, lv_event_cb_t cb)
+{
+  lv_obj_t *z = lv_obj_create(p);
+  lv_obj_set_size(z, 320, 172); lv_obj_set_pos(z, 0, 0);
+  lv_obj_set_style_bg_opa(z, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(z, 0, 0); lv_obj_set_style_pad_all(z, 0, 0);
+  lv_obj_set_style_radius(z, 0, 0); lv_obj_clear_flag(z, LV_OBJ_FLAG_SCROLLABLE);
+  if (cb) lv_obj_add_event_cb(z, cb, LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(z, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+  return z;
+}
+
+// ── ASCII art ─────────────────────────────────────────────────────────────────
+static const char *dice_art_roll(int n)
+{
+  switch (n) {
+    case 1: return
+      "    ______    \n"
+      "  /\\     \\  \n"
+      " /o \\  o  \\ \n"
+      "/   o\\_____\\\n"
+      "\\o   /o    / \n"
+      " \\ o/  o  /  \n"
+      "  \\/____o/   ";
+    case 2: return
+      "    ______    \n"
+      "  /\\     \\  \n"
+      " /  \\  o  \\ \n"
+      "/ o  \\_____\\\n"
+      "\\  o /o    / \n"
+      " \\  /  o  /  \n"
+      "  \\/____o/   ";
+    default: return
+      // "  .-------.\n"
+      // " /   o   /|\n"
+      // "/_______/o|\n"
+      // "| o     | |\n"
+      // "|   o   |o/\n"
+      // "|     o |/ \n"
+      // "'-------'  ";
+      "    ______    \n"
+      "  /\\ o   \\  \n"
+      " /o \\  o  \\ \n"
+      "/   o\\___o_\\\n"
+      "\\o   /     / \n"
+      " \\ o/  o  /  \n"
+      "  \\/_____/   ";
+  }
+}
+
+static const char *dice_art(int n)
+{
+  switch (n) {
+    case 1: return
+      ".-------.\n"
+      "|       |\n"
+      "|   o   |\n"
+      "|       |\n"
+      "\'-------\'";
+    case 2: return
+      ".-------.\n"
+      "| o     |\n"
+      "|       |\n"
+      "|     o |\n"
+      "\'-------\'";
+    case 3: return
+      ".-------.\n"
+      "| o     |\n"
+      "|   o   |\n"
+      "|     o |\n"
+      "\'-------\'";
+    case 4: return
+      ".-------.\n"
+      "| o   o |\n"
+      "|       |\n"
+      "| o   o |\n"
+      "\'-------\'";
+    case 5: return
+      ".-------.\n"
+      "| o   o |\n"
+      "|   o   |\n"
+      "| o   o |\n"
+      "\'-------\'";
+    default: return
+      ".-------.\n"
+      "| o   o |\n"
+      "| o   o |\n"
+      "| o   o |\n"
+      "\'-------\'";
+  }
+}
+
+// ── Shake animation art ──────────────────────────────────────────────────────
+static const char *rps_art_shake(bool up)
+{
+  if (up) return
+    "    _______      \n"
+    "---'   ____)     \n"
+    "      (_____)    \n"
+    "      (_____)    \n"
+    "      (____)     \n"
+    "---.__(___)      \n"
+    "                   ";
+  return
+    "                 \n"
+    "    _______      \n"
+    "---'   ____)     \n"
+    "      (_____)    \n"
+    "      (_____)    \n"
+    "      (____)     \n"
+    " ---.__(___)       ";
+}
+
+static const char *rps_art(int c)
+{
+  if (c==1) return
+    "    _______       \n"
+    "---'   ____)      \n"
+    "      (_____)     \n"
+    "      (_____)     \n"
+    "      (____)      \n"
+    " ---.__(___)        ";
+
+  if (c==2) return
+    "    ________      \n"
+    "---'    ____)____ \n"
+    "           ______)\n"
+    "          _______)\n"
+    "         _______) \n"
+    " ---.__________)    ";
+
+  return
+    "    _______       \n"
+    "---'   ____)____  \n"
+    "          ______) \n"
+    "       __________)\n"
+    "      (____)      \n"
+    " ---.__(___)        ";
+}
+
+static const char *rps_name(int c)
+{ return c==1?"Rock":c==2?"Paper":"Scissors"; }
+static const char *rps_result(int u, int cpu_c)
+{
+  if (u==cpu_c) return "TIE!";
+  if ((u==1&&cpu_c==3)||(u==2&&cpu_c==1)||(u==3&&cpu_c==2)) return "YOU WIN!";
+  return "CPU WINS!";
+}
+
+// Some ASCII art sourced from https://www.asciiart.eu/video-games/pokemon
+// All Pokémon characters are property of The Pokémon Company.
+// This project is not affiliated with or endorsed by The Pokémon Company.
+static const char *coin_art(bool heads)
+{
+  return heads
+    ? "       \\:.             .:/\n"
+      "        \\``._________.''/\n"
+      "         \\             /\n"
+      " .--.--, / .':.   .':. \\\n"
+      "/__:  /  | '::' . '::' |\n"
+      "   / /   |`.   ._.   .'|\n"
+      "  / /    |.'         '.|\n"
+      " /___-_-,|.\\  \\   /  /.|\n"
+      "      // |''\\.;   ;,/ '|\n"
+      "      `==|:=         =:|\n"
+      "         `.          .'\n"
+      "           :-._____.-:\n"
+      "          `''       `''\n"
+    : "                                 ,'\\\n"
+      "    _.---.        ____         ,'  _\\   ___    ___     ____\n"
+      " ,-'      `.     |    |  /`.   \\,-'    |   \\  /   |   |    \\  |`.\n"
+      "\\     __    \\    '-.  | /   `.  ___    |    \\/    |   '-.   \\ | |\n"
+      " \\.   \\ \\   |  __  |  |/    ,','_  `.  |          | __  |    \\| |\n"
+      "   \\   \\/   /,' _`.|      ,' / / / /   |          ,' _`.|     | |\n"
+      "    \\    ,-'/  /   \\    ,'   | \\/ / ,`.|         /  /   \\  |    |\n"
+      "     \\   \\ |   \\_/  |   `-.  \\    `'  /|  |    ||   \\_/  | |\\   |\n"
+      "      \\   \\ \\      /       `-.`.___,-' |  |\\  /| \\      /  | |  |\n"
+      "       \\   \\ `.__,'|  |`-._    `|      |__| \\/ |  `.__,'|  | |  |\n"
+      "        \\.-'       |__|    `-._ |              '-.|     '-.| |  |\n"
+      "                                `'                            '-.|\n";
+}
+
+// Common bottom hint
+static void app_hint(lv_obj_t *p, const char *text)
+{
+  lv_obj_t *h = lv_label_create(p);
+  lv_label_set_text(h, text);
+  lv_obj_set_style_text_font(h, &dejavu_mono_14, 0);
+  lv_obj_set_style_text_color(h, lv_color_make(70, 70, 95), 0);
+  lv_obj_set_style_text_opa(h, LV_OPA_70, 0);
+  lv_obj_align(h, LV_ALIGN_BOTTOM_MID, 0, -4);
+}
+
+// ── Game result screen ────────────────────────────────────────────────────────
+static void app_repeat_tap_cb(lv_event_t *e)
+{ if(lv_event_get_code(e)==LV_EVENT_CLICKED) app_screen_start(); }
+
+static void app_screen_result(int data)
+{
+  lv_obj_clean(apps_cont);
+  app_subphase = 1;
+  lv_obj_add_event_cb(apps_cont, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+
+  lv_obj_t *art = lv_label_create(apps_cont);
+  lv_obj_set_style_text_font(art, &dejavu_mono_14, 0);
+  lv_obj_set_style_text_color(art, lv_color_white(), 0);
+  lv_obj_set_style_text_align(art, LV_TEXT_ALIGN_CENTER, 0);
+
+  lv_obj_t *res = lv_label_create(apps_cont);
+  lv_obj_set_style_text_font(res, &dejavu_mono_16, 0);
+  lv_obj_set_style_text_align(res, LV_TEXT_ALIGN_CENTER, 0);
+
+  if (apps_idx == 0) {
+    // RPS: data = user choice, pick cpu now
+    int cpu = random(1, 4);
+    const char *verdict = rps_result(data, cpu);
+    char buf[120];
+    snprintf(buf, sizeof(buf), "%s\nvs\n%s", rps_art(data), rps_art(cpu));
+    lv_label_set_text(art, buf);
+    lv_label_set_long_mode(art, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(art, 280);
+    lv_obj_align(art, LV_ALIGN_CENTER, 0, -28);
+    lv_label_set_text(res, verdict);
+    lv_obj_set_style_text_color(res,
+      strcmp(verdict,"TIE!")==0     ? lv_color_make(220,220,60) :
+      strcmp(verdict,"YOU WIN!")==0 ? lv_color_make(60,220,60)  :
+                                      lv_color_make(220,60,60), 0);
+    lv_obj_align(res, LV_ALIGN_BOTTOM_MID, 0, -36);
+  } else if (apps_idx == 1) {
+    // Dice: data = 1-6
+    lv_label_set_text(art, dice_art(data));
+    lv_obj_align(art, LV_ALIGN_CENTER, 0, -16);
+    char buf[782]; snprintf(buf, sizeof(buf), "Rolled: %d", data);
+    lv_label_set_text(res, buf);
+    lv_obj_set_style_text_color(res, lv_color_make(100, 200, 255), 0);
+    lv_obj_align(res, LV_ALIGN_BOTTOM_MID, 0, -36);
+  } else {
+    // Coin: data = 0=heads 1=tails
+    menu_tone_hi();  // hi-tone on flip result
+    lv_obj_set_style_text_font(art, &dejavu_mono_8, 0);
+    lv_label_set_long_mode(art, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(art, LV_TEXT_ALIGN_LEFT, 0);
+    lv_label_set_text(art, coin_art(data == 0));
+    lv_obj_align(art, LV_ALIGN_CENTER, 0, -16);
+    lv_label_set_text(res, data==0 ? "Pikachu!" : "Go!");
+    lv_obj_set_style_text_color(res,
+      data==0 ? lv_color_make(255,220,60) : lv_color_make(180,180,255), 0);
+    lv_obj_align(res, LV_ALIGN_BOTTOM_MID, 0, -26);
+  }
+
+  app_hint(apps_cont, "tap again  .  hold to exit");
+  app_tapzone(apps_cont, app_repeat_tap_cb);  // on top, transparent
+}
+
+// ── RPS animation timer (3-2-1 shake then reveal) ────────────────────────────
+static void rps_anim_tick_cb(lv_timer_t * /*t*/)
+{
+  if (!apps_cont || !app_anim_lbl) { app_anim_stop(); return; }
+
+  if (app_anim_step < 7) {
+    // Steps 0-5: up/down × 3, countdown 3-2-1
+    bool up = (app_anim_step % 2 == 0);
+    lv_label_set_text(app_anim_lbl, rps_art_shake(up));
+    if (!up) menu_tone_beep();  // beep on each DOWN move
+    if (app_anim_num) {
+      int count = 3 - (app_anim_step / 2);
+      char buf[4]; snprintf(buf, sizeof(buf), "%d", count);
+      lv_label_set_text(app_anim_num, buf);
+    }
+    app_anim_step++;
+  } else {
+    // Animation done — reveal cpu art + GO!
+    menu_tone_hi();  // high tone on GO!
+    app_anim_stop();
+    lv_obj_clean(apps_cont);
+    lv_obj_add_event_cb(apps_cont, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+
+    lv_obj_t *art = lv_label_create(apps_cont);
+    lv_obj_set_style_text_font(art, &dejavu_mono_14, 0);
+    lv_obj_set_style_text_color(art, lv_color_white(), 0);
+    lv_obj_set_style_text_align(art, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(art, rps_art(app_anim_result));
+    lv_label_set_long_mode(art, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(art, 290);
+    lv_obj_align(art, LV_ALIGN_CENTER, 0, -20);
+
+    lv_obj_t *go = lv_label_create(apps_cont);
+    lv_label_set_text(go, "GO!");
+    lv_obj_set_style_text_font(go, &dejavu_mono_16, 0);
+    lv_obj_set_style_text_color(go, lv_color_make(60, 220, 60), 0);
+    lv_obj_align(go, LV_ALIGN_BOTTOM_MID, 0, -36);
+
+    app_hint(apps_cont, "tap again  .  hold to exit");
+    app_tapzone(apps_cont, app_repeat_tap_cb);
+  }
+}
+
+// ── Dice animation timer (rolling → result) ───────────────────────────────────
+static void dice_anim_tick_cb(lv_timer_t * /*t*/)
+{
+  if (!apps_cont || !app_anim_lbl) { app_anim_stop(); return; }
+
+  if (app_anim_step < 3) {
+    // Steps 0-2: show three shake frames (no text)
+    lv_label_set_text(app_anim_lbl, dice_art_roll(app_anim_step + 1));
+    menu_tone_beep();
+    app_anim_step++;
+  } else {
+    // Animation done — show final dice face
+    menu_tone_hi();  // hi-tone on result
+    app_anim_stop();
+    app_screen_result(app_anim_result);  // app_anim_result = 1-6
+  }
+}
+
+// ── Start RPS animation ───────────────────────────────────────────────────────
+static void app_screen_rps_start()
+{
+  lv_obj_clean(apps_cont);
+  app_subphase = 1;
+  app_anim_step   = 0;
+  app_anim_result = random(1, 4);  // cpu choice decided now
+
+  lv_obj_add_event_cb(apps_cont, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+
+  app_anim_lbl = lv_label_create(apps_cont);
+  lv_obj_set_style_text_font(app_anim_lbl, &dejavu_mono_14, 0);
+  lv_obj_set_style_text_color(app_anim_lbl, lv_color_white(), 0);
+  lv_obj_set_style_text_align(app_anim_lbl, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_long_mode(app_anim_lbl, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(app_anim_lbl, 290);
+  lv_label_set_text(app_anim_lbl, rps_art_shake(true));
+  lv_obj_align(app_anim_lbl, LV_ALIGN_CENTER, 0, -24);
+
+  app_anim_num = lv_label_create(apps_cont);
+  lv_obj_set_style_text_font(app_anim_num, &dejavu_mono_16, 0);
+  lv_obj_set_style_text_color(app_anim_num, lv_color_make(220, 220, 60), 0);
+  lv_obj_set_style_text_align(app_anim_num, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_text(app_anim_num, "3");
+  lv_obj_align(app_anim_num, LV_ALIGN_BOTTOM_MID, 0, -20);
+
+  app_anim_timer = lv_timer_create(rps_anim_tick_cb, 250, nullptr);
+}
+
+// ── Start Dice animation ──────────────────────────────────────────────────────
+static void app_screen_dice_start()
+{
+  lv_obj_clean(apps_cont);
+  app_subphase = 1;
+  app_anim_step   = 0;
+  app_anim_result = random(1, 7);  // 1-6, decided now
+
+  lv_obj_add_event_cb(apps_cont, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+
+  app_anim_lbl = lv_label_create(apps_cont);
+  lv_obj_set_style_text_font(app_anim_lbl, &dejavu_mono_14, 0);
+  lv_obj_set_style_text_color(app_anim_lbl, lv_color_white(), 0);
+  lv_obj_set_style_text_align(app_anim_lbl, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_text(app_anim_lbl, dice_art_roll(1));
+  lv_obj_align(app_anim_lbl, LV_ALIGN_CENTER, 0, -10);
+  app_anim_num = nullptr;
+
+  app_anim_timer = lv_timer_create(dice_anim_tick_cb, 500, nullptr);
+}
+
+// ── App start tap: coin only (rps+dice use their own starters) ────────────────
+static void app_start_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (apps_idx == 2) { app_screen_result(random(2)); return; }  // coin 0-1
+}
+
+// ── Game start screen ─────────────────────────────────────────────────────────
+static void app_screen_start()
+{
+  app_anim_stop();  // cancel any running animation before starting new one
+
+  if (apps_idx == 0) {
+    app_screen_rps_start();
+    return;
+  }
+  if (apps_idx == 1) {
+    app_screen_dice_start();
+    return;
+  }
+
+  // ── Coin: tap anywhere to flip ────────────────────────────────────────────
+  lv_obj_clean(apps_cont);
+  app_subphase = 1;
+  lv_obj_add_event_cb(apps_cont, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+
+  lv_obj_t *t = lv_label_create(apps_cont);
+  lv_label_set_text(t, "Flip a Coin");
+  lv_obj_set_style_text_font(t, &dejavu_mono_16, 0);
+  lv_obj_set_style_text_color(t, lv_color_white(), 0);
+  lv_obj_align(t, LV_ALIGN_CENTER, 0, -28);
+
+  lv_obj_t *action = lv_label_create(apps_cont);
+  lv_label_set_text(action, "[ tap to flip ]");
+  lv_obj_set_style_text_font(action, &dejavu_mono_16, 0);
+  lv_obj_set_style_text_color(action, lv_color_make(100, 200, 100), 0);
+  lv_obj_align(action, LV_ALIGN_CENTER, 0, 8);
+
+  app_hint(apps_cont, "tap to flip  .  hold to exit");
+  app_tapzone(apps_cont, app_start_tap_cb);
+}
+
+// ── Apps carousel tap (enter game) ───────────────────────────────────────────
+static void apps_tap_enter_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (apps_idx == 3) {
+    cfg.menu_sounds = !cfg.menu_sounds;
+    save_config();
+    if (cfg.menu_sounds) menu_tone_hi();  // confirm it's on
+    apps_carousel_build();
+  } else {
+    app_screen_start();
+  }
+}
+
+// ── Apps carousel builder ─────────────────────────────────────────────────────
+static void apps_carousel_build()
+{
+  lv_obj_clean(apps_cont);
+  app_subphase = 0;
+  lv_obj_add_event_cb(apps_cont, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+
+  static const struct { const char *name; const char *desc; } items[4] = {
+    {"Rock Paper Scissors", "An interactive ASCII Game"},
+    {"Rolling Dice",        "An interactive ASCII Dice"},
+    {"Flip a Coin",         "An interactive ASCII Coin"},
+    {nullptr,               nullptr},  // item 3 = Sounds toggle
+  };
+
+  // Left arrow + zone
+  lv_obj_t *larr = lv_label_create(apps_cont);
+  lv_label_set_text(larr, LV_SYMBOL_LEFT);
+  lv_obj_set_style_text_font(larr, &lv_font_montserrat_48, 0);
+  lv_obj_set_style_text_color(larr, lv_color_make(80, 100, 180), 0);
+  lv_obj_align(larr, LV_ALIGN_LEFT_MID, 6, 0);
+  { lv_obj_t *z = lv_obj_create(apps_cont);
+    lv_obj_set_size(z,60,172); lv_obj_set_pos(z,0,0);
+    lv_obj_set_style_bg_opa(z,LV_OPA_TRANSP,0); lv_obj_set_style_border_width(z,0,0);
+    lv_obj_set_style_pad_all(z,0,0); lv_obj_set_style_radius(z,0,0);
+    lv_obj_clear_flag(z,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(z,apps_left_cb,LV_EVENT_PRESSED,nullptr);
+    lv_obj_add_event_cb(z,apps_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr); }
+
+  // Right arrow + zone
+  lv_obj_t *rarr = lv_label_create(apps_cont);
+  lv_label_set_text(rarr, LV_SYMBOL_RIGHT);
+  lv_obj_set_style_text_font(rarr, &lv_font_montserrat_48, 0);
+  lv_obj_set_style_text_color(rarr, lv_color_make(80, 100, 180), 0);
+  lv_obj_align(rarr, LV_ALIGN_RIGHT_MID, -6, 0);
+  { lv_obj_t *z = lv_obj_create(apps_cont);
+    lv_obj_set_size(z,60,172); lv_obj_set_pos(z,260,0);
+    lv_obj_set_style_bg_opa(z,LV_OPA_TRANSP,0); lv_obj_set_style_border_width(z,0,0);
+    lv_obj_set_style_pad_all(z,0,0); lv_obj_set_style_radius(z,0,0);
+    lv_obj_clear_flag(z,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(z,apps_right_cb,LV_EVENT_PRESSED,nullptr);
+    lv_obj_add_event_cb(z,apps_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr); }
+
+  if (apps_idx == 3) {
+    // ── Sounds toggle (inline, mirrors WiFi toggle in settings) ──────────
+    lv_obj_t *sicon = lv_label_create(apps_cont);
+    lv_label_set_text(sicon, cfg.menu_sounds ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE);
+    lv_obj_set_style_text_font(sicon, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(sicon,
+      cfg.menu_sounds ? lv_color_make(80,200,120) : lv_color_make(180,60,60), 0);
+    lv_obj_align(sicon, LV_ALIGN_CENTER, 0, -18);
+    lv_obj_t *sdesc = lv_label_create(apps_cont);
+    lv_label_set_text(sdesc, cfg.menu_sounds ? "Sounds: ON" : "Sounds: OFF");
+    lv_obj_set_style_text_font(sdesc, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(sdesc,
+      cfg.menu_sounds ? lv_color_make(80,200,120) : lv_color_make(180,60,60), 0);
+    lv_obj_align(sdesc, LV_ALIGN_CENTER, 0, 28);
+  } else {
+    // ── Game item ─────────────────────────────────────────────────────────
+    lv_obj_t *name_lbl = lv_label_create(apps_cont);
+    lv_label_set_text(name_lbl, items[apps_idx].name);
+    lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(name_lbl, lv_color_white(), 0);
+    lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(name_lbl, 180);
+    lv_obj_set_style_text_align(name_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(name_lbl, LV_ALIGN_CENTER, 0, -14);
+
+    // Description
+    lv_obj_t *desc_lbl = lv_label_create(apps_cont);
+    lv_label_set_text(desc_lbl, items[apps_idx].desc);
+    lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
+    lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
+  }
+
+  // Centre tap zone — CLICKED enters, LONG_PRESSED exits
+  { lv_obj_t *z = lv_obj_create(apps_cont);
+    lv_obj_set_size(z,200,172); lv_obj_set_pos(z,60,0);
+    lv_obj_set_style_bg_opa(z,LV_OPA_TRANSP,0); lv_obj_set_style_border_width(z,0,0);
+    lv_obj_set_style_pad_all(z,0,0); lv_obj_set_style_radius(z,0,0);
+    lv_obj_clear_flag(z,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(z,apps_tap_enter_cb,LV_EVENT_CLICKED,nullptr);
+    lv_obj_add_event_cb(z,apps_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr); }
+
+  // Hint above dots
+  lv_obj_t *hint = lv_label_create(apps_cont);
+  lv_label_set_text(hint, apps_idx == 3 ? "tap to toggle  .  hold to exit"
+                                         : "tap to play  .  hold to exit");
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(hint, lv_color_make(70, 70, 95), 0);
+  lv_obj_set_style_text_opa(hint, LV_OPA_60, 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -18);
+
+  // 4 position dots
+  for (int i = 0; i < 4; i++) {
+    lv_obj_t *dot = lv_label_create(apps_cont);
+    lv_obj_set_style_text_font(dot, &dejavu_mono_14, 0);
+    lv_label_set_text(dot, i==apps_idx ? "\xe2\x97\x8f" : "\xe2\x97\x8b"); // "●" : "○"
+    lv_obj_set_style_text_color(dot, i==apps_idx ? lv_color_white() : lv_color_make(80,80,100), 0);
+    lv_obj_set_pos(dot, 137 + i * 14, 156);
+  }
+}
+
+// ── Open apps container ───────────────────────────────────────────────────────
+static void show_apps()
+{
+  if (apps_cont) return;
+  apps_idx = 0; app_subphase = 0;
+  apps_cont = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(apps_cont, 320, 172);
+  lv_obj_align(apps_cont, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(apps_cont, lv_color_make(5, 8, 22), 0);
+  lv_obj_set_style_bg_opa(apps_cont, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(apps_cont, 0, 0);
+  lv_obj_set_style_pad_all(apps_cont, 0, 0);
+  lv_obj_set_style_radius(apps_cont, 0, 0);
+  lv_obj_clear_flag(apps_cont, LV_OBJ_FLAG_SCROLLABLE);
+  apps_carousel_build();
+}
+
 // Zone callbacks
 static void zone_ul_cb(lv_event_t *e)
 {
@@ -2285,6 +3087,13 @@ static void zone_ul_cb(lv_event_t *e)
     if (!tilt_timer)
       tilt_timer = lv_timer_create(tilt_poll_cb, 400, nullptr);
     Serial.println("[EMOTION] Tilt mode active");
+  }
+  // Long-press on the smile GIF opens the apps menu (math challenge gate)
+  if (overlay_cont) {
+    lv_obj_add_event_cb(overlay_cont, apps_gif_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+    lv_obj_t *gif_w = (lv_obj_t *)lv_obj_get_user_data(overlay_cont);
+    if (gif_w)
+      lv_obj_add_event_cb(gif_w, apps_gif_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
   }
 }
 

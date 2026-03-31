@@ -144,6 +144,7 @@ lv_timer_t *shutdown_timer       = nullptr;  // 1-second tick
 int         shutdown_count       = 5;
 
 LV_FONT_DECLARE(montserrat_96);
+LV_FONT_DECLARE(dejavu_mono_8);
 LV_FONT_DECLARE(dejavu_mono_14);
 LV_FONT_DECLARE(dejavu_mono_16);
 
@@ -2633,7 +2634,7 @@ static const char *rps_art_shake(bool up)
     "      (_____)    \n"
     "      (_____)    \n"
     "      (____)     \n"
-    " ---.__(___)     \n"
+    "---.__(___)      \n"
     "                   ";
   return
     "                 \n"
@@ -2684,16 +2685,31 @@ static const char *rps_result(int u, int cpu_c)
 static const char *coin_art(bool heads)
 {
   return heads
-    ?  "    _______   \n"
-       "   /       \\  \n"
-       "  |  HEADS  | \n"
-       "  |    $    | \n"
-       "   \\_______/  "
-    :  "    _______   \n"
-       "   /       \\  \n"
-       "  |  TAILS  | \n"
-       "  |  ~~~~~  | \n"
-       "   \\_______/  ";
+    ? "       \\:.             .:/\n"
+      "        \\``._________.''/\n"
+      "         \\             /\n"
+      " .--.--, / .':.   .':. \\\n"
+      "/__:  /  | '::' . '::' |\n"
+      "   / /   |`.   ._.   .'|\n"
+      "  / /    |.'         '.|\n"
+      " /___-_-,|.\\  \\   /  /.|\n"
+      "      // |''\\.;   ;,/ '|\n"
+      "      `==|:=         =:|\n"
+      "         `.          .'\n"
+      "           :-._____.-:\n"
+      "          `''       `''\n"
+    : "                                 ,'\\\n"
+      "   _.----.        ____         ,'  _\\   ___    ___     ____\n"
+      ",-'       `.     |    |  /`.   \\,-'    |   \\  /   |   |    \\  |`.\n"
+      "\\      __    \\    '-.  | /   `.  ___    |    \\/    |   '-.   \\ |  |\n"
+      " \\.    \\ \\   |  __  |  |/    ,','_  `.  |          | __  |    \\|  |\n"
+      "   \\    \\/   /,' _`.|      ,' / / / /   |          ,' _`.|     |  |\n"
+      "    \\     ,-'/  /   \\    ,'   | \\/ / ,`.|         /  /   \\  |     |\n"
+      "     \\    \\ |   \\_/  |   `-.  \\    `'  /|  |    ||   \\_/  | |\\    |\n"
+      "      \\    \\ \\      /       `-.`.___,-' |  |\\  /| \\      /  | |   |\n"
+      "       \\    \\ `.__,'|  |`-._    `|      |__| \\/ |  `.__,'|  | |   |\n"
+      "        \\_.-'       |__|    `-._ |              '-.|     '-.| |   |\n"
+      "                                `'                            '-._|\n";
 }
 
 // Common bottom hint
@@ -2730,7 +2746,7 @@ static void app_screen_result(int data)
     // RPS: data = user choice, pick cpu now
     int cpu = random(1, 4);
     const char *verdict = rps_result(data, cpu);
-    char buf[119];
+    char buf[120];
     snprintf(buf, sizeof(buf), "%s\nvs\n%s", rps_art(data), rps_art(cpu));
     lv_label_set_text(art, buf);
     lv_label_set_long_mode(art, LV_LABEL_LONG_WRAP);
@@ -2746,19 +2762,22 @@ static void app_screen_result(int data)
     // Dice: data = 1-6
     lv_label_set_text(art, dice_art(data));
     lv_obj_align(art, LV_ALIGN_CENTER, 0, -16);
-    char buf[16]; snprintf(buf, sizeof(buf), "Rolled: %d", data);
+    char buf[782]; snprintf(buf, sizeof(buf), "Rolled: %d", data);
     lv_label_set_text(res, buf);
     lv_obj_set_style_text_color(res, lv_color_make(100, 200, 255), 0);
     lv_obj_align(res, LV_ALIGN_BOTTOM_MID, 0, -36);
   } else {
     // Coin: data = 0=heads 1=tails
     menu_tone_hi();  // hi-tone on flip result
+    lv_obj_set_style_text_font(art, &dejavu_mono_8, 0);
+    lv_label_set_long_mode(art, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(art, LV_TEXT_ALIGN_LEFT, 0);
     lv_label_set_text(art, coin_art(data == 0));
     lv_obj_align(art, LV_ALIGN_CENTER, 0, -16);
     lv_label_set_text(res, data==0 ? "HEADS!" : "TAILS!");
     lv_obj_set_style_text_color(res,
       data==0 ? lv_color_make(255,220,60) : lv_color_make(180,180,255), 0);
-    lv_obj_align(res, LV_ALIGN_BOTTOM_MID, 0, -36);
+    lv_obj_align(res, LV_ALIGN_BOTTOM_MID, 0, -26);
   }
 
   app_hint(apps_cont, "tap again  .  hold to exit");

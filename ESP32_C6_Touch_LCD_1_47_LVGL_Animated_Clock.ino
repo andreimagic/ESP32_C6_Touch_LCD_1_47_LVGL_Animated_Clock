@@ -2774,7 +2774,7 @@ static void app_screen_result(int data)
     lv_obj_set_style_text_align(art, LV_TEXT_ALIGN_LEFT, 0);
     lv_label_set_text(art, coin_art(data == 0));
     lv_obj_align(art, LV_ALIGN_CENTER, 0, -16);
-    lv_label_set_text(res, data==0 ? "HEADS!" : "TAILS!");
+    lv_label_set_text(res, data==0 ? "Pikachu!" : "Go!");
     lv_obj_set_style_text_color(res,
       data==0 ? lv_color_make(255,220,60) : lv_color_make(180,180,255), 0);
     lv_obj_align(res, LV_ALIGN_BOTTOM_MID, 0, -26);

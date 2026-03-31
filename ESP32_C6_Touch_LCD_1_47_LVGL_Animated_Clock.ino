@@ -2682,6 +2682,9 @@ static const char *rps_result(int u, int cpu_c)
   return "CPU WINS!";
 }
 
+// Some ASCII art sourced from https://www.asciiart.eu/video-games/pokemon
+// All Pokémon characters are property of The Pokémon Company.
+// This project is not affiliated with or endorsed by The Pokémon Company.
 static const char *coin_art(bool heads)
 {
   return heads

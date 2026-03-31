@@ -1,7 +1,7 @@
 /*******************************************************************************
  * Size: 8 px
  * Bpp: 2
- * Opts: --bpp 2 --size 8 --no-compress --stride 1 --align 1 --font DejaVuSansMono.ttf --range 32-126 --format lvgl -o dejavu_mono_8.c
+ * Opts: --bpp 2 --size 8 --no-compress --stride 1 --align 1 --font DejaVuSansMono.ttf --range 32-126,9675,9679 --format lvgl -o dejavu_mono_8.c
  ******************************************************************************/
 
 #ifdef __has_include
@@ -369,7 +369,13 @@ static LV_ATTRIBUTE_LARGE_CONST const uint8_t glyph_bitmap[] = {
     0x24, 0x8, 0x8, 0x8, 0xa, 0x8, 0x8, 0x24,
 
     /* U+007E "~" */
-    0x68, 0x51, 0xc0
+    0x68, 0x51, 0xc0,
+
+    /* U+25CB "○" */
+    0x4, 0x14, 0x58, 0xa, 0x2, 0x51, 0x41, 0x0,
+
+    /* U+25CF "●" */
+    0x19, 0x2f, 0xdf, 0xff, 0xfe, 0x3f, 0x0, 0x0
 };
 
 
@@ -473,14 +479,18 @@ static const lv_font_fmt_txt_glyph_dsc_t glyph_dsc[] = {
     {.bitmap_index = 688, .adv_w = 77, .box_w = 4, .box_h = 8, .ofs_x = 0, .ofs_y = -1},
     {.bitmap_index = 696, .adv_w = 77, .box_w = 1, .box_h = 9, .ofs_x = 2, .ofs_y = -2},
     {.bitmap_index = 699, .adv_w = 77, .box_w = 4, .box_h = 8, .ofs_x = 0, .ofs_y = -1},
-    {.bitmap_index = 707, .adv_w = 77, .box_w = 5, .box_h = 2, .ofs_x = 0, .ofs_y = 2}
+    {.bitmap_index = 707, .adv_w = 77, .box_w = 5, .box_h = 2, .ofs_x = 0, .ofs_y = 2},
+    {.bitmap_index = 710, .adv_w = 77, .box_w = 5, .box_h = 6, .ofs_x = 0, .ofs_y = -1},
+    {.bitmap_index = 718, .adv_w = 77, .box_w = 5, .box_h = 6, .ofs_x = 0, .ofs_y = -1}
 };
 
 /*---------------------
  *  CHARACTER MAPPING
  *--------------------*/
 
-
+static const uint16_t unicode_list_1[] = {
+    0x0, 0x4
+};
 
 /*Collect the unicode lists and glyph_id offsets*/
 static const lv_font_fmt_txt_cmap_t cmaps[] =
@@ -488,6 +498,10 @@ static const lv_font_fmt_txt_cmap_t cmaps[] =
     {
         .range_start = 32, .range_length = 95, .glyph_id_start = 1,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
+    },
+    {
+        .range_start = 9675, .range_length = 5, .glyph_id_start = 96,
+        .unicode_list = unicode_list_1, .glyph_id_ofs_list = NULL, .list_length = 2, .type = LV_FONT_FMT_TXT_CMAP_SPARSE_TINY
     }
 };
 
@@ -512,7 +526,7 @@ static lv_font_fmt_txt_dsc_t font_dsc = {
     .cmaps = cmaps,
     .kern_dsc = NULL,
     .kern_scale = 0,
-    .cmap_num = 1,
+    .cmap_num = 2,
     .bpp = 2,
     .kern_classes = 0,
     .bitmap_format = 0,

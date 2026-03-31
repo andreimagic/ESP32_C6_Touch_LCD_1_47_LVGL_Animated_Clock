@@ -595,7 +595,7 @@ static void restore_time_from_log() {
       if (t > 0) {
         struct timeval now_tv = { .tv_sec = t, .tv_usec = 0 };
         settimeofday(&now_tv, NULL);
-        Serial.printf("[RTC] Restored time from log: %04d-%02d-%02d %02d:%02d:%02d\n", 
+        Serial.printf("[RTC] Restored UTC time from log: %04d-%02d-%02d %02d:%02d:%02d\n", 
                       yr, mn, dy, hr, min, sec);
         return;
       }
@@ -618,14 +618,14 @@ static void log_last_seen() {
   // 2. Get current time
   time_t now = time(nullptr);
   struct tm t;
-  localtime_r(&now, &t);
+  gmtime_r(&now, &t);
 
   // Only log if time is synced (sane year > 2026)
   if (now < 1735689600UL) return; 
 
   // 3. Format timestamp: YYYY-MM-DD HH:MM:SS
   char log_buf[32];
-  snprintf(log_buf, sizeof(log_buf), "%04d-%02d-%02d %02d:%02d:%02d (%.2fV)\n",
+  snprintf(log_buf, sizeof(log_buf), "%04d-%02d-%02d %02d:%02d:%02dZ (%.2fV)\n",
            t.tm_year + 1900, t.tm_mon + 1, t.tm_mday,
            t.tm_hour, t.tm_min, t.tm_sec, voltage);
 
@@ -2545,27 +2545,6 @@ static lv_obj_t *app_tapzone(lv_obj_t *p, lv_event_cb_t cb)
 }
 
 // ── ASCII art ─────────────────────────────────────────────────────────────────
-// ── Shake animation art ──────────────────────────────────────────────────────
-static const char *rps_art_shake(bool up)
-{
-  if (up) return
-    "    _______      \n"
-    "---'   ____)     \n"
-    "      (_____) \n"
-    "      (_____) \n"
-    "      (____)  \n"
-    " ---.__(___)  \n"
-    "              ";
-  return
-    "              \n"
-    "    _______      \n"
-    "---'   ____)     \n"
-    "      (_____) \n"
-    "      (_____) \n"
-    "      (____)  \n"
-    " ---.__(___)  ";
-}
-
 static const char *dice_art_roll(int n)
 {
   switch (n) {
@@ -2643,6 +2622,27 @@ static const char *dice_art(int n)
       "| o   o |\n"
       "\'-------\'";
   }
+}
+
+// ── Shake animation art ──────────────────────────────────────────────────────
+static const char *rps_art_shake(bool up)
+{
+  if (up) return
+    "    _______      \n"
+    "---'   ____)     \n"
+    "      (_____)    \n"
+    "      (_____)    \n"
+    "      (____)     \n"
+    " ---.__(___)     \n"
+    "                   ";
+  return
+    "                 \n"
+    "    _______      \n"
+    "---'   ____)     \n"
+    "      (_____)    \n"
+    "      (_____)    \n"
+    "      (____)     \n"
+    " ---.__(___)       ";
 }
 
 static const char *rps_art(int c)
@@ -2770,7 +2770,7 @@ static void rps_anim_tick_cb(lv_timer_t * /*t*/)
 {
   if (!apps_cont || !app_anim_lbl) { app_anim_stop(); return; }
 
-  if (app_anim_step < 6) {
+  if (app_anim_step < 7) {
     // Steps 0-5: up/down × 3, countdown 3-2-1
     bool up = (app_anim_step % 2 == 0);
     lv_label_set_text(app_anim_lbl, rps_art_shake(up));

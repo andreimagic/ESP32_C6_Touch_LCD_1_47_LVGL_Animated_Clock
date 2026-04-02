@@ -1252,7 +1252,7 @@ static void run_daily_automation(int hour, int minute)
       alarm_ntp_pending = false;
       Serial.println("[ALARM] NTP timeout — showing warning alarm");
       close_scheduled_gif();
-      set_brightness(80);
+      set_brightness(50);
       // Warning overlay: no GIF, just text
       if (!overlay_cont) {
         overlay_cont = make_overlay(lv_color_make(20, 20, 20));
@@ -2202,13 +2202,14 @@ static void carousel_build()
   lv_label_set_text(hint,"tap in or hold to exit");
   lv_obj_set_style_text_color(hint,lv_color_make(80,80,100),0);
   lv_obj_set_style_text_opa(hint,LV_OPA_60,0);
-  lv_obj_set_style_text_font(hint,&lv_font_montserrat_14,0);
+  lv_obj_set_style_text_font(hint,&dejavu_mono_14,0);
   lv_obj_align(hint,LV_ALIGN_BOTTOM_MID,0,-18);  // above the dots
 
   // Position dots — bottom row
   for (int i=0;i<4;i++) {
     lv_obj_t*dot=lv_label_create(modal_cont);
-    lv_label_set_text(dot,i==carousel_idx?"●":"○");
+    lv_obj_set_style_text_font(dot, &dejavu_mono_14, 0);
+    lv_label_set_text(dot, i==carousel_idx ? "\xe2\x97\x8f" : "\xe2\x97\x8b"); // "●" : "○"
     lv_obj_set_style_text_color(dot,
       i==carousel_idx?lv_color_white():lv_color_make(80,80,100),0);
     lv_obj_set_pos(dot,137+i*14,156);

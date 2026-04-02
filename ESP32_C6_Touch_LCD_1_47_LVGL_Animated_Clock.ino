@@ -169,6 +169,7 @@ const char *emotion_current_gif = nullptr; // tracks which GIF is showing
 lv_timer_t *buzzer_timer      = nullptr;  // alarm beep pattern timer
 bool        buzzer_active     = false;
 lv_timer_t *sched_close_timer = nullptr;  // auto-close timer for scheduled GIF
+lv_timer_t *aclock_timer      = nullptr;  // 1-min refresh for analog clock overlay
 
 // ─── Carousel / modal settings ────────────────────────────────────────────────
 lv_obj_t   *modal_cont   = nullptr;  // carousel / editor full-screen modal
@@ -1251,7 +1252,7 @@ static void run_daily_automation(int hour, int minute)
       alarm_ntp_pending = false;
       Serial.println("[ALARM] NTP timeout — showing warning alarm");
       close_scheduled_gif();
-      set_brightness(50);
+      set_brightness(80);
       // Warning overlay: no GIF, just text
       if (!overlay_cont) {
         overlay_cont = make_overlay(lv_color_make(20, 20, 20));
@@ -1359,6 +1360,8 @@ static void overlay_close_event_cb(lv_event_t *e)
     label_brightness = nullptr;  // label is about to be destroyed
     // Cancel scheduled GIF auto-close if user taps during animation
     if (sched_close_timer) { lv_timer_del(sched_close_timer); sched_close_timer = nullptr; }
+    // Cancel analog clock refresh timer
+    if (aclock_timer) { lv_timer_del(aclock_timer); aclock_timer = nullptr; }
     // Stop buzzer if alarm was playing (screen touch = acknowledge alarm)
     buzzer_stop();
     lv_obj_del(overlay_cont);  // frees GIF decoder + canvas automatically
@@ -2199,14 +2202,13 @@ static void carousel_build()
   lv_label_set_text(hint,"tap in or hold to exit");
   lv_obj_set_style_text_color(hint,lv_color_make(80,80,100),0);
   lv_obj_set_style_text_opa(hint,LV_OPA_60,0);
-  lv_obj_set_style_text_font(hint,&dejavu_mono_14,0);
+  lv_obj_set_style_text_font(hint,&lv_font_montserrat_14,0);
   lv_obj_align(hint,LV_ALIGN_BOTTOM_MID,0,-18);  // above the dots
 
   // Position dots — bottom row
   for (int i=0;i<4;i++) {
     lv_obj_t*dot=lv_label_create(modal_cont);
-    lv_obj_set_style_text_font(dot, &dejavu_mono_14, 0);
-    lv_label_set_text(dot, i==carousel_idx ? "\xe2\x97\x8f" : "\xe2\x97\x8b"); // "●" : "○"
+    lv_label_set_text(dot,i==carousel_idx?"●":"○");
     lv_obj_set_style_text_color(dot,
       i==carousel_idx?lv_color_white():lv_color_make(80,80,100),0);
     lv_obj_set_pos(dot,137+i*14,156);
@@ -3051,8 +3053,7 @@ static void apps_carousel_build()
   // 4 position dots
   for (int i = 0; i < 4; i++) {
     lv_obj_t *dot = lv_label_create(apps_cont);
-    lv_obj_set_style_text_font(dot, &dejavu_mono_14, 0);
-    lv_label_set_text(dot, i==apps_idx ? "\xe2\x97\x8f" : "\xe2\x97\x8b"); // "●" : "○"
+    lv_label_set_text(dot, i==apps_idx ? "\xe2\x97\x8f" : "\xe2\x97\x8b");
     lv_obj_set_style_text_color(dot, i==apps_idx ? lv_color_white() : lv_color_make(80,80,100), 0);
     lv_obj_set_pos(dot, 137 + i * 14, 156);
   }
@@ -3097,8 +3098,194 @@ static void zone_ul_cb(lv_event_t *e)
   }
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  ANALOG CLOCK  (upper-right zone)
+//
+//  Drawn via LVGL v9 LV_EVENT_DRAW_MAIN callbacks — zero extra RAM, no canvas.
+//  Layout: screen 320×172, clock centred at (160, 86), radius R=76 px.
+//
+//  Visual layers (back to front):
+//    1. Pie sector  — triangle fan, one 6° slice per elapsed minute, blue gradient
+//    2. Sector edge — thin arc from 12 o'clock to current minute
+//    3. Clock ring  — white circle outline
+//    4. 60 minute ticks (minor every 6°, medium every 30° between numbers)
+//    5. 12 hour numbers drawn at R-22
+//    6. Hour hand   — thick, 55% R
+//    7. Minute hand — thin,  80% R
+//    8. Centre dot  — filled blue circle
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Clockwise-from-12 degrees → screen (x, y)
+static void ac_pt(int cx, int cy, int r, float adeg,
+                  lv_value_precise_t *ox, lv_value_precise_t *oy)
+{
+  float rad = adeg * 0.017453293f;
+  *ox = (lv_value_precise_t)(cx + r * sinf(rad) + 0.5f);
+  *oy = (lv_value_precise_t)(cy - r * cosf(rad) + 0.5f);
+}
+
+static void aclock_draw_cb(lv_event_t *e)
+{
+  lv_layer_t *layer = lv_event_get_layer(e);
+  const int cx = 160, cy = 86, R = 76;
+
+  time_t now_t = time(nullptr);
+  struct tm tm; localtime_r(&now_t, &tm);
+  int hr  = tm.tm_hour % 12;
+  int mn  = tm.tm_min;
+  int sec = tm.tm_sec;
+
+  float min_angle = mn * 6.0f;                       // 0–354°
+  float hr_angle  = hr * 30.0f + mn * 0.5f;          // fractional hour
+  float sec_angle = sec * 6.0f;                       // thin seconds arc
+
+  // ── 1. Pie sector — gradient: early slices dim, late slices bright ────────
+  if (mn > 0) {
+    lv_draw_triangle_dsc_t tri;
+    lv_draw_triangle_dsc_init(&tri);
+    tri.p[0].x = (lv_value_precise_t)cx;
+    tri.p[0].y = (lv_value_precise_t)cy;
+    for (int i = 0; i < mn; i++) {
+      // Gradient: opacity ramps from 30 → 160 across the sweep
+      lv_opa_t opa = (lv_opa_t)(30 + (i * 130) / (mn > 1 ? mn - 1 : 1));
+      tri.color = lv_color_make(40, 100, 220);
+      tri.opa   = opa;
+      ac_pt(cx, cy, R - 6, i * 6.0f,       &tri.p[1].x, &tri.p[1].y);
+      ac_pt(cx, cy, R - 6, (i + 1) * 6.0f, &tri.p[2].x, &tri.p[2].y);
+      lv_draw_triangle(layer, &tri);
+    }
+
+    // ── 2. Sector edge — subtle arc from 12 to current minute ────────────
+    lv_draw_arc_dsc_t edge;
+    lv_draw_arc_dsc_init(&edge);
+    edge.center.x   = (lv_value_precise_t)cx;
+    edge.center.y   = (lv_value_precise_t)cy;
+    edge.radius      = R - 6;
+    edge.start_angle = 270;                            // LVGL 0° = 3 o'clock
+    edge.end_angle   = (uint16_t)(270 + mn * 6) % 360;
+    edge.width       = 2;
+    edge.color       = lv_color_make(100, 180, 255);
+    edge.opa         = LV_OPA_80;
+    if (mn > 0) lv_draw_arc(layer, &edge);
+
+    // ── Thin seconds arc — from 12 to current second (faint) ─────────────
+    lv_draw_arc_dsc_t sarc;
+    lv_draw_arc_dsc_init(&sarc);
+    sarc.center.x   = (lv_value_precise_t)cx;
+    sarc.center.y   = (lv_value_precise_t)cy;
+    sarc.radius      = R - 3;
+    sarc.start_angle = 270;
+    sarc.end_angle   = (uint16_t)(270 + (int)sec_angle) % 360;
+    sarc.width       = 1;
+    sarc.color       = lv_color_make(150, 210, 255);
+    sarc.opa         = LV_OPA_40;
+    if (sec > 0) lv_draw_arc(layer, &sarc);
+  }
+
+  // ── 3. Clock ring ─────────────────────────────────────────────────────────
+  lv_draw_arc_dsc_t ring;
+  lv_draw_arc_dsc_init(&ring);
+  ring.center.x   = (lv_value_precise_t)cx;
+  ring.center.y   = (lv_value_precise_t)cy;
+  ring.radius      = R;
+  ring.start_angle = 0;
+  ring.end_angle   = 360;
+  ring.width       = 2;
+  ring.color       = lv_color_make(100, 160, 255);
+  ring.opa         = LV_OPA_COVER;
+  lv_draw_arc(layer, &ring);
+
+  // ── 4. 60 minute ticks ────────────────────────────────────────────────────
+  lv_draw_line_dsc_t tick;
+  lv_draw_line_dsc_init(&tick);
+  tick.opa = LV_OPA_COVER;
+  for (int i = 0; i < 60; i++) {
+    float a    = i * 6.0f;
+    bool  is5  = (i % 5 == 0);   // on an hour mark
+    tick.width = is5 ? 2 : 1;
+    int   inner = is5 ? R - 14 : R - 7;
+    tick.color  = is5 ? lv_color_make(180, 210, 255)
+                      : lv_color_make(80, 120, 180);
+    ac_pt(cx, cy, R - 2, a, &tick.p1.x, &tick.p1.y);
+    ac_pt(cx, cy, inner, a, &tick.p2.x, &tick.p2.y);
+    lv_draw_line(layer, &tick);
+  }
+
+  // ── 5. Hour numbers ───────────────────────────────────────────────────────
+  static const char *hn[12] = {
+    "12","1","2","3","4","5","6","7","8","9","10","11"
+  };
+  const int R_NUM = R - 24;
+  lv_draw_label_dsc_t ldsc;
+  lv_draw_label_dsc_init(&ldsc);
+  ldsc.font  = &lv_font_montserrat_14;
+  ldsc.color = lv_color_make(200, 230, 255);
+  ldsc.opa   = LV_OPA_COVER;
+  ldsc.align = LV_TEXT_ALIGN_CENTER;
+  for (int i = 0; i < 12; i++) {
+    float a  = i * 30.0f;
+    int   nx = (int)(cx + R_NUM * sinf(a * 0.017453293f) + 0.5f);
+    int   ny = (int)(cy - R_NUM * cosf(a * 0.017453293f) + 0.5f);
+    lv_area_t la = {
+      (lv_coord_t)(nx - 14), (lv_coord_t)(ny - 9),
+      (lv_coord_t)(nx + 14), (lv_coord_t)(ny + 9)
+    };
+    // LVGL v9: text is set in dsc.text, lv_draw_label takes 3 args
+    ldsc.text = hn[i];
+    lv_draw_label(layer, &ldsc, &la);
+  }
+
+  // ── 6. Hour hand (thick, 55% R) ───────────────────────────────────────────
+  lv_draw_line_dsc_t hh;
+  lv_draw_line_dsc_init(&hh);
+  hh.width = 5; hh.color = lv_color_white(); hh.opa = LV_OPA_COVER;
+  hh.round_start = 1; hh.round_end = 1;
+  hh.p1.x = (lv_value_precise_t)cx;
+  hh.p1.y = (lv_value_precise_t)cy;
+  ac_pt(cx, cy, (int)(R * 0.55f), hr_angle, &hh.p2.x, &hh.p2.y);
+  lv_draw_line(layer, &hh);
+
+  // ── 7. Minute hand (thin, 80% R) ──────────────────────────────────────────
+  lv_draw_line_dsc_t mh;
+  lv_draw_line_dsc_init(&mh);
+  mh.width = 2; mh.color = lv_color_white(); mh.opa = LV_OPA_COVER;
+  mh.round_start = 1; mh.round_end = 1;
+  mh.p1.x = (lv_value_precise_t)cx;
+  mh.p1.y = (lv_value_precise_t)cy;
+  ac_pt(cx, cy, (int)(R * 0.80f), min_angle, &mh.p2.x, &mh.p2.y);
+  lv_draw_line(layer, &mh);
+
+  // ── 8. Centre dot (filled blue circle) ───────────────────────────────────
+  lv_draw_arc_dsc_t dot;
+  lv_draw_arc_dsc_init(&dot);
+  dot.center.x   = (lv_value_precise_t)cx;
+  dot.center.y   = (lv_value_precise_t)cy;
+  dot.radius      = 5;
+  dot.start_angle = 0;
+  dot.end_angle   = 360;
+  dot.width       = 5;
+  dot.color       = lv_color_make(60, 140, 255);
+  dot.opa         = LV_OPA_COVER;
+  lv_draw_arc(layer, &dot);
+}
+
+static void aclock_refresh_cb(lv_timer_t * /*t*/)
+{
+  if (overlay_cont) lv_obj_invalidate(overlay_cont);
+}
+
+static void show_analog_clock()
+{
+  if (overlay_cont) return;
+  overlay_cont = make_overlay(lv_color_make(4, 8, 24));  // deep navy
+  lv_obj_add_event_cb(overlay_cont, aclock_draw_cb, LV_EVENT_DRAW_MAIN, nullptr);
+  // Refresh every 60 s so clock stays accurate; also invalidates on open
+  aclock_timer = lv_timer_create(aclock_refresh_cb, 60000, nullptr);
+  Serial.println("[CLOCK] Analog clock opened");
+}
+
 static void zone_ur_cb(lv_event_t *e)
-{ if (lv_event_get_code(e) == LV_EVENT_CLICKED) show_gif_fullscreen(GIF_SLEEP_PATH); }
+{ if (lv_event_get_code(e) == LV_EVENT_CLICKED) show_analog_clock(); }
 
 static void zone_ll_cb(lv_event_t *e)
 { if (lv_event_get_code(e) == LV_EVENT_CLICKED) show_status_screen(); }
@@ -3134,7 +3321,7 @@ static void home_screen_init(void)
   // Landscape 320×172. Each quadrant = 160×86 px.
   const struct { int16_t x; int16_t y; lv_event_cb_t cb; } zones[4] = {
     {   0,   0, zone_ul_cb },   // upper-left  → smile GIF
-    { 160,   0, zone_ur_cb },   // upper-right → sleep GIF
+    { 160,   0, zone_ur_cb },   // upper-right → analog clock
     {   0,  86, zone_ll_cb },   // lower-left  → WiFi/NTP/date status
     { 160,  86, zone_lr_cb },   // lower-right → battery
   };

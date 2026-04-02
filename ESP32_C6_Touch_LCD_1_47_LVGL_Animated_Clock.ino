@@ -3054,7 +3054,8 @@ static void apps_carousel_build()
   // 4 position dots
   for (int i = 0; i < 4; i++) {
     lv_obj_t *dot = lv_label_create(apps_cont);
-    lv_label_set_text(dot, i==apps_idx ? "\xe2\x97\x8f" : "\xe2\x97\x8b");
+    lv_obj_set_style_text_font(dot, &dejavu_mono_14, 0);
+    lv_label_set_text(dot, i==apps_idx ? "\xe2\x97\x8f" : "\xe2\x97\x8b"); // "●" : "○"
     lv_obj_set_style_text_color(dot, i==apps_idx ? lv_color_white() : lv_color_make(80,80,100), 0);
     lv_obj_set_pos(dot, 137 + i * 14, 156);
   }

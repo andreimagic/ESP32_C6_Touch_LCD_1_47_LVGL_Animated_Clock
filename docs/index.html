@@ -24,6 +24,7 @@
                 <li><a href="#software" class="nav-links">Software</a></li>
                 <li><a href="#setup" class="nav-links">Setup</a></li>
                 <li><a href="#usage" class="nav-links">Usage</a></li>
+                <li><a href="#architecture" class="nav-links">Architecture</a></li>
                 <li><a href="#build" class="nav-links">Build</a></li>
                 <li><button id="theme-toggle" class="theme-btn">🌙 Dark</button></li>
             </ul>
@@ -80,6 +81,7 @@
                 <table>
                     <tbody>
                         <tr><td><strong>Big clock face</strong></td><td>HH:MM in a full-screen custom font (Montserrat 96px)</td></tr>
+                        <tr><td><strong>Analog clock</strong></td><td>Upper-right tap opens a live-drawn analog clock with pie-sector sweeps.</td></tr>
                         <tr><td><strong>Splash screen</strong></td><td>"Hello!" on cold boot (2.5 s); "Salut!" on wake from sleep (1 s)</td></tr>
                         <tr><td><strong>Animated GIFs</strong></td><td>Smile (day) and Sleep (night) emotions from SD card</td></tr>
                         <tr><td><strong>Scheduled animation</strong></td><td>GIF plays on a configurable minute interval, 800 ms fade back</td></tr>
@@ -90,6 +92,7 @@
                         <tr><td><strong>Clock editor</strong></td><td>Sets HH:MM and DD/MON/YYYY offline, no WiFi needed</td></tr>
                         <tr><td><strong>WiFi + NTP</strong></td><td>Connects at boot, syncs time automatically; DST-aware timezone</td></tr>
                         <tr><td><strong>Battery monitor</strong></td><td>Live percentage, voltage, ADC raw — with LiPo discharge curve</td></tr>
+                        <tr><td><strong>Low-power gate</strong></td><td>Refuses to boot if battery ≤ 10%, shows empty battery icon and deep sleeps.</td></tr>
                         <tr><td><strong>Apps menu</strong></td><td>Math challenge gate, Rock Paper Scissors, Rolling Dice, Coin Flip</td></tr>
                         <tr><td><strong>SD card config</strong></td><td>All settings in <code>/config.ini</code> — no recompile needed</td></tr>
                     </tbody>
@@ -109,7 +112,7 @@
                     </thead>
                     <tbody>
                         <tr><td>Controller</td><td>ST7789</td></tr>
-                        <tr><td>Resolution</td><td>172 × 320 px</td></tr>
+                        <tr><td>Resolution</td><td>172 × 320 px (Landscape ROTATION = 1)</td></tr>
                         <tr><td>Interface</td><td>SPI (HWSPI)</td></tr>
                     </tbody>
                 </table>
@@ -123,7 +126,7 @@
                         <tr><th>Signal</th><th>GPIO</th></tr>
                     </thead>
                     <tbody>
-                        <tr><td>Display DC / CS / RST</td><td>15 / 14 / 22</td></tr>
+                        <tr><td>Display DC / CS / RST / BL</td><td>15 / 14 / 22 / 23</td></tr>
                         <tr><td>SPI SCK / MOSI / MISO</td><td>1 / 2 / 3 (MISO SD only)</td></tr>
                         <tr><td>SD Card CS</td><td>4</td></tr>
                         <tr><td>Touch I²C SDA / SCL</td><td>18 / 19</td></tr>
@@ -168,13 +171,14 @@
             <h3>Home Screen Touch Zones</h3>
             <pre class="ascii-box">
 ┌─────────────────────────────────────────┐
-│   Smile GIF (UL)  │   Sleep GIF (UR)    │
+│   Smile GIF (UL)  │  Analog Clock (UR)  │
 ├───────────────────┼─────────────────────┤
-│   Status (LL)     │   Battery (LR)      │
+│   Status (LL)     │  Battery (LR)       │
 └─────────────────────────────────────────┘
       LONG-PRESS anywhere → Carousel menu
             </pre>
             <ul>
+                <li><strong>Analog Clock (UR):</strong> Tapping the upper-right zone opens the live-rendered analog clock interface.</li>
                 <li><strong>Status (LL):</strong> Shows WiFi, NTP, and Brightness. Tilt left/right to adjust brightness.</li>
                 <li><strong>Battery (LR):</strong> Live %, voltage. Long-press for software power-off.</li>
                 <li><strong>Emotion Tilt:</strong> Tap UL (Smile). While playing, tilt the device to change emotions (sad, joy, sleep) in real-time via IMU.</li>
@@ -199,6 +203,56 @@ time = 07:10
 schedule = true
 duration = 10
 </code></pre>
+        </section>
+
+        <section id="architecture">
+            <h2>🏗 Architecture Notes</h2>
+            <ul>
+                <li><strong>No blocking calls in <code>loop()</code>:</strong> Everything runs as LVGL timer callbacks.</li>
+                <li><strong>SD ↔ LVGL filesystem bridge:</strong> Allows `lv_gif_set_src("S:/...")` natively.</li>
+                <li><strong>DST-aware timekeeping:</strong> `configTzTime` sets POSIX TZ handling DST automatically.</li>
+                <li><strong>Emotion tilt in-place swap:</strong> Swaps the GIF path dynamically based on IMU data without rebuilding the overlay.</li>
+            </ul>
+
+            <h3>🕒 Analog Clock Engine</h3>
+            <p>The analog clock is built purely with LVGL primitive drawing events (`LV_EVENT_DRAW_MAIN`), updated every 60 seconds by `aclock_timer`. It calculates screen coordinates from angles via the `ac_pt(cx, cy, r, angle_deg, *ox, *oy)` helper function.</p>
+            <p><strong>Drawing Order (Back to Front):</strong></p>
+            <ol>
+                <li><strong>Pie Sector:</strong> A triangle fan sweeps the elapsed minutes. Opacity ramps dynamically from 30 to 160.</li>
+                <li><strong>Sector Edge Arc:</strong> Thin bright blue arc outlining the swept area.</li>
+                <li><strong>Seconds Arc:</strong> Very faint thin arc tracking the current second.</li>
+                <li><strong>Clock Ring:</strong> Blue circle outline (R=76).</li>
+                <li><strong>Tick Marks:</strong> Minor 1px ticks every 6°; medium 2px ticks every 30° (hours).</li>
+                <li><strong>Numbers:</strong> 12 hour numbers drawn with `lv_draw_label()` using Montserrat 14.</li>
+                <li><strong>Hands:</strong> Thick hour hand (55% R), thin minute hand (80% R), and a central dot.</li>
+            </ol>
+
+            <h3>🔋 Low-Battery Startup Gate</h3>
+            <p>To prevent boot-looping on a dead battery, a low-power gate intercepts the boot process between WiFi initialization and the UI build. If the battery is ≤ 10%:</p>
+            <ol>
+                <li>The screen turns black.</li>
+                <li>A single `LV_SYMBOL_BATTERY_EMPTY` label is created (Montserrat 48px).</li>
+                <li>`lv_timer_handler()` is pumped in a tight 5-second loop to flush the UI.</li>
+                <li>The backlight is blanked and the device calls `esp_deep_sleep_start()` with <strong>no wakeup source configured</strong>.</li>
+            </ol>
+            <p>The device remains asleep until plugged in and the hardware <strong>RESET</strong> button is pressed.</p>
+        </section>
+
+        <section id="roadmap">
+            <h2>🗺️ Roadmap</h2>
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr><th>Version</th><th>Status</th><th>Feature</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>v1.0 - 1.3</td><td>✅ released</td><td>Clock, alarms, GIF on tap, scheduled animations, carousel settings, date editor, RTC persistence.</td></tr>
+                        <tr><td>v1.4.0</td><td>✅ released</td><td>Emotion tilt GIF mode on upper-left tap (smile/sleep/sad/joy via IMU).</td></tr>
+                        <tr><td>v1.5.0</td><td>✅ released</td><td>Apps menu: math gate, Rock Paper Scissors, Rolling Dice, Flip a Coin, DST-aware timezone.</td></tr>
+                        <tr><td>v2.0.0</td><td>✅ released</td><td>Analog clock view & low-power startup gate.</td></tr>
+                    </tbody>
+                </table>
+            </div>
         </section>
 
         <section id="build">

@@ -451,6 +451,7 @@ Long-press the battery screen to open the shutdown popup. After the countdown (o
 
 ### Waking up
 Press the **RESET** button on the device body. This always causes a clean reboot through the full boot sequence.
+Low-battery gate code will check at startup if the battery is > 10%.
 
 > The BOOT button on this board is wired to GPIO9, which is not a low-power GPIO on the ESP32-C6 and cannot trigger a wake-from-deep-sleep interrupt. RESET is the reliable wake method.
 
@@ -580,24 +581,43 @@ Skipped silently if any screen, overlay, or carousel is already open. Alarm and 
 ========== BOOT ==========
 [BOOT] Wake cause: cold boot / RESET button
 [1] Pulling CS pins HIGH...
+    Done.
 [2] SPI.begin(SCK=1, MISO=3, MOSI=2, CS=4)...
+    Done.
 [3] Initialising display...
     gfx->begin() OK.
+[BL] Backlight init at 50% (PWM=127)
+    Display ready.
 [4] Initialising touch...
+read: 8161
+    Touch ready.
 [4b] Initialising IMU...
     IMU ready.
 [5] Mounting SD card...
+    CS=4  SCK=1  MISO=3  MOSI=2  speed=4MHz
+    SD.begin() returned: true
     SD mounted OK — type: SD  size: 244 MB
 [CFG] Loading /config.ini...
 [CFG]   wifi.enabled       = true
-[CFG]   wifi.ssid          = myhomewifi
-[CFG]   wifi.password      = (hidden)
-[CFG]   clock.tz           = CET-1CEST,M3.5.0,M10.5.0/3
-[RTC] Restored time from log: 2026-03-30 09:15:00
-[TZ] Applied: CET-1CEST,M3.5.0,M10.5.0/3
+[CFG]   wifi.ssid     = myhomewifi
+[CFG]   wifi.password = (hidden)
+[CFG]   alarm.enabled      = true
+[CFG]   alarm.time         = 07:10
+[CFG]   alarm.beep_sequences = 5
+[CFG]   timer.duration      = 00:02
+[CFG]   timer.beep_sequences = 3
+[CFG]   menu.sounds    = true
+[CFG] Done. (49 lines read)
+[RTC] Restored UTC time from log: 2026-04-07 12:00:00
+    Checking for GIF at: /cruzr_emotions/cruzr_smile.gif
+    GIF found — 540954 bytes
 [6] Initialising LVGL...
 [7] Registering LVGL SD filesystem driver...
 [7b] Applying WiFi state from config...
+[TZ] Applied: CET-1CEST,M3.5.0,M10.5.0/3
+[WiFi] Enabling...
+     Done.
+[BAT] Boot check: 4.11V = 91%
 [8] Building UI...
 ========== SETUP DONE ==========
 ```
@@ -665,6 +685,7 @@ Skipped silently if any screen, overlay, or carousel is already open. Alarm and 
 | v1.4.0 | ✅ released | Emotion tilt GIF mode on upper-left tap (smile/sleep/sad/joy via IMU) |
 | v1.4.1 | ✅ released | Bugfix: Fix RTC drift after long deep sleep in the event of an alarm set, allow time for NTP sync |
 | v1.5.0 | ✅ released | Apps menu: math gate, Rock Paper Scissors, Rolling Dice, Flip a Coin, game sounds, DST-aware timezone |
+| v2.0.0 | workinprogress| Analog clock view & low-power startup gate |
 
 ## License
 

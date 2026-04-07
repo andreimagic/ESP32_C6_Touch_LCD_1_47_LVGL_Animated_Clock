@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32-C6 Touch LCD 1.47" — LVGL Animated Clock</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Fira+Code&display=swap" rel="stylesheet">
+</head>
+<body>
+
+    <nav class="navbar">
+        <div class="nav-container">
+            <a href="#" class="logo">⌚ ESP32-C6 Clock</a>
+            <div class="menu-toggle" id="mobile-menu">
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+            </div>
+            <ul class="nav-menu">
+                <li><a href="#gallery" class="nav-links">Gallery</a></li>
+                <li><a href="#features" class="nav-links">Features</a></li>
+                <li><a href="#hardware" class="nav-links">Hardware</a></li>
+                <li><a href="#software" class="nav-links">Software</a></li>
+                <li><a href="#usage" class="nav-links">Usage</a></li>
+                <li><a href="#architecture" class="nav-links">Architecture</a></li>
+                <li><a href="#build" class="nav-links">Build</a></li>
+                <li><button id="theme-toggle" class="theme-btn">🌙 Dark</button></li>
+            </ul>
+        </div>
+    </nav>
+
+    <header class="hero">
+        <h1>ESP32-C6 Touch LCD 1.47" <br><span>LVGL Animated Clock</span></h1>
+        <p>A smart animated clock for kids built on the Waveshare ESP32-C6 Touch LCD 1.47" board, driven by LVGL v9.</p>
+        <div class="action-buttons">
+            <a href="https://andreimagic.github.io/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/" target="_blank" class="btn primary">🌐 View Demo</a>
+            <a href="https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock" target="_blank" class="btn secondary">View on GitHub</a>
+            <a href="https://youtu.be/EWYB8bpZ4_g" target="_blank" class="btn outline">📺 Watch Video</a>
+        </div>
+    </header>
+
+    <main class="content-container">
+
+        <section id="gallery" class="gallery-section">
+            <h2>📸 Gallery</h2>
+            <div class="carousel">
+                <div class="carousel-inner">
+                    <div class="carousel-item active">
+                        <img src="assets/animated_clock_01_hello.jpg" alt="Hello Splash Screen">
+                    </div>
+                    <div class="carousel-item">
+                        <img src="assets/animated_clock_02_smile.jpg" alt="Smile Emotion GIF">
+                    </div>
+                    <div class="carousel-item">
+                        <img src="assets/animated_clock_03_time.jpg" alt="Big Time Display">
+                    </div>
+                    <div class="carousel-item">
+                        <img src="assets/animated_clock_04_sleep.jpg" alt="Sleep Emotion GIF">
+                    </div>
+                    <div class="carousel-item">
+                        <img src="assets/animated_clock_05_analog.png" alt="Analog Clock Face">
+                    </div>
+                </div>
+                <button class="carousel-control prev" id="prevBtn">&#10094;</button>
+                <button class="carousel-control next" id="nextBtn">&#10095;</button>
+            </div>
+            <div class="carousel-indicators">
+                <span class="dot active" data-slide="0"></span>
+                <span class="dot" data-slide="1"></span>
+                <span class="dot" data-slide="2"></span>
+                <span class="dot" data-slide="3"></span>
+                <span class="dot" data-slide="4"></span>
+            </div>
+        </section>
+
+        <section id="features">
+            <h2>✨ Features</h2>
+            <div class="table-responsive">
+                <table>
+                    <tbody>
+                        <tr><td><strong>Big clock face</strong></td><td>HH:MM in a full-screen custom font (Montserrat 96px)</td></tr>
+                        <tr><td><strong>Analog clock</strong></td><td>Upper-right tap opens a live-drawn analog clock with pie-sector sweeps.</td></tr>
+                        <tr><td><strong>Splash screen</strong></td><td>"Hello!" on cold boot (2.5 s); "Salut!" on wake from sleep (1 s)</td></tr>
+                        <tr><td><strong>Animated GIFs</strong></td><td>Smile (day) and Sleep (night) emotions from SD card</td></tr>
+                        <tr><td><strong>Scheduled animation</strong></td><td>GIF plays on a configurable minute interval, 800 ms fade back</td></tr>
+                        <tr><td><strong>Night mode</strong></td><td>Sleep GIF used automatically between 20:00 and 07:00</td></tr>
+                        <tr><td><strong>Alarm</strong></td><td>Configurable wake-up time, custom buzzer pattern, alarm animation</td></tr>
+                        <tr><td><strong>Countdown timer</strong></td><td>Live MM:SS on clock face, timer animation on completion</td></tr>
+                        <tr><td><strong>Emotion tilt</strong></td><td>Tilt the device to change emotion in real-time</td></tr>
+                        <tr><td><strong>Clock editor</strong></td><td>Sets HH:MM and DD/MON/YYYY offline, no WiFi needed</td></tr>
+                        <tr><td><strong>WiFi + NTP</strong></td><td>Connects at boot, syncs time automatically; DST-aware timezone</td></tr>
+                        <tr><td><strong>Battery monitor</strong></td><td>Live percentage, voltage, ADC raw — with LiPo discharge curve</td></tr>
+                        <tr><td><strong>Low-power gate</strong></td><td>Refuses to boot if battery ≤ 10%, shows empty battery icon and deep sleeps.</td></tr>
+                        <tr><td><strong>Apps menu</strong></td><td>Math challenge gate, Rock Paper Scissors, Rolling Dice, Coin Flip</td></tr>
+                        <tr><td><strong>SD card config</strong></td><td>All settings in <code>/config.ini</code> — no recompile needed</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="hardware">
+            <h2>🛠 Hardware</h2>
+            <h3>Board: <a href="https://www.waveshare.com/wiki/ESP32-C6-Touch-LCD-1.47" target="_blank">Waveshare ESP32-C6 Touch LCD 1.47"</a></h3>
+            <p>Select <strong>ESP32C6 Dev Module</strong> in Arduino IDE. The board integrates the ST7789 display, AXS5106L touch controller, QMI8658 IMU, ETA6098 battery charger, and SD card slot on a single compact PCB.</p>
+            
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr><th>Component</th><th>Value</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>Controller</td><td>ST7789</td></tr>
+                        <tr><td>Resolution</td><td>172 × 320 px (Landscape ROTATION = 1)</td></tr>
+                        <tr><td>Interface</td><td>SPI (HWSPI)</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h3>Pin Map & Wiring</h3>
+            <p>Connect a <strong>passive buzzer</strong> (not active) between <strong>GPIO 5</strong> and <strong>GND</strong>. If the buzzer is very loud, add a 100 Ω resistor in series.</p>
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr><th>Signal</th><th>GPIO</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>Display DC / CS / RST / BL</td><td>15 / 14 / 22 / 23</td></tr>
+                        <tr><td>SPI SCK / MOSI / MISO</td><td>1 / 2 / 3 (MISO SD only)</td></tr>
+                        <tr><td>SD Card CS</td><td>4</td></tr>
+                        <tr><td>Touch I²C SDA / SCL</td><td>18 / 19</td></tr>
+                        <tr><td>Battery ADC</td><td>0</td></tr>
+                        <tr><td>Passive Buzzer</td><td><strong>5</strong> → GND</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="software">
+            <h2>💻 Software Dependencies & Setup</h2>
+            <p>Install via Arduino IDE Library Manager: <strong>LVGL</strong> (v9.5.0), <strong><a href="https://github.com/moononournation/Arduino_GFX" target="_blank">Arduino_GFX_Library</a> (1.6.5)</strong>, <strong>FastIMU (1.2.8)</strong>, and board-specific <strong>esp_lcd_touch_axs5106l (comes from ESP32 Arduino Core)</strong>.</p>
+            
+            <h3>lv_conf.h Settings</h3>
+            <p>The file <code>lv_conf.h</code> is included in the repo so there is no need to update the local library src file.</p>
+            <p>Here are some important changes in the lvgl configuration file:</p>
+<pre><code>#if 1  /* Enable the file */
+#define LV_USE_STDLIB_MALLOC    LV_STDLIB_CLIB
+#define LV_USE_STDLIB_STRING    LV_STDLIB_CLIB
+#define LV_USE_STDLIB_SPRINTF   LV_STDLIB_CLIB
+#define LV_USE_GIF  1
+/* Enable Montserrat 14, 16, 48 */
+</code></pre>
+
+            <h3 id="setup">SD Card Setup (FAT32)</h3>
+            <p>GIF files <strong>must be resized to 160 × 86 pixels</strong> to avoid RAM exhaustion.</p>
+<pre><code>SD root/
+├── config.ini
+├── last_seen.txt
+└── cruzr_emotions/
+    ├── cruzr_smile.gif
+    ├── cruzr_sleep.gif
+    ├── cruzr_sad.gif
+    ├── cruzr_joy.gif
+    ├── alarm_animation.gif
+    └── timer_animation.gif
+</code></pre>
+        </section>
+
+        <section id="usage">
+            <h2>📱 Usage & Interface</h2>
+            <h3>Home Screen Touch Zones</h3>
+            <pre class="ascii-box">
+┌─────────────────────────────────────────┐
+│   Smile GIF (UL)  │  Analog Clock (UR)  │
+├───────────────────┼─────────────────────┤
+│   Status (LL)     │  Battery (LR)       │
+└─────────────────────────────────────────┘
+      LONG-PRESS anywhere → Carousel menu
+            </pre>
+            <ul>
+                <li><strong>Analog Clock (UR):</strong> Tapping the upper-right zone opens the live-rendered analog clock interface.</li>
+                <li><strong>Status (LL):</strong> Shows WiFi, NTP, and Brightness. Tilt left/right to adjust brightness.</li>
+                <li><strong>Battery (LR):</strong> Live %, voltage. Long-press for software power-off.</li>
+                <li><strong>Emotion Tilt:</strong> Tap UL (Smile). While playing, tilt the device to change emotions (sad, joy, sleep) in real-time via IMU.</li>
+                <li><strong>Apps Menu:</strong> Long-press the smile GIF → pass Math Gate → access Rock Paper Scissors, Dice, Coin Flip.</li>
+            </ul>
+
+            <h3>Config.ini Reference</h3>
+<pre><code>[wifi]
+enabled = true
+ssid = myhomewifi
+password = changeme
+
+[clock]
+ntp_server = pool.ntp.org
+tz = CET-1CEST,M3.5.0,M10.5.0/3
+
+[alarm]
+enabled = true
+time = 07:10
+
+[animation]
+schedule = true
+duration = 10
+</code></pre>
+        </section>
+
+        <section id="architecture">
+            <h2>🏗 Architecture Notes</h2>
+            <ul>
+                <li><strong>No blocking calls in <code>loop()</code>:</strong> Everything runs as LVGL timer callbacks.</li>
+                <li><strong>SD ↔ LVGL filesystem bridge:</strong> Allows `lv_gif_set_src("S:/...")` natively.</li>
+                <li><strong>DST-aware timekeeping:</strong> `configTzTime` sets POSIX TZ handling DST automatically.</li>
+                <li><strong>Emotion tilt in-place swap:</strong> Swaps the GIF path dynamically based on IMU data without rebuilding the overlay.</li>
+            </ul>
+
+            <h3>🕒 Analog Clock Engine</h3>
+            <p>The analog clock is built purely with LVGL primitive drawing events (`LV_EVENT_DRAW_MAIN`), updated every 60 seconds by `aclock_timer`. It calculates screen coordinates from angles via the `ac_pt(cx, cy, r, angle_deg, *ox, *oy)` helper function.</p>
+            <p><strong>Drawing Order (Back to Front):</strong></p>
+            <ol>
+                <li><strong>Pie Sector:</strong> A triangle fan sweeps the elapsed minutes. Opacity ramps dynamically from 30 to 160.</li>
+                <li><strong>Sector Edge Arc:</strong> Thin bright blue arc outlining the swept area.</li>
+                <li><strong>Seconds Arc:</strong> Very faint thin arc tracking the current second.</li>
+                <li><strong>Clock Ring:</strong> Blue circle outline (R=76).</li>
+                <li><strong>Tick Marks:</strong> Minor 1px ticks every 6°; medium 2px ticks every 30° (hours).</li>
+                <li><strong>Numbers:</strong> 12 hour numbers drawn with `lv_draw_label()` using Montserrat 14.</li>
+                <li><strong>Hands:</strong> Thick hour hand (55% R), thin minute hand (80% R), and a central dot.</li>
+            </ol>
+
+            <h3>🔋 Low-Battery Startup Gate</h3>
+            <p>To prevent boot-looping on a dead battery, a low-power gate intercepts the boot process between WiFi initialization and the UI build. If the battery is ≤ 10%:</p>
+            <ol>
+                <li>The screen turns black.</li>
+                <li>A single `LV_SYMBOL_BATTERY_EMPTY` label is created (Montserrat 48px).</li>
+                <li>`lv_timer_handler()` is pumped in a tight 5-second loop to flush the UI.</li>
+                <li>The backlight is blanked and the device calls `esp_deep_sleep_start()` with <strong>no wakeup source configured</strong>.</li>
+            </ol>
+            <p>The device remains asleep until plugged in and the hardware <strong>RESET</strong> button is pressed.</p>
+        </section>
+
+        <section id="roadmap">
+            <h2>🗺️ Roadmap</h2>
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr><th>Version</th><th>Status</th><th>Feature</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>v1.0 - 1.3</td><td>✅ released</td><td>Clock, alarms, GIF on tap, scheduled animations, carousel settings, date editor, RTC persistence.</td></tr>
+                        <tr><td>v1.4.0</td><td>✅ released</td><td>Emotion tilt GIF mode on upper-left tap (smile/sleep/sad/joy via IMU).</td></tr>
+                        <tr><td>v1.5.0</td><td>✅ released</td><td>Apps menu: math gate, Rock Paper Scissors, Rolling Dice, Flip a Coin, DST-aware timezone.</td></tr>
+                        <tr><td>v2.0.0</td><td>✅ released</td><td>Analog clock view & low-power startup gate.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="build">
+            <h2>⚡ Build & Flash</h2>
+            <ol>
+                <li>Install <strong>ESP32 board support</strong> in Arduino IDE.</li>
+                <li>Select <strong>ESP32C6 Dev Module</strong>.</li>
+                <li>Set <strong>USB CDC On Boot</strong> to <code>Enabled</code> (Crucial!).</li>
+                <li>Set <strong>Flash Size</strong> to <code>8MB (64Mb)</code> and <strong>Partition Scheme</strong> to <code>8MB with spiffs (3MB APP/1.5MB SPIFFS)</code>.</li>
+                <li>Upload at `921600` baud rate and open Serial Monitor at `115200`.</li>
+            </ol>
+            
+            <h3>Troubleshooting</h3>
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>Black screen after boot</td><td>Display init failed</td><td>Check SPI wiring; confirm `gfx->begin() OK` in serial log</td></tr>
+                        <tr><td>`SD card mount failed`</td><td>Wrong MISO pin or card not FAT32</td><td>Confirm GPIO 3 = MISO; reformat card as FAT32</td></tr>
+                        <tr><td>`Not enough RAM for GIF`</td><td>GIF still full-size</td><td>Resize exactly to 160 × 86 px</td></tr>
+                        <tr><td>Apps menu not opening</td><td>Wrong touch zone</td><td>Long-press the <strong>smile GIF</strong> specifically, not just anywhere</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+        
+        <section id="architecture">
+            <h2>🏗 Architecture Notes</h2>
+            <ul>
+                <li><strong>No blocking calls in <code>loop()</code>:</strong> Everything runs as LVGL timer callbacks.</li>
+                <li><strong>SD ↔ LVGL filesystem bridge:</strong> Allows `lv_gif_set_src("S:/...")` natively.</li>
+                <li><strong>DST-aware timekeeping:</strong> `configTzTime` sets POSIX TZ handling DST automatically.</li>
+                <li><strong>Emotion tilt in-place swap:</strong> Swaps the GIF path dynamically based on IMU data without rebuilding the overlay.</li>
+            </ul>
+        </section>
+
+        <section id="disclaimer" class="card warning">
+            <h2>⚠️ Disclaimer — ASCII Art</h2>
+            <p>Some coin flip ASCII art displayed in the Apps Menu was sourced from <a href="https://www.asciiart.eu/video-games/pokemon" target="_blank">asciiart.eu</a>. All Pokémon characters and names are trademarks of <strong>The Pokémon Company International</strong>. This project is not affiliated with, sponsored by, or endorsed by The Pokémon Company. The art is used here solely for non-commercial, personal, educational purposes.</p>
+        </section>
+
+    </main>
+
+    <footer>
+        <p>Released under the <strong>MIT License</strong>. Do whatever you like with it.</p>
+        <p><a href="https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock" target="_blank">View project on GitHub</a></p>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>

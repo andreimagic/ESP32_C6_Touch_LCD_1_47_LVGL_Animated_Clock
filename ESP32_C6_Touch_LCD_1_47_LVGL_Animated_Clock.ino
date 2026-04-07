@@ -3537,6 +3537,40 @@ void setup()
   apply_wifi_state();
   Serial.println("     Done.");
 
+  // ── Step 8: Low-battery gate ─────────────────────────────────────────────
+  // Read battery BEFORE building any UI. If critically low, show only the
+  // empty-battery icon (no text, no countdown) for 5 s then deep-sleep.
+  // Mirrors iPhone behaviour: clean, silent, no user interaction required.
+  {
+    uint16_t mv  = analogReadMilliVolts(BAT_PIN);
+    float    v   = mv * 3.0f / 1000.0f;
+    int      pct = battery_voltage_to_percent(v);
+    Serial.printf("[BAT] Boot check: %.2fV = %d%%\n", v, pct);
+
+    if (pct <= 10) {
+      Serial.println("[BAT] Low battery — showing icon then sleeping.");
+      lv_obj_t *scr = lv_scr_act();
+      lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
+      lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+
+      lv_obj_t *ico = lv_label_create(scr);
+      lv_label_set_text(ico, LV_SYMBOL_BATTERY_EMPTY);
+      lv_obj_set_style_text_font(ico, &lv_font_montserrat_48, 0);
+      lv_obj_set_style_text_color(ico, lv_color_white(), 0);
+      lv_obj_align(ico, LV_ALIGN_CENTER, 0, 0);
+
+      // Pump LVGL for 5 s so the icon actually renders — then sleep forever.
+      uint32_t t0 = millis();
+      while (millis() - t0 < 5000) { lv_timer_handler(); delay(5); }
+
+      ledcWrite(GFX_BL, 0);   // blank backlight
+      delay(100);
+      // No wakeup source — device sleeps until RESET is pressed
+      esp_deep_sleep_start();
+      return;  // never reached
+    }
+  }
+
   Serial.println("[8] Building UI...");
   home_screen_init();
 

@@ -271,7 +271,7 @@ The home screen has **four invisible touch zones**. Tap to open a sub-screen. **
 ```
 ┌─────────────────────────────────────────┐
 │                   │                     │
-│   Smile GIF       │    Sleep GIF        │
+│   Smile GIF       │    Analog Clock     │
 │   (upper-left)    │    (upper-right)    │
 │                   │                     │
 ├───────────────────┼─────────────────────┤
@@ -383,8 +383,6 @@ Tapping the **upper-left** zone opens the smile GIF as usual. While this GIF is 
 The swap happens in-place — the GIF changes without closing the overlay or any visible flicker. The tilt is polled every 400 ms. A threshold of 0.4 g on the X axis (forward/backward) and Y axis (left/right) must be exceeded for the emotion to change, so small accidental movements are ignored.
 
 Tapping the screen dismisses the animation and returns to the clock, as usual.
-
-> The upper-right zone always opens `cruzr_sleep.gif` directly with no tilt interaction — tilt emotion mode is exclusive to the upper-left zone.
 
 **Long-press the smile GIF** to enter the Apps Menu (math gate first).
 

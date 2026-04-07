@@ -686,7 +686,7 @@ read: 8161
 | v1.4.0 | ✅ released | Emotion tilt GIF mode on upper-left tap (smile/sleep/sad/joy via IMU) |
 | v1.4.1 | ✅ released | Bugfix: Fix RTC drift after long deep sleep in the event of an alarm set, allow time for NTP sync |
 | v1.5.0 | ✅ released | Apps menu: math gate, Rock Paper Scissors, Rolling Dice, Flip a Coin, game sounds, DST-aware timezone |
-| v2.0.0 | workinprogress| Analog clock view & low-power startup gate |
+| v2.0.0 | ✅ released | Analog clock view & low-power startup gate |
 
 ## License
 

@@ -1,27 +1,44 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>ESP32-C6 Animated Clock</title>
-<link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <title>ESP32-C6 Animated Clock</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
+<!-- NAVBAR -->
+<nav class="navbar">
+  <div class="nav-logo">ESP32 Clock</div>
+  <div class="nav-links">
+    <a href="index.html">Home</a>
+    <a href="setup.html">Setup</a>
+    <a href="user-manual.html">Manual</a>
+    <a href="hardware.html">Hardware</a>
+    <a href="advanced.html">Advanced</a>
+    <a href="troubleshooting.html">Fix</a>
+  </div>
+</nav>
+
+<!-- HERO -->
 <header>
-  <h1>ESP32-C6 Animated Clock</h1>
-  <p>Smart LVGL-powered clock with animations, alarms and apps</p>
+  <h1>ESP32-C6 Touch LCD Animated Clock</h1>
+  <p>Smart animated clock for kids powered by LVGL v9</p>
   <button onclick="toggleTheme()">Toggle Theme</button>
 </header>
 
+<!-- HERO IMAGE -->
 <section>
   <img src="assets/demo.gif" class="hero">
 </section>
 
+<!-- DEMO -->
 <section>
   <h2>🎬 Demo</h2>
   <iframe src="https://www.youtube.com/embed/EWYB8bpZ4_g" allowfullscreen></iframe>
 </section>
 
+<!-- HIGHLIGHTS -->
 <section>
   <h2>✨ Highlights</h2>
   <ul>
@@ -32,6 +49,19 @@
   </ul>
 </section>
 
+<!-- ENGINEERING -->
+<section>
+  <h2>💼 Engineering Impact</h2>
+  <ul>
+    <li>LVGL v9 UI with non-blocking loop</li>
+    <li>SPI shared bus (display + SD + buzzer)</li>
+    <li>RTC persistence via SD logging</li>
+    <li>Config-driven firmware</li>
+    <li>IMU-based interaction system</li>
+  </ul>
+</section>
+
+<!-- DOC LINKS -->
 <section>
   <h2>📚 Documentation</h2>
   <ul>
@@ -43,8 +73,11 @@
   </ul>
 </section>
 
-<footer>Project by Andrei</footer>
+<footer>
+  <p>GitHub Project by Andrei</p>
+</footer>
 
 <script src="script.js"></script>
+
 </body>
 </html>

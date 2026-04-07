@@ -271,7 +271,7 @@ The home screen has **four invisible touch zones**. Tap to open a sub-screen. **
 ```
 ┌─────────────────────────────────────────┐
 │                   │                     │
-│   Smile GIF       │    Sleep GIF        │
+│   Smile GIF       │    Analog Clock     │
 │   (upper-left)    │    (upper-right)    │
 │                   │                     │
 ├───────────────────┼─────────────────────┤
@@ -348,6 +348,9 @@ Tap the centre to toggle WiFi on or off. No sub-screen. The description updates 
 
 ## Sub-screens
 
+### Analog Clock (upper-right tap)
+Top-right corner shows an Analog clock, view stays opened and refreshes every minute to display the correct time. Clicking on it will return  to the regular Time view. A filled sector centered on the clock center that starts at the top of the hour (12 o’clock) and sweeps clockwise to the current minute position, visually like a pie chart showing elapsed minutes in the current hour. 
+
 ### Status (lower-left tap)
 Title shows today's date (e.g. `Mon 23 Mar 2026`) when the RTC holds a valid time, falling back to `Status` on a fresh unconfigured boot. Shows WiFi connection status (SSID or disconnected), NTP sync state, and current brightness level. **Tilt the device left or right** while this screen is open to decrease or increase brightness in 10% steps.
 
@@ -383,8 +386,6 @@ Tapping the **upper-left** zone opens the smile GIF as usual. While this GIF is 
 The swap happens in-place — the GIF changes without closing the overlay or any visible flicker. The tilt is polled every 400 ms. A threshold of 0.4 g on the X axis (forward/backward) and Y axis (left/right) must be exceeded for the emotion to change, so small accidental movements are ignored.
 
 Tapping the screen dismisses the animation and returns to the clock, as usual.
-
-> The upper-right zone always opens `cruzr_sleep.gif` directly with no tilt interaction — tilt emotion mode is exclusive to the upper-left zone.
 
 **Long-press the smile GIF** to enter the Apps Menu (math gate first).
 
@@ -451,6 +452,7 @@ Long-press the battery screen to open the shutdown popup. After the countdown (o
 
 ### Waking up
 Press the **RESET** button on the device body. This always causes a clean reboot through the full boot sequence.
+Low-battery gate code will check at startup if the battery is > 10%.
 
 > The BOOT button on this board is wired to GPIO9, which is not a low-power GPIO on the ESP32-C6 and cannot trigger a wake-from-deep-sleep interrupt. RESET is the reliable wake method.
 
@@ -580,24 +582,43 @@ Skipped silently if any screen, overlay, or carousel is already open. Alarm and 
 ========== BOOT ==========
 [BOOT] Wake cause: cold boot / RESET button
 [1] Pulling CS pins HIGH...
+    Done.
 [2] SPI.begin(SCK=1, MISO=3, MOSI=2, CS=4)...
+    Done.
 [3] Initialising display...
     gfx->begin() OK.
+[BL] Backlight init at 50% (PWM=127)
+    Display ready.
 [4] Initialising touch...
+read: 8161
+    Touch ready.
 [4b] Initialising IMU...
     IMU ready.
 [5] Mounting SD card...
+    CS=4  SCK=1  MISO=3  MOSI=2  speed=4MHz
+    SD.begin() returned: true
     SD mounted OK — type: SD  size: 244 MB
 [CFG] Loading /config.ini...
 [CFG]   wifi.enabled       = true
-[CFG]   wifi.ssid          = myhomewifi
-[CFG]   wifi.password      = (hidden)
-[CFG]   clock.tz           = CET-1CEST,M3.5.0,M10.5.0/3
-[RTC] Restored time from log: 2026-03-30 09:15:00
-[TZ] Applied: CET-1CEST,M3.5.0,M10.5.0/3
+[CFG]   wifi.ssid     = myhomewifi
+[CFG]   wifi.password = (hidden)
+[CFG]   alarm.enabled      = true
+[CFG]   alarm.time         = 07:10
+[CFG]   alarm.beep_sequences = 5
+[CFG]   timer.duration      = 00:02
+[CFG]   timer.beep_sequences = 3
+[CFG]   menu.sounds    = true
+[CFG] Done. (49 lines read)
+[RTC] Restored UTC time from log: 2026-04-07 12:00:00
+    Checking for GIF at: /cruzr_emotions/cruzr_smile.gif
+    GIF found — 540954 bytes
 [6] Initialising LVGL...
 [7] Registering LVGL SD filesystem driver...
 [7b] Applying WiFi state from config...
+[TZ] Applied: CET-1CEST,M3.5.0,M10.5.0/3
+[WiFi] Enabling...
+     Done.
+[BAT] Boot check: 4.11V = 91%
 [8] Building UI...
 ========== SETUP DONE ==========
 ```
@@ -665,6 +686,7 @@ Skipped silently if any screen, overlay, or carousel is already open. Alarm and 
 | v1.4.0 | ✅ released | Emotion tilt GIF mode on upper-left tap (smile/sleep/sad/joy via IMU) |
 | v1.4.1 | ✅ released | Bugfix: Fix RTC drift after long deep sleep in the event of an alarm set, allow time for NTP sync |
 | v1.5.0 | ✅ released | Apps menu: math gate, Rock Paper Scissors, Rolling Dice, Flip a Coin, game sounds, DST-aware timezone |
+| v2.0.0 | ✅ released | Analog clock view & low-power startup gate |
 
 ## License
 

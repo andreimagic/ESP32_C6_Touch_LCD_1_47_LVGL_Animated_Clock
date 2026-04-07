@@ -141,7 +141,8 @@
             <p>Install via Arduino IDE Library Manager: <strong>LVGL</strong> (v9.5.0), <strong><a href="https://github.com/moononournation/Arduino_GFX" target="_blank">Arduino_GFX_Library</a> (1.6.5)</strong>, <strong>FastIMU (1.2.8)</strong>, and board-specific <strong>esp_lcd_touch_axs5106l (comes from ESP32 Arduino Core)</strong>.</p>
             
             <h3>lv_conf.h Settings</h3>
-            <p>Edit <code>Arduino/libraries/lvgl/src/lv_conf.h</code>:</p>
+            <p>The file <code>lv_conf.h</code> is included in the repo so there is no need to update the local library src file.</p>
+            <p>Here are some important changes in the lvgl configuration file:</p>
 <pre><code>#if 1  /* Enable the file */
 #define LV_USE_STDLIB_MALLOC    LV_STDLIB_CLIB
 #define LV_USE_STDLIB_STRING    LV_STDLIB_CLIB

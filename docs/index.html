@@ -8,9 +8,13 @@
 <body>
 
 <header>
-  <h1>ESP32-C6 Touch LCD Animated Clock</h1>
-  <p>LVGL-powered animated clock with multiple game modes</p>
+  <h1>ESP32-C6 Animated Clock</h1>
+  <p>Interactive LVGL UI with games, animations and touch control</p>
 </header>
+
+<section>
+  <img src="assets/demo.gif" style="width:100%; border-radius:16px;">
+</section>
 
 <section>
   <h2>🎬 Demo</h2>
@@ -50,10 +54,23 @@
 
 <section>
   <h2>📦 Dependencies</h2>
+
+  <h3>Board</h3>
+  <p>Install ESP32 board support from Espressif:</p>
+  <pre>
+  https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+  </pre>
+
+  <h3>Libraries (Arduino Library Manager)</h3>
   <ul>
-    <li>LVGL</li>
-    <li>TFT_eSPI (or display driver used)</li>
-    <li>Touch driver libraries</li>
+  <li>lvgl</li>
+  <li>TFT_eSPI</li>
+  </ul>
+
+  <h3>Configuration</h3>
+  <ul>
+  <li>Configure TFT_eSPI for Waveshare 1.47 display</li>
+  <li>Adjust lv_conf.h (color depth, memory)</li>
   </ul>
 </section>
 

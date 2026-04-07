@@ -15,6 +15,7 @@
     --warning-bg: #fff3cd;
     --warning-text: #856404;
     --warning-border: #ffeeba;
+    --gallery-bg: #000000;
 }
 
 [data-theme="dark"] {
@@ -33,6 +34,7 @@
     --warning-bg: #3f2c00;
     --warning-text: #fbbf24;
     --warning-border: #785a00;
+    --gallery-bg: #0f172a;
 }
 
 /* Global Styles */
@@ -220,8 +222,92 @@ section {
     padding: 2rem;
     margin-bottom: 2rem;
     box-shadow: 0 4px 6px var(--nav-shadow);
-    scroll-margin-top: 80px; /* Offset for sticky header */
+    scroll-margin-top: 80px;
 }
+
+/* --- GALLERY CAROUSEL --- */
+.gallery-section {
+    text-align: center;
+}
+
+.carousel {
+    position: relative;
+    max-width: 100%;
+    margin: 0 auto;
+    overflow: hidden;
+    border-radius: 8px;
+    background-color: var(--gallery-bg);
+}
+
+.carousel-inner {
+    display: flex;
+    transition: transform 0.4s ease-in-out;
+}
+
+.carousel-item {
+    min-width: 100%;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.carousel-item img {
+    width: 100%;
+    max-height: 450px;
+    object-fit: contain;
+    display: block;
+    border-radius: 8px;
+}
+
+.carousel-control {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    background-color: rgba(0, 0, 0, 0.5);
+    color: white;
+    border: none;
+    padding: 12px 16px;
+    cursor: pointer;
+    font-size: 20px;
+    border-radius: 50%;
+    transition: background-color 0.3s;
+    z-index: 10;
+}
+
+.carousel-control:hover {
+    background-color: rgba(0, 0, 0, 0.8);
+}
+
+.carousel-control.prev {
+    left: 15px;
+}
+
+.carousel-control.next {
+    right: 15px;
+}
+
+.carousel-indicators {
+    margin-top: 15px;
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+}
+
+.dot {
+    width: 12px;
+    height: 12px;
+    background-color: var(--border-color);
+    border-radius: 50%;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+.dot.active, .dot:hover {
+    background-color: var(--primary-color);
+}
+
+/* --- END GALLERY --- */
 
 .card.warning {
     background-color: var(--warning-bg);
@@ -348,5 +434,9 @@ footer {
 
     section {
         padding: 1.5rem;
+    }
+    
+    .carousel-item img {
+        max-height: 300px;
     }
 }

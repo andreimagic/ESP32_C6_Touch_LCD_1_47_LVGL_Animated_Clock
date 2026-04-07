@@ -1,0 +1,39 @@
+body {
+  font-family: Arial, sans-serif;
+  margin: 40px;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+header {
+  text-align: center;
+  margin-bottom: 40px;
+}
+
+h1 {
+  font-size: 2.5em;
+}
+
+section {
+  margin-bottom: 50px;
+}
+
+.gallery {
+  display: flex;
+  gap: 20px;
+}
+
+.gallery img {
+  width: 300px;
+  border-radius: 10px;
+}
+
+iframe {
+  border-radius: 12px;
+}
+
+footer {
+  text-align: center;
+  margin-top: 50px;
+  opacity: 0.6;
+}

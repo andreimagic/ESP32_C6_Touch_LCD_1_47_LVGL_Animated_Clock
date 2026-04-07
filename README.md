@@ -348,6 +348,9 @@ Tap the centre to toggle WiFi on or off. No sub-screen. The description updates 
 
 ## Sub-screens
 
+### Analog Clock (upper-right tap)
+Top-right corner shows an Analog clock, view stays opened and refreshes every minute to display the correct time. Clicking on it will return  to the regular Time view. A filled sector centered on the clock center that starts at the top of the hour (12 o’clock) and sweeps clockwise to the current minute position, visually like a pie chart showing elapsed minutes in the current hour. 
+
 ### Status (lower-left tap)
 Title shows today's date (e.g. `Mon 23 Mar 2026`) when the RTC holds a valid time, falling back to `Status` on a fresh unconfigured boot. Shows WiFi connection status (SSID or disconnected), NTP sync state, and current brightness level. **Tilt the device left or right** while this screen is open to decrease or increase brightness in 10% steps.
 

@@ -1,16 +1,16 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>ESP32-C6 Animated Clock</title>
-  <link rel="stylesheet" href="style.css">
+<meta charset="UTF-8">
+<title>ESP32-C6 Animated Clock</title>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <header>
   <h1>ESP32-C6 Animated Clock</h1>
-  <p>Interactive LVGL UI with games, animations and touch control</p>
-  <button id="themeToggle">Toggle Theme</button>
+  <p>Smart LVGL-powered clock with animations, alarms and apps</p>
+  <button onclick="toggleTheme()">Toggle Theme</button>
 </header>
 
 <section>
@@ -19,124 +19,32 @@
 
 <section>
   <h2>🎬 Demo</h2>
-  <iframe 
-    src="https://www.youtube.com/embed/EWYB8bpZ4_g"
-    allowfullscreen>
-  </iframe>
+  <iframe src="https://www.youtube.com/embed/EWYB8bpZ4_g" allowfullscreen></iframe>
 </section>
 
 <section>
-  <h2>📸 Gallery</h2>
-  <div class="gallery">
-    <img src="assets/image1.png">
-    <img src="assets/image2.png">
-    <img src="assets/image3.png">
-  </div>
-</section>
-
-<section>
-  <h2>🔧 Hardware</h2>
+  <h2>✨ Highlights</h2>
   <ul>
-    <li>ESP32-C6 Touch LCD 1.47 (Waveshare)</li>
-    <li>AXS5106L Touch Controller (I2C)</li>
-    <li>IMU sensor (FastIMU)</li>
+    <li>Animated GIF emotions with IMU interaction</li>
+    <li>Alarm + Timer with sound + animations</li>
+    <li>WiFi + NTP + RTC fallback</li>
+    <li>SD card config (no recompile)</li>
   </ul>
 </section>
 
 <section>
-  <h2>⚙️ Firmware Installation</h2>
-  <ol>
-    <li>Install Arduino IDE</li>
-    <li>Add ESP32 board support</li>
-    <li>Select "ESP32C6 Dev Module"</li>
-    <li>Upload the firmware</li>
-  </ol>
-</section>
-
-<section>
-  <h2>📦 Dependencies</h2>
-
-  <h3>Required Libraries (exact versions)</h3>
+  <h2>📚 Documentation</h2>
   <ul>
-    <li>Arduino_GFX_Library 1.12.5</li>
-    <li>lvgl 9.5.0</li>
-    <li>FastIMU 1.2.8</li>
-  </ul>
-
-  <h3>ESP32 Core</h3>
-  <ul>
-    <li>esp32 by Espressif Systems</li>
-    <li>Board: ESP32C6 Dev Module</li>
-  </ul>
-
-  <h3>Touch Driver</h3>
-  <ul>
-    <li>esp_lcd_touch_axs5106l.h (included in ESP32 core)</li>
-  </ul>
-
-  <p><b>Note:</b> lv_conf.h is already included and configured in this project.</p>
-</section>
-
-<section>
-  <h2>🔌 Pinout Overview</h2>
-  <ul>
-    <li>Touch Controller: AXS5106L (I2C)</li>
-    <li>Display: controlled via Arduino_GFX</li>
-    <li>IMU: FastIMU library</li>
-  </ul>
-
-  <img src="assets/pinout.png" class="pinout">
-</section>
-
-<section>
-  <h2>🎮 Features</h2>
-  <ul>
-    <li>Animated clock UI</li>
-    <li>Emotion-based animations</li>
-    <li>Multiple game modes</li>
-    <li>Joystick + servo control</li>
+    <li><a href="setup.html">Setup & Installation</a></li>
+    <li><a href="user-manual.html">User Manual</a></li>
+    <li><a href="hardware.html">Hardware</a></li>
+    <li><a href="advanced.html">Advanced Config</a></li>
+    <li><a href="troubleshooting.html">Troubleshooting</a></li>
   </ul>
 </section>
 
-<section>
-  <h2>📖 User Manual</h2>
-
-  <h3>Boot Modes</h3>
-  <ul>
-    <li>D5 HIGH → PullTheWire</li>
-    <li>D5 LOW → ToneQuest</li>
-    <li>D2 HIGH → Servo Mode</li>
-  </ul>
-
-  <h3>Controls</h3>
-  <ul>
-    <li>Touchscreen navigation</li>
-    <li>Joystick input for servo mode</li>
-  </ul>
-
-  <h3>Features</h3>
-  <ul>
-    <li>Animated emotional states</li>
-    <li>Interactive mini-games</li>
-    <li>Dynamic UI transitions</li>
-  </ul>
-</section>
-
-<section>
-  <h2>💼 Engineering Highlights</h2>
-  <ul>
-    <li>Embedded UI built with LVGL 9</li>
-    <li>Custom animation engine</li>
-    <li>GPIO-based boot mode selection</li>
-    <li>Real-time touch + IMU input handling</li>
-  </ul>
-</section>
-
-<footer>
-  <p>GitHub Project by Andrei</p>
-</footer>
+<footer>Project by Andrei</footer>
 
 <script src="script.js"></script>
-
 </body>
 </html>

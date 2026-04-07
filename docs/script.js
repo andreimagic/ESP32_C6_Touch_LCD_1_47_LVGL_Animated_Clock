@@ -1,5 +1,3 @@
-const toggle = document.getElementById("themeToggle");
-
-toggle.onclick = () => {
+function toggleTheme() {
   document.body.classList.toggle("light");
-};
+}

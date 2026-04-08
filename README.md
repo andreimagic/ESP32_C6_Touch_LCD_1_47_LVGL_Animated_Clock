@@ -2,7 +2,7 @@
 
 👉 https://andreimagic.github.io/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/
 
-[![Watch Demo](https://img.youtube.com/vi/EWYB8bpZ4_g/0.jpg)](https://youtu.be/EWYB8bpZ4_g)
+[![Watch Demo](https://img.youtube.com/vi/FQkz1KrQX3I/0.jpg)](https://youtu.be/FQkz1KrQX3I)
 
 # ESP32-C6 Touch LCD 1.47" — LVGL Animated Clock
 

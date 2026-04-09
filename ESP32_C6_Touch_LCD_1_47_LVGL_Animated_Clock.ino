@@ -2515,6 +2515,7 @@ static void app_anim_stop()
 static void apps_close()
 {
   app_anim_stop();
+  metro_stop();
   if (apps_cont) { lv_obj_del(apps_cont); apps_cont = nullptr; }
   app_subphase = 0;
 }
@@ -2524,6 +2525,8 @@ static void apps_longpress_cb(lv_event_t *e)
   if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
   lv_indev_wait_release(lv_indev_get_act());
   if (app_subphase > 0) {
+    metro_stop();
+    app_anim_stop();
     app_subphase = 0;
     apps_carousel_build();
   } else {
@@ -2532,9 +2535,9 @@ static void apps_longpress_cb(lv_event_t *e)
 }
 
 static void apps_left_cb(lv_event_t *e)
-{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+3)%4;apps_carousel_build();} }
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+4)%5;apps_carousel_build();} }
 static void apps_right_cb(lv_event_t *e)
-{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+1)%4;apps_carousel_build();} }
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+1)%5;apps_carousel_build();} }
 
 // Transparent full-screen tap zone helper for game screens
 static lv_obj_t *app_tapzone(lv_obj_t *p, lv_event_cb_t cb)
@@ -2902,6 +2905,260 @@ static void app_screen_dice_start()
   app_anim_timer = lv_timer_create(dice_anim_tick_cb, 500, nullptr);
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  METRONOME  (apps_idx == 3)
+//
+//  UI (320x172):
+//    Row1 y8:  BPM slider (148px) + large BPM number + "BPM" label
+//    Row2 y42: [-5] [+5] [START/STOP] buttons
+//    Row3 y76: beat dot indicators (lit RED=downbeat, GREEN=other)
+//    Row4 y113: time-sig tabs [2/4] [3/4] [4/4]
+//
+//  Timer is pure lv_timer — never blocked by WiFi or other LVGL tasks.
+//  Buzzer fires direct ledcChangeFrequency, independent of cfg.menu_sounds.
+// ══════════════════════════════════════════════════════════════════════════════
+
+#define METRO_BPM_MIN  60
+#define METRO_BPM_MAX  240
+#define METRO_TONE_HI  1800   // Hz — downbeat accent
+#define METRO_TONE_LO  900    // Hz — weak beats
+#define METRO_BEEP_MS  25     // ms each beep lasts
+
+static int         metro_bpm       = 90;
+static int         metro_beats     = 4;    // 2, 3, or 4
+static int         metro_beat_idx  = 0;
+static bool        metro_running   = false;
+static lv_timer_t *metro_timer     = nullptr;
+static lv_timer_t *metro_off_tmr   = nullptr;
+static lv_obj_t   *metro_dots[4]   = {nullptr,nullptr,nullptr,nullptr};
+static lv_obj_t   *metro_bpm_lbl   = nullptr;
+static lv_obj_t   *metro_slider    = nullptr;
+static lv_obj_t   *metro_start_lbl = nullptr;
+
+static void metro_build_ui();  // fwd
+
+static void metro_buzzer_off_cb(lv_timer_t *t)
+{
+  lv_timer_del(t); metro_off_tmr = nullptr;
+  ledcWrite(BUZZER_PIN, 0);
+  ledcChangeFrequency(BUZZER_PIN, 2000, 8);
+}
+
+static void metro_tick_cb(lv_timer_t * /*t*/)
+{
+  if (!apps_cont) return;
+  bool downbeat = (metro_beat_idx == 0);
+  // Sound
+  ledcChangeFrequency(BUZZER_PIN, downbeat ? METRO_TONE_HI : METRO_TONE_LO, 8);
+  ledcWrite(BUZZER_PIN, 110);
+  if (metro_off_tmr) { lv_timer_del(metro_off_tmr); metro_off_tmr = nullptr; }
+  metro_off_tmr = lv_timer_create(metro_buzzer_off_cb, METRO_BEEP_MS, nullptr);
+  lv_timer_set_repeat_count(metro_off_tmr, 1);
+  // Light dots
+  for (int i = 0; i < metro_beats; i++) {
+    if (!metro_dots[i]) continue;
+    if (i == metro_beat_idx)
+      lv_obj_set_style_bg_color(metro_dots[i],
+        downbeat ? lv_color_make(220,50,50) : lv_color_make(50,200,80), 0);
+    else
+      lv_obj_set_style_bg_color(metro_dots[i], lv_color_make(35,35,45), 0);
+  }
+  metro_beat_idx = (metro_beat_idx + 1) % metro_beats;
+}
+
+static void metro_stop()
+{
+  if (metro_timer)   { lv_timer_del(metro_timer);   metro_timer   = nullptr; }
+  if (metro_off_tmr) { lv_timer_del(metro_off_tmr); metro_off_tmr = nullptr; }
+  ledcWrite(BUZZER_PIN, 0);
+  ledcChangeFrequency(BUZZER_PIN, 2000, 8);
+  metro_running  = false;
+  metro_beat_idx = 0;
+  for (int i = 0; i < 4; i++)
+    if (metro_dots[i]) lv_obj_set_style_bg_color(metro_dots[i], lv_color_make(35,35,45), 0);
+  if (metro_start_lbl) lv_label_set_text(metro_start_lbl, "START");
+}
+
+static void metro_start()
+{
+  metro_stop();
+  metro_running  = true;
+  metro_beat_idx = 0;
+  uint32_t ms = (uint32_t)(60000UL / metro_bpm);
+  metro_timer = lv_timer_create(metro_tick_cb, ms, nullptr);
+  if (metro_start_lbl) lv_label_set_text(metro_start_lbl, "STOP");
+  metro_tick_cb(nullptr);  // fire immediately
+}
+
+static void metro_set_bpm(int bpm)
+{
+  if (bpm < METRO_BPM_MIN) bpm = METRO_BPM_MIN;
+  if (bpm > METRO_BPM_MAX) bpm = METRO_BPM_MAX;
+  metro_bpm = bpm;
+  if (metro_bpm_lbl) {
+    char buf[8]; snprintf(buf, sizeof(buf), "%d", metro_bpm);
+    lv_label_set_text(metro_bpm_lbl, buf);
+  }
+  if (metro_slider) lv_slider_set_value(metro_slider, metro_bpm, LV_ANIM_OFF);
+  if (metro_running && metro_timer)
+    lv_timer_set_period(metro_timer, (uint32_t)(60000UL / metro_bpm));
+}
+
+static void metro_minus5_cb(lv_event_t *e)
+{ if (lv_event_get_code(e)==LV_EVENT_CLICKED) metro_set_bpm(metro_bpm - 5); }
+static void metro_plus5_cb(lv_event_t *e)
+{ if (lv_event_get_code(e)==LV_EVENT_CLICKED) metro_set_bpm(metro_bpm + 5); }
+static void metro_start_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (metro_running) metro_stop(); else metro_start();
+}
+static void metro_slider_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
+  metro_set_bpm((int)lv_slider_get_value(metro_slider));
+}
+static void metro_sig_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  int sig = (int)(intptr_t)lv_event_get_user_data(e);
+  if (sig == metro_beats) return;
+  metro_beats = sig;
+  bool was = metro_running;
+  metro_stop();
+  metro_build_ui();
+  if (was) metro_start();
+}
+
+// Styled button helper
+static lv_obj_t *metro_btn(lv_obj_t *p, int x, int y, int w, int h,
+                            const char *txt, lv_event_cb_t cb, void *ud = nullptr)
+{
+  lv_obj_t *btn = lv_obj_create(p);
+  lv_obj_set_pos(btn, x, y); lv_obj_set_size(btn, w, h);
+  lv_obj_set_style_bg_color(btn, lv_color_make(42,42,52), 0);
+  lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(btn, lv_color_make(70,70,90), 0);
+  lv_obj_set_style_border_width(btn, 1, 0);
+  lv_obj_set_style_radius(btn, 6, 0);
+  lv_obj_set_style_pad_all(btn, 0, 0);
+  lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+  if (cb) lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, ud);
+  lv_obj_add_event_cb(btn, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+  lv_obj_t *lbl = lv_label_create(btn);
+  lv_label_set_text(lbl, txt);
+  lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
+  lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
+  return lbl;  // returns the label for easy update
+}
+
+static void metro_build_ui()
+{
+  lv_obj_clean(apps_cont);
+  lv_obj_add_event_cb(apps_cont, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+  for (int i = 0; i < 4; i++) metro_dots[i] = nullptr;
+  metro_bpm_lbl = metro_slider = metro_start_lbl = nullptr;
+
+  lv_obj_set_style_bg_color(apps_cont, lv_color_make(18,18,26), 0);
+
+  // ── Row 1: Slider + BPM (y=8, h=26) ──────────────────────────────────────
+  metro_slider = lv_slider_create(apps_cont);
+  lv_obj_set_pos(metro_slider, 8, 8);
+  lv_obj_set_size(metro_slider, 148, 26);
+  lv_slider_set_range(metro_slider, METRO_BPM_MIN, METRO_BPM_MAX);
+  lv_slider_set_value(metro_slider, metro_bpm, LV_ANIM_OFF);
+  lv_obj_set_style_bg_color(metro_slider, lv_color_make(50,50,65), LV_PART_MAIN);
+  lv_obj_set_style_radius(metro_slider, 4, LV_PART_MAIN);
+  lv_obj_set_style_border_width(metro_slider, 0, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(metro_slider, lv_color_make(60,180,60), LV_PART_INDICATOR);
+  lv_obj_set_style_radius(metro_slider, 4, LV_PART_INDICATOR);
+  lv_obj_set_style_bg_color(metro_slider, lv_color_make(80,220,80), LV_PART_KNOB);
+  lv_obj_set_style_radius(metro_slider, 4, LV_PART_KNOB);
+  lv_obj_set_style_pad_all(metro_slider, 4, LV_PART_KNOB);
+  lv_obj_add_event_cb(metro_slider, metro_slider_cb, LV_EVENT_VALUE_CHANGED, nullptr);
+
+  metro_bpm_lbl = lv_label_create(apps_cont);
+  char bpmBuf[8]; snprintf(bpmBuf, sizeof(bpmBuf), "%d", metro_bpm);
+  lv_label_set_text(metro_bpm_lbl, bpmBuf);
+  lv_obj_set_style_text_font(metro_bpm_lbl, &lv_font_montserrat_48, 0);
+  lv_obj_set_style_text_color(metro_bpm_lbl, lv_color_white(), 0);
+  lv_obj_set_pos(metro_bpm_lbl, 162, -6);
+
+  lv_obj_t *bpm_unit = lv_label_create(apps_cont);
+  lv_label_set_text(bpm_unit, "BPM");
+  lv_obj_set_style_text_font(bpm_unit, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(bpm_unit, lv_color_make(160,160,180), 0);
+  lv_obj_set_pos(bpm_unit, 228, 12);
+
+  // ── Row 2: Buttons (y=42, h=26) ───────────────────────────────────────────
+  metro_btn(apps_cont, 8,  42, 44, 26, "-5",    metro_minus5_cb);
+  metro_btn(apps_cont, 56, 42, 44, 26, "+5",    metro_plus5_cb);
+  metro_start_lbl = metro_btn(apps_cont, 104, 42, 76, 26,
+    metro_running ? "STOP" : "START", metro_start_cb);
+
+  // ── Row 3: Beat dots (y=76, h=28) ─────────────────────────────────────────
+  const int DH=28, DW=52, D_GAP=8;
+  int total_w = metro_beats * DW + (metro_beats - 1) * D_GAP;
+  int dx = (320 - total_w) / 2;
+  for (int i = 0; i < metro_beats; i++) {
+    lv_obj_t *dot = lv_obj_create(apps_cont);
+    lv_obj_set_pos(dot, dx, 76); lv_obj_set_size(dot, DW, DH);
+    lv_obj_set_style_bg_color(dot, lv_color_make(35,35,45), 0);
+    lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(dot, 8, 0);
+    lv_obj_set_style_border_width(dot, 0, 0);
+    lv_obj_set_style_pad_all(dot, 0, 0);
+    lv_obj_clear_flag(dot, (lv_obj_flag_t)(LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE));
+    metro_dots[i] = dot;
+    dx += DW + D_GAP;
+  }
+
+  // ── Row 4: Time-sig tabs (y=113, h=26) ────────────────────────────────────
+  const int sigs[3] = {2, 3, 4};
+  const int TW=52, T_GAP=6;
+  int tx = (320 - (3*TW + 2*T_GAP)) / 2;
+  for (int i = 0; i < 3; i++) {
+    bool active = (sigs[i] == metro_beats);
+    lv_obj_t *tab = lv_obj_create(apps_cont);
+    lv_obj_set_pos(tab, tx, 113); lv_obj_set_size(tab, TW, 26);
+    lv_obj_set_style_bg_color(tab,
+      active ? lv_color_white() : lv_color_make(42,42,52), 0);
+    lv_obj_set_style_bg_opa(tab, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(tab, lv_color_make(120,120,140), 0);
+    lv_obj_set_style_border_width(tab, 1, 0);
+    lv_obj_set_style_radius(tab, 5, 0);
+    lv_obj_set_style_pad_all(tab, 0, 0);
+    lv_obj_clear_flag(tab, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(tab, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(tab, metro_sig_cb, LV_EVENT_CLICKED, (void*)(intptr_t)sigs[i]);
+    lv_obj_add_event_cb(tab, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+    char stxt[6]; snprintf(stxt, sizeof(stxt), "%d/4", sigs[i]);
+    lv_obj_t *slbl = lv_label_create(tab);
+    lv_label_set_text(slbl, stxt);
+    lv_obj_set_style_text_font(slbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(slbl,
+      active ? lv_color_make(20,20,20) : lv_color_white(), 0);
+    lv_obj_align(slbl, LV_ALIGN_CENTER, 0, 0);
+    tx += TW + T_GAP;
+  }
+
+  // Hint
+  lv_obj_t *hint = lv_label_create(apps_cont);
+  lv_label_set_text(hint, "hold to exit");
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(hint, lv_color_make(70,70,95), 0);
+  lv_obj_set_style_text_opa(hint, LV_OPA_60, 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -4);
+}
+
+static void app_screen_metronome()
+{
+  app_subphase = 1;
+  metro_build_ui();
+}
+
 // ── App start tap: coin only (rps+dice use their own starters) ────────────────
 static void app_start_tap_cb(lv_event_t *e)
 {
@@ -2912,8 +3169,13 @@ static void app_start_tap_cb(lv_event_t *e)
 // ── Game start screen ─────────────────────────────────────────────────────────
 static void app_screen_start()
 {
-  app_anim_stop();  // cancel any running animation before starting new one
+  if (apps_idx >= 4) return;
+  app_anim_stop();
 
+  if (apps_idx == 3) {
+    app_screen_metronome();
+    return;
+  }
   if (apps_idx == 0) {
     app_screen_rps_start();
     return;
@@ -2948,7 +3210,7 @@ static void app_screen_start()
 static void apps_tap_enter_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-  if (apps_idx == 3) {
+  if (apps_idx == 4) {
     cfg.menu_sounds = !cfg.menu_sounds;
     save_config();
     if (cfg.menu_sounds) menu_tone_hi();  // confirm it's on
@@ -2965,11 +3227,12 @@ static void apps_carousel_build()
   app_subphase = 0;
   lv_obj_add_event_cb(apps_cont, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
 
-  static const struct { const char *name; const char *desc; } items[4] = {
+  static const struct { const char *name; const char *desc; } items[5] = {
     {"Rock Paper Scissors", "An interactive ASCII Game"},
     {"Rolling Dice",        "An interactive ASCII Dice"},
     {"Flip a Coin",         "An interactive ASCII Coin"},
-    {nullptr,               nullptr},  // item 3 = Sounds toggle
+    {"Metronome",           "Tempo keeper for musicians"},
+    {nullptr,               nullptr},  // item 4 = Sounds toggle
   };
 
   // Left arrow + zone
@@ -3000,7 +3263,7 @@ static void apps_carousel_build()
     lv_obj_add_event_cb(z,apps_right_cb,LV_EVENT_PRESSED,nullptr);
     lv_obj_add_event_cb(z,apps_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr); }
 
-  if (apps_idx == 3) {
+  if (apps_idx == 4) {
     // ── Sounds toggle (inline, mirrors WiFi toggle in settings) ──────────
     lv_obj_t *sicon = lv_label_create(apps_cont);
     lv_label_set_text(sicon, cfg.menu_sounds ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE);
@@ -3044,20 +3307,20 @@ static void apps_carousel_build()
 
   // Hint above dots
   lv_obj_t *hint = lv_label_create(apps_cont);
-  lv_label_set_text(hint, apps_idx == 3 ? "tap to toggle  .  hold to exit"
+  lv_label_set_text(hint, apps_idx == 4 ? "tap to toggle  .  hold to exit"
                                          : "tap to play  .  hold to exit");
   lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(hint, lv_color_make(70, 70, 95), 0);
   lv_obj_set_style_text_opa(hint, LV_OPA_60, 0);
   lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -18);
 
-  // 4 position dots
-  for (int i = 0; i < 4; i++) {
+  // 5 position dots
+  for (int i = 0; i < 5; i++) {
     lv_obj_t *dot = lv_label_create(apps_cont);
     lv_obj_set_style_text_font(dot, &dejavu_mono_14, 0);
-    lv_label_set_text(dot, i==apps_idx ? "\xe2\x97\x8f" : "\xe2\x97\x8b"); // "●" : "○"
+    lv_label_set_text(dot, i==apps_idx ? "\xe2\x97\x8f" : "\xe2\x97\x8b");
     lv_obj_set_style_text_color(dot, i==apps_idx ? lv_color_white() : lv_color_make(80,80,100), 0);
-    lv_obj_set_pos(dot, 137 + i * 14, 156);
+    lv_obj_set_pos(dot, 130 + i * 14, 156);
   }
 }
 

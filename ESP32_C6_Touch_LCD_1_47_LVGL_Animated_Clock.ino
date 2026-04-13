@@ -1155,6 +1155,7 @@ static void run_scheduled_animation(int hour)
   if (!cfg.anim_schedule_enabled) return;
   if (!sdCardAvailable)           return;
   if (overlay_cont)               return;  // another screen already open
+  if (apps_cont)                  return;  // apps menu open (incl. metronome)
   if (!home_time_lbl)             return;  // clock face not visible yet
 
   const char *path = is_night_time(hour) ? GIF_SLEEP_PATH : GIF_SMILE_PATH;
@@ -2966,7 +2967,8 @@ static void metro_tick_cb(lv_timer_t * /*t*/)
   metro_beat_idx = (metro_beat_idx + 1) % metro_beats;
 }
 
-static void metro_stop()
+// Stop audio+timer and reset visual state — UI pointers stay valid.
+static void metro_stop_audio()
 {
   if (metro_timer)   { lv_timer_del(metro_timer);   metro_timer   = nullptr; }
   if (metro_off_tmr) { lv_timer_del(metro_off_tmr); metro_off_tmr = nullptr; }
@@ -2977,17 +2979,32 @@ static void metro_stop()
   for (int i = 0; i < 4; i++)
     if (metro_dots[i]) lv_obj_set_style_bg_color(metro_dots[i], lv_color_make(35,35,45), 0);
   if (metro_start_lbl) lv_label_set_text(metro_start_lbl, "START");
+  // UI pointers intentionally NOT nulled — screen is still alive.
+}
+
+// Null all UI refs. Call ONLY when the metronome screen is being destroyed.
+static void metro_clear_ui()
+{
+  for (int i = 0; i < 4; i++) metro_dots[i] = nullptr;
+  metro_start_lbl = metro_slider = metro_bpm_lbl = nullptr;
+}
+
+// Full stop: audio off + UI refs nulled. For apps_close / longpress exit.
+static void metro_stop()
+{
+  metro_stop_audio();
+  metro_clear_ui();
 }
 
 static void metro_start()
 {
-  metro_stop();
+  metro_stop_audio();  // stop timer/buzzer; UI pointers stay valid
   metro_running  = true;
   metro_beat_idx = 0;
   uint32_t ms = (uint32_t)(60000UL / metro_bpm);
   metro_timer = lv_timer_create(metro_tick_cb, ms, nullptr);
   if (metro_start_lbl) lv_label_set_text(metro_start_lbl, "STOP");
-  metro_tick_cb(nullptr);  // fire immediately
+  metro_tick_cb(nullptr);  // fire first beat immediately
 }
 
 static void metro_set_bpm(int bpm)
@@ -3004,19 +3021,29 @@ static void metro_set_bpm(int bpm)
     lv_timer_set_period(metro_timer, (uint32_t)(60000UL / metro_bpm));
 }
 
-static void metro_minus5_cb(lv_event_t *e)
-{ if (lv_event_get_code(e)==LV_EVENT_CLICKED) metro_set_bpm(metro_bpm - 5); }
-static void metro_plus5_cb(lv_event_t *e)
-{ if (lv_event_get_code(e)==LV_EVENT_CLICKED) metro_set_bpm(metro_bpm + 5); }
+static void metro_minus_cb(lv_event_t *e)
+{ if (lv_event_get_code(e)==LV_EVENT_CLICKED) metro_set_bpm(metro_bpm - 1); }
+static void metro_plus_cb(lv_event_t *e)
+{ if (lv_event_get_code(e)==LV_EVENT_CLICKED) metro_set_bpm(metro_bpm + 1); }
 static void metro_start_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-  if (metro_running) metro_stop(); else metro_start();
+  if (metro_running) metro_stop_audio(); else metro_start();
 }
 static void metro_slider_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
-  metro_set_bpm((int)lv_slider_get_value(metro_slider));
+  // Use event target — global metro_slider may be nullptr after metro_stop()
+  lv_obj_t *sl = (lv_obj_t *)lv_event_get_target(e);
+  if (!sl) return;
+  int val = (int)lv_slider_get_value(sl);
+  metro_bpm = val;  // update bpm directly, avoid lv_slider_set_value loop
+  if (metro_bpm_lbl) {
+    char buf[8]; snprintf(buf, sizeof(buf), "%d", metro_bpm);
+    lv_label_set_text(metro_bpm_lbl, buf);
+  }
+  if (metro_running && metro_timer)
+    lv_timer_set_period(metro_timer, (uint32_t)(60000UL / metro_bpm));
 }
 static void metro_sig_cb(lv_event_t *e)
 {
@@ -3025,7 +3052,7 @@ static void metro_sig_cb(lv_event_t *e)
   if (sig == metro_beats) return;
   metro_beats = sig;
   bool was = metro_running;
-  metro_stop();
+  metro_stop_audio();
   metro_build_ui();
   if (was) metro_start();
 }
@@ -3063,51 +3090,84 @@ static void metro_build_ui()
 
   lv_obj_set_style_bg_color(apps_cont, lv_color_make(18,18,26), 0);
 
-  // ── Row 1: Slider + BPM (y=8, h=26) ──────────────────────────────────────
+  // ── Layout constants ───────────────────────────────────────────────────────
+  // Row1 y=4  h=30: slider (thin track) + BPM value + "BPM" label
+  // Row2 y=40 h=34: [-1] [+1] [START] full-width buttons
+  // Row3 y=82 h=20: beat dots (shorter)
+  // Row4 y=110 h=26: time-sig tabs
+  // Hint y=148
+  //
+  // Margins: 8px left/right. Button gaps: 4px.
+  // -5: w=90  +5: w=90  START: w=116  (8+90+4+90+4+116+8=320)
+  const int LM = 8;         // left margin
+  const int BTN_H = 34;
+  const int BTN_Y = 40;
+  const int BTN_SM = 90;    // small button width
+  const int BTN_GAP = 4;
+  const int BTN_START = 320 - LM - BTN_SM - BTN_GAP - BTN_SM - BTN_GAP - LM;  // 116
+
+  // ── Row 1: Slider + BPM number ─────────────────────────────────────────────
+  // Slider: x=8, y=12, width=174, track h=12 (thin)
+  // BPM:    x=190, y=4, montserrat_24 (fits 3 digits: ~44px wide)
+  // Unit:   x=238, y=14, montserrat_14
+  const int SL_X=LM, SL_Y=12, SL_W=174, SL_H=12;
+
   metro_slider = lv_slider_create(apps_cont);
-  lv_obj_set_pos(metro_slider, 8, 8);
-  lv_obj_set_size(metro_slider, 148, 26);
+  lv_obj_set_pos(metro_slider, SL_X, SL_Y);
+  lv_obj_set_size(metro_slider, SL_W, SL_H);
   lv_slider_set_range(metro_slider, METRO_BPM_MIN, METRO_BPM_MAX);
   lv_slider_set_value(metro_slider, metro_bpm, LV_ANIM_OFF);
+  // Thin track
   lv_obj_set_style_bg_color(metro_slider, lv_color_make(50,50,65), LV_PART_MAIN);
-  lv_obj_set_style_radius(metro_slider, 4, LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(metro_slider, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_radius(metro_slider, 3, LV_PART_MAIN);
   lv_obj_set_style_border_width(metro_slider, 0, LV_PART_MAIN);
+  lv_obj_set_style_height(metro_slider, SL_H, LV_PART_MAIN);
+  // Indicator
   lv_obj_set_style_bg_color(metro_slider, lv_color_make(60,180,60), LV_PART_INDICATOR);
-  lv_obj_set_style_radius(metro_slider, 4, LV_PART_INDICATOR);
+  lv_obj_set_style_bg_opa(metro_slider, LV_OPA_COVER, LV_PART_INDICATOR);
+  lv_obj_set_style_radius(metro_slider, 3, LV_PART_INDICATOR);
+  // Knob (keep larger for touch)
   lv_obj_set_style_bg_color(metro_slider, lv_color_make(80,220,80), LV_PART_KNOB);
-  lv_obj_set_style_radius(metro_slider, 4, LV_PART_KNOB);
-  lv_obj_set_style_pad_all(metro_slider, 4, LV_PART_KNOB);
+  lv_obj_set_style_bg_opa(metro_slider, LV_OPA_COVER, LV_PART_KNOB);
+  lv_obj_set_style_radius(metro_slider, 5, LV_PART_KNOB);
+  lv_obj_set_style_pad_all(metro_slider, 6, LV_PART_KNOB);
+  // Events — add longpress so slider area can exit too
   lv_obj_add_event_cb(metro_slider, metro_slider_cb, LV_EVENT_VALUE_CHANGED, nullptr);
+  // lv_obj_add_event_cb(metro_slider, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
 
+  // BPM value — montserrat_24: "240" = ~46px wide, 24px tall, no overlap
   metro_bpm_lbl = lv_label_create(apps_cont);
   char bpmBuf[8]; snprintf(bpmBuf, sizeof(bpmBuf), "%d", metro_bpm);
   lv_label_set_text(metro_bpm_lbl, bpmBuf);
-  lv_obj_set_style_text_font(metro_bpm_lbl, &lv_font_montserrat_48, 0);
+  lv_obj_set_style_text_font(metro_bpm_lbl, &lv_font_montserrat_24, 0);
   lv_obj_set_style_text_color(metro_bpm_lbl, lv_color_white(), 0);
-  lv_obj_set_pos(metro_bpm_lbl, 162, -6);
+  lv_obj_set_pos(metro_bpm_lbl, SL_X + SL_W + 8, 6);  // right of slider, vertically centred
 
   lv_obj_t *bpm_unit = lv_label_create(apps_cont);
   lv_label_set_text(bpm_unit, "BPM");
   lv_obj_set_style_text_font(bpm_unit, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(bpm_unit, lv_color_make(160,160,180), 0);
-  lv_obj_set_pos(bpm_unit, 228, 12);
+  lv_obj_set_pos(bpm_unit, SL_X + SL_W + 60, 12);  // right of BPM number
 
-  // ── Row 2: Buttons (y=42, h=26) ───────────────────────────────────────────
-  metro_btn(apps_cont, 8,  42, 44, 26, "-5",    metro_minus5_cb);
-  metro_btn(apps_cont, 56, 42, 44, 26, "+5",    metro_plus5_cb);
-  metro_start_lbl = metro_btn(apps_cont, 104, 42, 76, 26,
+  // ── Row 2: Full-width buttons ─────────────────────────────────────────────
+  int bx = LM;
+  metro_btn(apps_cont, bx,        BTN_Y, BTN_SM,    BTN_H, "-1",   metro_minus_cb);
+  metro_btn(apps_cont, bx+BTN_SM+BTN_GAP, BTN_Y, BTN_SM, BTN_H, "+1", metro_plus_cb);
+  metro_start_lbl = metro_btn(apps_cont,
+    bx + BTN_SM + BTN_GAP + BTN_SM + BTN_GAP, BTN_Y, BTN_START, BTN_H,
     metro_running ? "STOP" : "START", metro_start_cb);
 
-  // ── Row 3: Beat dots (y=76, h=28) ─────────────────────────────────────────
-  const int DH=28, DW=52, D_GAP=8;
+  // ── Row 3: Beat dots (shorter: h=20) ─────────────────────────────────────
+  const int DH=20, DW=56, D_GAP=8;
   int total_w = metro_beats * DW + (metro_beats - 1) * D_GAP;
   int dx = (320 - total_w) / 2;
   for (int i = 0; i < metro_beats; i++) {
     lv_obj_t *dot = lv_obj_create(apps_cont);
-    lv_obj_set_pos(dot, dx, 76); lv_obj_set_size(dot, DW, DH);
+    lv_obj_set_pos(dot, dx, 82); lv_obj_set_size(dot, DW, DH);
     lv_obj_set_style_bg_color(dot, lv_color_make(35,35,45), 0);
     lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(dot, 8, 0);
+    lv_obj_set_style_radius(dot, 6, 0);
     lv_obj_set_style_border_width(dot, 0, 0);
     lv_obj_set_style_pad_all(dot, 0, 0);
     lv_obj_clear_flag(dot, (lv_obj_flag_t)(LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE));
@@ -3115,14 +3175,14 @@ static void metro_build_ui()
     dx += DW + D_GAP;
   }
 
-  // ── Row 4: Time-sig tabs (y=113, h=26) ────────────────────────────────────
+  // ── Row 4: Time-sig tabs ──────────────────────────────────────────────────
   const int sigs[3] = {2, 3, 4};
-  const int TW=52, T_GAP=6;
+  const int TW=56, T_GAP=6;
   int tx = (320 - (3*TW + 2*T_GAP)) / 2;
   for (int i = 0; i < 3; i++) {
     bool active = (sigs[i] == metro_beats);
     lv_obj_t *tab = lv_obj_create(apps_cont);
-    lv_obj_set_pos(tab, tx, 113); lv_obj_set_size(tab, TW, 26);
+    lv_obj_set_pos(tab, tx, 110); lv_obj_set_size(tab, TW, 26);
     lv_obj_set_style_bg_color(tab,
       active ? lv_color_white() : lv_color_make(42,42,52), 0);
     lv_obj_set_style_bg_opa(tab, LV_OPA_COVER, 0);
@@ -3223,6 +3283,7 @@ static void apps_tap_enter_cb(lv_event_t *e)
 // ── Apps carousel builder ─────────────────────────────────────────────────────
 static void apps_carousel_build()
 {
+  metro_clear_ui();  // null UI refs before lv_obj_clean frees them
   lv_obj_clean(apps_cont);
   app_subphase = 0;
   lv_obj_add_event_cb(apps_cont, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);

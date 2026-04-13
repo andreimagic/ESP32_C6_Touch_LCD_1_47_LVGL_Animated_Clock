@@ -39,6 +39,7 @@
 #include <WiFiMulti.h>
 #include <time.h>
 #include <FastIMU.h>
+#include "esp_timer.h"   // hardware microsecond timer for accurate metronome
 
 
 
@@ -2929,8 +2930,11 @@ static int         metro_bpm       = 90;
 static int         metro_beats     = 4;    // 2, 3, or 4
 static int         metro_beat_idx  = 0;
 static bool        metro_running   = false;
-static lv_timer_t *metro_timer     = nullptr;
-static lv_timer_t *metro_off_tmr   = nullptr;
+static esp_timer_handle_t metro_hw_timer   = nullptr;  // hw beat timer (µs accurate)
+static esp_timer_handle_t metro_hw_off_tmr = nullptr;  // hw buzzer-off timer
+static lv_timer_t        *metro_dot_timer  = nullptr;  // LVGL poll for dot updates
+static volatile int       metro_beat_fired = -1;       // beat idx set by HW, read by LVGL
+static volatile bool      metro_beat_down  = false;    // was it a downbeat
 static lv_obj_t   *metro_dots[4]   = {nullptr,nullptr,nullptr,nullptr};
 static lv_obj_t   *metro_bpm_lbl   = nullptr;
 static lv_obj_t   *metro_slider    = nullptr;
@@ -2938,53 +2942,73 @@ static lv_obj_t   *metro_start_lbl = nullptr;
 
 static void metro_build_ui();  // fwd
 
-static void metro_buzzer_off_cb(lv_timer_t *t)
+// HW timer callback — safe to call ledcWrite from timer task context
+static void metro_hw_off_cb(void *)
 {
-  lv_timer_del(t); metro_off_tmr = nullptr;
   ledcWrite(BUZZER_PIN, 0);
   ledcChangeFrequency(BUZZER_PIN, 2000, 8);
 }
 
-static void metro_tick_cb(lv_timer_t * /*t*/)
+// ── Hardware timer callback (runs in esp_timer task, NOT in LVGL loop) ──────
+// Only touches hardware registers. Signals LVGL via volatile flags.
+static void metro_hw_beat_cb(void *)
+{
+  int  beat = metro_beat_idx;
+  bool down = (beat == 0);
+  // Fire buzzer — register write, safe from any task context
+  ledcChangeFrequency(BUZZER_PIN, down ? METRO_TONE_HI : METRO_TONE_LO, 8);
+  ledcWrite(BUZZER_PIN, 110);
+  // Schedule buzzer off via second hw timer
+  if (metro_hw_off_tmr) esp_timer_start_once(metro_hw_off_tmr, METRO_BEEP_MS * 1000ULL);
+  // Signal LVGL dot-update timer (consumed in metro_dot_poll_cb)
+  metro_beat_down  = down;
+  metro_beat_fired = beat;   // atomic int write on RISC-V
+  // Advance beat index
+  metro_beat_idx = (beat + 1) % metro_beats;
+}
+
+// ── LVGL poll timer (20 ms) — updates dot colours from HW beat signal ────────
+static void metro_dot_poll_cb(lv_timer_t *)
 {
   if (!apps_cont) return;
-  bool downbeat = (metro_beat_idx == 0);
-  // Sound
-  ledcChangeFrequency(BUZZER_PIN, downbeat ? METRO_TONE_HI : METRO_TONE_LO, 8);
-  ledcWrite(BUZZER_PIN, 110);
-  if (metro_off_tmr) { lv_timer_del(metro_off_tmr); metro_off_tmr = nullptr; }
-  metro_off_tmr = lv_timer_create(metro_buzzer_off_cb, METRO_BEEP_MS, nullptr);
-  lv_timer_set_repeat_count(metro_off_tmr, 1);
-  // Light dots
+  int fired = metro_beat_fired;
+  if (fired < 0) return;       // no new beat since last poll
+  metro_beat_fired = -1;        // consume
+  bool down = metro_beat_down;
   for (int i = 0; i < metro_beats; i++) {
     if (!metro_dots[i]) continue;
-    if (i == metro_beat_idx)
-      lv_obj_set_style_bg_color(metro_dots[i],
-        downbeat ? lv_color_make(220,50,50) : lv_color_make(50,200,80), 0);
-    else
-      lv_obj_set_style_bg_color(metro_dots[i], lv_color_make(35,35,45), 0);
+    lv_obj_set_style_bg_color(metro_dots[i],
+      (i == fired) ? (down ? lv_color_make(220,50,50) : lv_color_make(50,200,80))
+                   : lv_color_make(35,35,45), 0);
   }
-  metro_beat_idx = (metro_beat_idx + 1) % metro_beats;
 }
 
 // Stop audio+timer and reset visual state — UI pointers stay valid.
 static void metro_stop_audio()
 {
-  if (metro_timer)   { lv_timer_del(metro_timer);   metro_timer   = nullptr; }
-  if (metro_off_tmr) { lv_timer_del(metro_off_tmr); metro_off_tmr = nullptr; }
+  // Stop hw timers (safe to stop an already-stopped timer)
+  if (metro_hw_timer)   esp_timer_stop(metro_hw_timer);
+  if (metro_hw_off_tmr) esp_timer_stop(metro_hw_off_tmr);
+  // Stop LVGL dot poll timer
+  if (metro_dot_timer) { lv_timer_del(metro_dot_timer); metro_dot_timer = nullptr; }
   ledcWrite(BUZZER_PIN, 0);
   ledcChangeFrequency(BUZZER_PIN, 2000, 8);
-  metro_running  = false;
-  metro_beat_idx = 0;
+  metro_running    = false;
+  metro_beat_idx   = 0;
+  metro_beat_fired = -1;
   for (int i = 0; i < 4; i++)
     if (metro_dots[i]) lv_obj_set_style_bg_color(metro_dots[i], lv_color_make(35,35,45), 0);
   if (metro_start_lbl) lv_label_set_text(metro_start_lbl, "START");
   // UI pointers intentionally NOT nulled — screen is still alive.
 }
 
-// Null all UI refs. Call ONLY when the metronome screen is being destroyed.
+// Null all UI refs and delete hw timers. Call ONLY when screen is destroyed.
 static void metro_clear_ui()
 {
+  // Delete hw timers — they must be destroyed and re-created on next open
+  if (metro_hw_timer)   { esp_timer_stop(metro_hw_timer);   esp_timer_delete(metro_hw_timer);   metro_hw_timer   = nullptr; }
+  if (metro_hw_off_tmr) { esp_timer_stop(metro_hw_off_tmr); esp_timer_delete(metro_hw_off_tmr); metro_hw_off_tmr = nullptr; }
+  if (metro_dot_timer)  { lv_timer_del(metro_dot_timer);    metro_dot_timer  = nullptr; }
   for (int i = 0; i < 4; i++) metro_dots[i] = nullptr;
   metro_start_lbl = metro_slider = metro_bpm_lbl = nullptr;
 }
@@ -2998,13 +3022,36 @@ static void metro_stop()
 
 static void metro_start()
 {
-  metro_stop_audio();  // stop timer/buzzer; UI pointers stay valid
-  metro_running  = true;
-  metro_beat_idx = 0;
-  uint32_t ms = (uint32_t)(60000UL / metro_bpm);
-  metro_timer = lv_timer_create(metro_tick_cb, ms, nullptr);
+  metro_stop_audio();  // stop hw timer; UI pointers stay valid
+
+  // Create hw timers on first use (or after screen rebuild)
+  if (!metro_hw_timer) {
+    esp_timer_create_args_t ba = {};
+    ba.callback = metro_hw_beat_cb;
+    ba.name     = "m_beat";
+    esp_timer_create(&ba, &metro_hw_timer);
+  }
+  if (!metro_hw_off_tmr) {
+    esp_timer_create_args_t oa = {};
+    oa.callback = metro_hw_off_cb;
+    oa.name     = "m_off";
+    esp_timer_create(&oa, &metro_hw_off_tmr);
+  }
+
+  metro_running    = true;
+  metro_beat_idx   = 0;
+  metro_beat_fired = -1;
+
+  // Float division → round to nearest µs → sub-µs residual error per beat
+  uint64_t period_us = (uint64_t)(60000000.0f / (float)metro_bpm + 0.5f);
+  esp_timer_start_periodic(metro_hw_timer, period_us);
+
+  // LVGL poll at 20 ms — updates dot colours from hw beat signal
+  if (!metro_dot_timer)
+    metro_dot_timer = lv_timer_create(metro_dot_poll_cb, 20, nullptr);
+
   if (metro_start_lbl) lv_label_set_text(metro_start_lbl, "STOP");
-  metro_tick_cb(nullptr);  // fire first beat immediately
+  metro_hw_beat_cb(nullptr);  // fire first beat immediately
 }
 
 static void metro_set_bpm(int bpm)
@@ -3017,8 +3064,11 @@ static void metro_set_bpm(int bpm)
     lv_label_set_text(metro_bpm_lbl, buf);
   }
   if (metro_slider) lv_slider_set_value(metro_slider, metro_bpm, LV_ANIM_OFF);
-  if (metro_running && metro_timer)
-    lv_timer_set_period(metro_timer, (uint32_t)(60000UL / metro_bpm));
+  if (metro_running && metro_hw_timer) {
+    uint64_t period_us = (uint64_t)(60000000.0f / (float)metro_bpm + 0.5f);
+    esp_timer_stop(metro_hw_timer);
+    esp_timer_start_periodic(metro_hw_timer, period_us);
+  }
 }
 
 static void metro_minus_cb(lv_event_t *e)
@@ -3042,8 +3092,11 @@ static void metro_slider_cb(lv_event_t *e)
     char buf[8]; snprintf(buf, sizeof(buf), "%d", metro_bpm);
     lv_label_set_text(metro_bpm_lbl, buf);
   }
-  if (metro_running && metro_timer)
-    lv_timer_set_period(metro_timer, (uint32_t)(60000UL / metro_bpm));
+  if (metro_running && metro_hw_timer) {
+    uint64_t period_us = (uint64_t)(60000000.0f / (float)metro_bpm + 0.5f);
+    esp_timer_stop(metro_hw_timer);
+    esp_timer_start_periodic(metro_hw_timer, period_us);
+  }
 }
 static void metro_sig_cb(lv_event_t *e)
 {

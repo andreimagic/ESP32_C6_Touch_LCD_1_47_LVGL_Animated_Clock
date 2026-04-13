@@ -3110,7 +3110,7 @@ static void metro_build_ui()
   // Slider: x=8, y=12, width=174, track h=12 (thin)
   // BPM:    x=190, y=4, montserrat_24 (fits 3 digits: ~44px wide)
   // Unit:   x=238, y=14, montserrat_14
-  const int SL_X=LM, SL_Y=12, SL_W=174, SL_H=12;
+  const int SL_X=LM+12, SL_Y=12, SL_W=174, SL_H=12;
 
   metro_slider = lv_slider_create(apps_cont);
   lv_obj_set_pos(metro_slider, SL_X, SL_Y);
@@ -3142,13 +3142,13 @@ static void metro_build_ui()
   lv_label_set_text(metro_bpm_lbl, bpmBuf);
   lv_obj_set_style_text_font(metro_bpm_lbl, &lv_font_montserrat_24, 0);
   lv_obj_set_style_text_color(metro_bpm_lbl, lv_color_white(), 0);
-  lv_obj_set_pos(metro_bpm_lbl, SL_X + SL_W + 8, 6);  // right of slider, vertically centred
+  lv_obj_set_pos(metro_bpm_lbl, SL_X + SL_W + 20, 6);  // right of slider, vertically centred
 
   lv_obj_t *bpm_unit = lv_label_create(apps_cont);
   lv_label_set_text(bpm_unit, "BPM");
   lv_obj_set_style_text_font(bpm_unit, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(bpm_unit, lv_color_make(160,160,180), 0);
-  lv_obj_set_pos(bpm_unit, SL_X + SL_W + 60, 12);  // right of BPM number
+  lv_obj_set_pos(bpm_unit, SL_X + SL_W + 70, 12);  // right of BPM number
 
   // ── Row 2: Full-width buttons ─────────────────────────────────────────────
   int bx = LM;

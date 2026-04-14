@@ -12,12 +12,6 @@ A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47
 
 ---
 
-## ⚠️ Disclaimer — ASCII Art
-
-Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.eu/video-games/pokemon](https://www.asciiart.eu/video-games/pokemon). All Pokémon characters and names are trademarks of **The Pokémon Company International**. This project is not affiliated with, sponsored by, or endorsed by The Pokémon Company. The art is used here solely for non-commercial, personal, educational purposes.
-
----
-
 ## Features
 
 | Feature | Details |
@@ -58,11 +52,17 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 
 ### Board
 
-**Waveshare ESP32-C6 Touch LCD 1.47"**
+**[Waveshare ESP32-C6 Touch LCD 1.47"](https://www.waveshare.com/wiki/ESP32-C6-Touch-LCD-1.47)**
 
-Select **ESP32C6 Dev Module** in Arduino IDE. The board integrates the ST7789 display, AXS5106L touch controller, QMI8658 IMU, ETA6098 battery charger, and SD card slot on a single compact PCB.
+The project is built on the Waveshare ESP32-C6 Touch LCD 1.47" development board, which features a 1.47-inch ST7789 display and an AXS5106L touch controller. The board also includes a QMI8658 IMU for motion sensing, an ETA6098 battery charger for power management, and an SD card slot for storage. This all-in-one design simplifies wiring and allows for a compact form factor.
+            
+You can purchase the board from [Waveshare](https://www.waveshare.com/esp32-c6-touch-lcd-1.47.htm?&aff_id=150729). It’s an affiliate link, so if you use it, you’re basically buying me a coffee (and I really appreciate it)! ☕
+
+Select **ESP32C6 Dev Module** in Arduino IDE. 
 
 ### Display
+
+Key specifications of the display include a resolution of 172 × 320 pixels in landscape mode (ROTATION = 1) and an SPI interface for communication. The touch controller uses I²C for input handling. The board's integrated components make it ideal for building interactive projects like this animated clock.
 
 | Component | Value |
 |---|---|
@@ -107,16 +107,18 @@ Connect a **passive buzzer** (not active) between **GPIO 5** and **GND**. If the
 
 ## Software Dependencies
 
+Install board through **Arduino IDE → Tools → Board → Boards Manager**, search `esp32` and install **esp32 by Espressif** (this will provide SD, WiFi & WifiMulti libraries).
+
 Install all libraries through **Arduino IDE → Library Manager** unless noted otherwise.
 
 | Library | Version tested | Purpose |
 |---|---|---|
 | **LVGL** | 9.5.0 | UI framework — widgets, animations, timers |
 | **Arduino_GFX_Library** | latest | ST7789 display driver |
-| **SD** | built-in ESP32 | SD card file access |
-| **WiFi / WiFiMulti** | built-in ESP32 | WiFi connection |
 | **FastIMU** | latest | QMI8658 accelerometer (tilt brightness + emotion tilt) |
-| **esp_lcd_touch_axs5106l** | board-specific | Capacitive touch controller |
+| **esp_lcd_touch_axs5106l** | board-specific (included in repo) | Capacitive touch controller |
+| **SD** | built-in ESP32 (pre-install with esp32 Board) | SD card file access |
+| **WiFi / WiFiMulti** | built-in ESP32 (pre-install with esp32 Board) | WiFi connection |
 
 > `SD`, `WiFi`, `WiFiMulti`, `SPI`, and `time.h` are part of the ESP32 Arduino core — no separate install needed.
 
@@ -678,6 +680,12 @@ read: 8161
 - **Automation gate** — `run_daily_automation()` fires when `now > 2026-01-01` (RTC sanity check) instead of `timeSynced`, so brightness schedules, alarms, and animations all work correctly when WiFi is disabled or the time was set manually.
 - **Deep sleep & Alarm NTP guard** — `boot_millis` captured at the very start of `setup()`. Wakes 5 min before alarm when > 5 min away, 30 s when close. Holds `alarm_ntp_pending` if time unconfirmed; falls back to warning overlay after 15 min.
 - **config.ini** — parsed once at boot with a hand-rolled INI reader (no external library). On save, `[wifi]`, `[alarm]`, `[timer]`, and `[menu]` sections are fully rewritten; all other sections and comments are preserved.
+
+---
+
+## ⚠️ Disclaimer — ASCII Art
+
+Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.eu/video-games/pokemon](https://www.asciiart.eu/video-games/pokemon). All Pokémon characters and names are trademarks of **The Pokémon Company International**. This project is not affiliated with, sponsored by, or endorsed by The Pokémon Company. The art is used here solely for non-commercial, personal, educational purposes.
 
 ---
 

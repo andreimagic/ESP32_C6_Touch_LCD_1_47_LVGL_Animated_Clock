@@ -2358,9 +2358,11 @@ static void menu_tone_hi()   { menu_tone(NOTE_HI, 80); }
 
 // ── Apps state ────────────────────────────────────────────────────────────────
 // apps_cont declared globally above wifi_poll_cb
-static int         apps_idx      = 0;   // 0=RPS  1=Dice  2=Coin
-static int         app_subphase  = 0;   // 0=carousel  1=game
-static lv_timer_t *app_anim_timer  = nullptr;
+static int         apps_idx       = 0;   // 0=RPS  1=Dice  2=Coin
+static int         app_subphase   = 0;   // 0=carousel  1=game
+static lv_timer_t *app_anim_timer = nullptr;
+static lv_timer_t *app_gyro_timer = nullptr;  // shake/tilt watcher for RPS & Dice
+static float        app_gyro_z0   = 0.0f;     // previous accelZ for spike detection
 static int         app_anim_step   = 0;
 static int         app_anim_result = 0;  // cpu choice for RPS, roll for Dice
 static lv_obj_t   *app_anim_lbl    = nullptr;  // main art label
@@ -2522,6 +2524,7 @@ static void app_anim_stop()
 static void apps_close()
 {
   app_anim_stop();
+  app_gyro_stop();
   metro_stop();
   if (apps_cont) { lv_obj_del(apps_cont); apps_cont = nullptr; }
   app_subphase = 0;
@@ -2534,6 +2537,7 @@ static void apps_longpress_cb(lv_event_t *e)
   if (app_subphase > 0) {
     metro_stop();
     app_anim_stop();
+    app_gyro_stop();
     app_subphase = 0;
     apps_carousel_build();
   } else {
@@ -2860,6 +2864,60 @@ static void dice_anim_tick_cb(lv_timer_t * /*t*/)
   }
 }
 
+// ── Gyro shake/tilt: restart RPS or Dice ─────────────────────────────────────
+// Axis reference from tilt_poll_cb (board in landscape, screen facing user):
+//   accelX: ±1g when tilting forward/back
+//   accelY: ±1g when tilting left/right
+//   accelZ: ≈ +1g at rest (gravity); spikes sharply on a shake
+//
+// Triggers:
+//   shake   |ΔaccelZ| > 1.8 g between consecutive 150ms samples
+//   tilt    |accelY|  > 1.0 g  (hard side tilt)
+static void app_gyro_poll_cb(lv_timer_t * /*t*/)
+{
+  if (!imuReady || !apps_cont) return;
+  if (apps_idx != 0 && apps_idx != 1) return;  // RPS=0, Dice=1 only
+  if (app_subphase < 1) return;                 // not in-game yet
+
+  imu.update();
+  imu.getAccel(&accelData);
+
+  float z  = accelData.accelZ;
+  float y  = accelData.accelY;
+  float dz = fabsf(z - app_gyro_z0);
+  app_gyro_z0 = z;
+
+  if (dz > 1.8f || fabsf(y) > 1.0f) {
+    Serial.printf("[GYRO] restart idx=%d dz=%.2f y=%.2f\n", apps_idx, dz, y);
+    // app_screen_start() restarts the game cleanly (same as tapping the screen)
+    app_screen_start();
+  }
+}
+
+// Start gyro watcher. Safe to call when already running — reuses the timer.
+static void app_gyro_start()
+{
+  if (!imuReady) return;
+  if (app_gyro_timer) {
+    // Timer already running (e.g. game restarted) — just reset the Z baseline
+    app_gyro_z0 = 0.0f;
+    return;
+  }
+  app_gyro_z0   = 0.0f;
+  app_gyro_timer = lv_timer_create(app_gyro_poll_cb, 150, nullptr);
+  Serial.println("[GYRO] watcher started");
+}
+
+// Stop gyro watcher. Called when leaving the game entirely.
+static void app_gyro_stop()
+{
+  if (app_gyro_timer) {
+    lv_timer_del(app_gyro_timer);
+    app_gyro_timer = nullptr;
+    Serial.println("[GYRO] watcher stopped");
+  }
+}
+
 // ── Start RPS animation ───────────────────────────────────────────────────────
 static void app_screen_rps_start()
 {
@@ -2885,6 +2943,7 @@ static void app_screen_rps_start()
   lv_obj_align(app_anim_num, LV_ALIGN_BOTTOM_MID, 0, -20);
 
   app_anim_timer = lv_timer_create(rps_anim_tick_cb, 250, nullptr);
+  app_gyro_start();  // shake or tilt restarts the game
 }
 
 // ── Start Dice animation ──────────────────────────────────────────────────────
@@ -2904,6 +2963,7 @@ static void app_screen_dice_start()
   app_anim_num = nullptr;
 
   app_anim_timer = lv_timer_create(dice_anim_tick_cb, 500, nullptr);
+  app_gyro_start();  // shake or tilt restarts the game
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

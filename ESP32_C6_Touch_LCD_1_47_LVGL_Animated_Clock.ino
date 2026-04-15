@@ -2457,6 +2457,11 @@ static void math_btn_cb(lv_event_t *e)
 static void show_math_challenge()
 {
   if (math_cont) return;
+  // Kill the GIF decoder immediately — it keeps running behind math_cont
+  // and causes 200-300ms lag on every button tap.
+  if (tilt_timer) { lv_timer_del(tilt_timer); tilt_timer = nullptr; }
+  emotion_tilt_active = false; emotion_current_gif = nullptr;
+  if (overlay_cont) { lv_obj_del(overlay_cont); overlay_cont = nullptr; }
   char prob[32]; int opts[4];
   math_generate(prob, sizeof(prob), opts);
 
@@ -2743,7 +2748,6 @@ static void app_screen_result(int data)
 {
   lv_obj_clean(apps_cont);
   app_subphase = 1;
-  lv_obj_add_event_cb(apps_cont, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
 
   lv_obj_t *art = lv_label_create(apps_cont);
   lv_obj_set_style_text_font(art, &dejavu_mono_14, 0);
@@ -2817,7 +2821,6 @@ static void rps_anim_tick_cb(lv_timer_t * /*t*/)
     menu_tone_hi();  // high tone on GO!
     app_anim_stop();
     lv_obj_clean(apps_cont);
-    lv_obj_add_event_cb(apps_cont, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
 
     lv_obj_t *art = lv_label_create(apps_cont);
     lv_obj_set_style_text_font(art, &dejavu_mono_14, 0);
@@ -2865,8 +2868,6 @@ static void app_screen_rps_start()
   app_anim_step   = 0;
   app_anim_result = random(1, 4);  // cpu choice decided now
 
-  lv_obj_add_event_cb(apps_cont, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
-
   app_anim_lbl = lv_label_create(apps_cont);
   lv_obj_set_style_text_font(app_anim_lbl, &dejavu_mono_14, 0);
   lv_obj_set_style_text_color(app_anim_lbl, lv_color_white(), 0);
@@ -2893,8 +2894,6 @@ static void app_screen_dice_start()
   app_subphase = 1;
   app_anim_step   = 0;
   app_anim_result = random(1, 7);  // 1-6, decided now
-
-  lv_obj_add_event_cb(apps_cont, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
 
   app_anim_lbl = lv_label_create(apps_cont);
   lv_obj_set_style_text_font(app_anim_lbl, &dejavu_mono_14, 0);
@@ -3137,7 +3136,6 @@ static lv_obj_t *metro_btn(lv_obj_t *p, int x, int y, int w, int h,
 static void metro_build_ui()
 {
   lv_obj_clean(apps_cont);
-  lv_obj_add_event_cb(apps_cont, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
   for (int i = 0; i < 4; i++) metro_dots[i] = nullptr;
   metro_bpm_lbl = metro_slider = metro_start_lbl = nullptr;
 
@@ -3301,7 +3299,6 @@ static void app_screen_start()
   // ── Coin: tap anywhere to flip ────────────────────────────────────────────
   lv_obj_clean(apps_cont);
   app_subphase = 1;
-  lv_obj_add_event_cb(apps_cont, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
 
   lv_obj_t *t = lv_label_create(apps_cont);
   lv_label_set_text(t, "Flip a Coin");
@@ -3339,7 +3336,6 @@ static void apps_carousel_build()
   metro_clear_ui();  // null UI refs before lv_obj_clean frees them
   lv_obj_clean(apps_cont);
   app_subphase = 0;
-  lv_obj_add_event_cb(apps_cont, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
 
   static const struct { const char *name; const char *desc; } items[5] = {
     {"Rock Paper Scissors", "An interactive ASCII Game"},
@@ -3452,6 +3448,9 @@ static void show_apps()
   lv_obj_set_style_pad_all(apps_cont, 0, 0);
   lv_obj_set_style_radius(apps_cont, 0, 0);
   lv_obj_clear_flag(apps_cont, LV_OBJ_FLAG_SCROLLABLE);
+  // Register longpress ONCE at creation — lv_obj_clean() keeps this alive
+  // through all rebuilds, so we must NOT add it again in any rebuild path.
+  lv_obj_add_event_cb(apps_cont, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
   apps_carousel_build();
 }
 

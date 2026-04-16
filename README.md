@@ -42,6 +42,7 @@ A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47
 | **Rock Paper Scissors** | Animated 3-2-1 countdown shake → CPU reveals its hand → GO! |
 | **Rolling Dice** | Animated rolling frames → final dice face reveal |
 | **Flip a Coin** | Instant flip with ASCII coin art (heads/tails) |
+| **Metronome** | A well tuned Metronome app for daily music practice sessions |
 | **Apps sounds** | Melody on correct math answer, failure tune on wrong; beeps during animations; toggleable |
 | **SD card config** | All settings in `/config.ini` — no recompile needed |
 | **LVGL v9** | Hardware-accelerated UI, zero blocking in the main loop |
@@ -701,6 +702,7 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v1.4.1 | ✅ released | Bugfix: Fix RTC drift after long deep sleep in the event of an alarm set, allow time for NTP sync |
 | v1.5.0 | ✅ released | Apps menu: math gate, Rock Paper Scissors, Rolling Dice, Flip a Coin, game sounds, DST-aware timezone |
 | v2.0.0 | ✅ released | Analog clock view & low-power startup gate |
+| v2.1.0 | ✅ released |  v2.1.0 - Metronome App, Gyro Shake/Tilt Trigger for RPS & Dice Apps & Optimizations |
 
 ## License
 

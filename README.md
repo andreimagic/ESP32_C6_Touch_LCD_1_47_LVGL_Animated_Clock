@@ -448,6 +448,10 @@ Tap to start. Three animated rolling frames play at 250 ms each (one beep per fr
 
 Tap anywhere to flip. Instant result with ASCII coin art (heads / tails) and a high-tone beep. Tap to flip again.
 
+#### Metronome
+
+A well tuned Metronome app for daily music practice sessions. Variable 60 to 240 BPM. 4/4, 3/4 and 2/4 time-sig tabs, with Audio and Visual indicators.
+
 #### Sounds toggle
 
 The fourth carousel item. Tap to mute/unmute all apps menu and game audio. The setting is saved to `config.ini` under `[menu] sounds`. This does **not** affect alarm or timer buzzer sounds.
@@ -674,7 +678,8 @@ read: 8161
 - **Shared editor** — `open_editor()` builds the HH:MM widget for Timer and Alarm. `open_clock_editor()` builds the full two-row date+time widget. `modal_longpress_cb()` dispatches to the correct save function based on `carousel_idx`.
 - **Animation priority** — `close_scheduled_gif()` forcefully tears down any scheduled overlay (cancels fade timer, deletes overlay synchronously) before alarm or timer open their GIF. Scheduled animation is also skipped entirely if the alarm fires on the same minute.
 - **Apps menu** — `apps_cont` is a global LVGL object separate from `modal_cont` and `overlay_cont`. `wifi_poll_cb` skips `wifiMulti.run()` while it is open to prevent radio lock stalls during gameplay and math input.
-- **ASCII games** — all art is rendered using DejaVu Mono fixed-width font via LVGL labels. RPS and Dice use LVGL timer callbacks (`rps_anim_tick_cb`, `dice_anim_tick_cb`) at 250 ms intervals for consistent animation cadence. Buzzer tones use `ledcChangeFrequency()` to switch pitch without re-attaching the PWM channel.
+- **ASCII games** — all art is rendered using DejaVu Mono fixed-width font via LVGL labels. RPS and Dice use LVGL timer callbacks (`rps_anim_tick_cb`, `dice_anim_tick_cb`) at 250 ms intervals for consistent animation cadence. Buzzer tones use `ledcChangeFrequency()` to switch pitch without re-attaching the PWM channel. IMU (QMI8658) Gyro is used on Z & Y for shake/tilt to restart the RPS and Dice games.
+- **Metronome** — Hardware timer callback running in esp_timer task is used for perfect timing.
 - **Emotion tilt** — `zone_ul_cb` sets `emotion_tilt_active = true` and starts `tilt_timer` after opening the smile GIF. `tilt_poll_cb` branches on this flag: in emotion mode it reads both `accelX` (forward/back) and `accelY` (left/right), determines the desired GIF path, and calls `lv_gif_set_src()` on the existing widget (retrieved from `overlay_cont` user data) only when the path changes. This swaps the animation in-place with no overlay rebuild. Both the flag and the timer are cleared by `overlay_close_event_cb`.
 - **Buzzer state machine** — a single 9-step table drives both alarm and timer patterns. `buzzer_fade_after` is set by the caller for finite sequences; `buzzer_stop()` triggers `overlay_fade_and_close()` automatically after the last beep.
 - **WiFi reconnect guard** — `wifi_poll_cb()` skips `wifiMulti.run()` when any modal or overlay is open, when WiFi is manually disabled (`cfg.wifi_enabled`), and reduces attempts to every 30 s when disconnected — preventing radio lock stalls from blocking UI interaction.

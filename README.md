@@ -259,7 +259,7 @@ sounds = true
 # On a matching day, both the Alarm and Timer replace their normal GIF with
 # happybirthday.gif and play the Happy Birthday melody instead of the usual beeps.
 # Remove this section (or leave it empty) to disable the Easter egg entirely.
-dates = 06-08-2017,20-08-1989,07-09-2017,21-03-1989
+dates = 01-01-1970,06-08-2017
 ```
 
 | Section | Key | Default | Description |

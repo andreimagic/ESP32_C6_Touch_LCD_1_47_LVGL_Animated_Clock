@@ -66,8 +66,8 @@ struct AppConfig {
   // [birthdays] dates — up to 8 entries in DD-MM-YYYY format.
   // Only day & month are compared; the year is kept as reference in the file.
   // Default: empty (no birthday greetings).
-  char birthday_dates[8][16]  = {};          // [birthdays] dates (comma-separated)
-  int  birthday_count         = 0;           // number of parsed birthday entries
+  char birthday_dates[8][16]  = {"01-01-1970","06-08-2017"};          // [birthdays] dates (comma-separated)
+  int  birthday_count         = 2;           // number of parsed birthday entries
 } cfg;
 
 // ─── Pin definitions ─────────────────────────────────────────────────────────
@@ -108,7 +108,7 @@ static void lvgl_sd_fs_init(void);
 static void show_carousel(void);
 static void save_config(void);
 static void apply_wifi_state(void);
-static void buzzer_start_birthday(int sequences_ignored);
+static void buzzer_start_birthday(int sequences);
 
 
 // ─── Display ─────────────────────────────────────────────────────────────────
@@ -356,8 +356,7 @@ static void buzzer_start_alarm()
 {
   buzzer_fade_after = (cfg.alarm_beep_sequences > 0); // only when finite
   if (is_birthday_today()) {
-    buzzer_fade_after = true; // birthday melody always fades after playing
-    buzzer_start_birthday(1);
+    buzzer_start_birthday(cfg.alarm_beep_sequences);
   } else {
     buzzer_start(cfg.alarm_beep_sequences);
   }
@@ -371,8 +370,7 @@ static void buzzer_start_timer()
 {
   buzzer_fade_after = (cfg.timer_beep_sequences > 0);
   if (is_birthday_today()) {
-    buzzer_fade_after = true; // birthday melody always fades after playing
-    buzzer_start_birthday(1);
+    buzzer_start_birthday(cfg.timer_beep_sequences);
   } else {
     buzzer_start(cfg.timer_beep_sequences);
   }
@@ -2431,22 +2429,40 @@ static const struct { uint16_t freq; uint16_t ms; } HB_NOTES[] = {
 };
 #define HB_NOTE_COUNT (sizeof(HB_NOTES)/sizeof(HB_NOTES[0]))
 
-static int  hb_step    = 0;
+static int  hb_step      = 0;
+static int  hb_seq_total = 0;  // 0 = repeat until buzzer_stop() (touch to dismiss)
+static int  hb_seq_done  = 0;
 
 static void hb_tick_cb(lv_timer_t *t)
 {
   if (hb_step >= (int)HB_NOTE_COUNT) {
-    // Melody finished — same teardown path as buzzer_stop()
-    lv_timer_del(t);
-    buzzer_timer  = nullptr;
-    ledcWrite(BUZZER_PIN, 0);
-    ledcChangeFrequency(BUZZER_PIN, 2000, 8); // restore alarm freq
-    buzzer_active = false;
-    hb_step       = 0;
-    Serial.println("[BUZZ] Birthday melody finished");
-    if (buzzer_fade_after) {
-      buzzer_fade_after = false;
-      overlay_fade_and_close();
+    // One full pass of the melody just finished
+    hb_seq_done++;
+    Serial.printf("[BUZZ] Birthday melody pass %d/%s done\n",
+                  hb_seq_done, hb_seq_total == 0 ? "∞" : String(hb_seq_total).c_str());
+
+    bool all_done = (hb_seq_total > 0 && hb_seq_done >= hb_seq_total);
+    if (all_done) {
+      // All requested repetitions finished — same teardown path as buzzer_stop()
+      lv_timer_del(t);
+      buzzer_timer  = nullptr;
+      ledcWrite(BUZZER_PIN, 0);
+      ledcChangeFrequency(BUZZER_PIN, 2000, 8); // restore alarm freq
+      buzzer_active = false;
+      hb_step       = 0;
+      hb_seq_done   = 0;
+      Serial.println("[BUZZ] Birthday melody finished (all sequences done)");
+      if (buzzer_fade_after) {
+        buzzer_fade_after = false;
+        overlay_fade_and_close();
+      }
+    } else {
+      // More repeats to go — silence the buzzer and wait 1500 ms before the
+      // next pass (mirrors the 1000 ms end-pause of the normal beep pattern,
+      // slightly longer here to give the tune a natural breath between verses).
+      ledcWrite(BUZZER_PIN, 0);
+      hb_step = 0;
+      lv_timer_set_period(t, 1500);
     }
     return;
   }
@@ -2462,15 +2478,18 @@ static void hb_tick_cb(lv_timer_t *t)
   hb_step++;
 }
 
-static void buzzer_start_birthday(int /*sequences_ignored*/)
+static void buzzer_start_birthday(int sequences)
 {
-  // Plays the Happy Birthday melody once, then fades the overlay.
+  // Plays the Happy Birthday melody `sequences` times (0 = until touch).
   if (buzzer_active) buzzer_stop();
-  hb_step           = 0;
-  buzzer_active     = true;
+  hb_step      = 0;
+  hb_seq_total = sequences;
+  hb_seq_done  = 0;
+  buzzer_active = true;
   // buzzer_fade_after must already be set by the caller (same as normal alarm)
   buzzer_timer = lv_timer_create(hb_tick_cb, 1, nullptr); // fires immediately
-  Serial.println("[BUZZ] Birthday melody started");
+  Serial.printf("[BUZZ] Birthday melody started (%s sequences)\n",
+                sequences == 0 ? "∞" : String(sequences).c_str());
 }
 
 static void menu_tone(int freq, int ms)

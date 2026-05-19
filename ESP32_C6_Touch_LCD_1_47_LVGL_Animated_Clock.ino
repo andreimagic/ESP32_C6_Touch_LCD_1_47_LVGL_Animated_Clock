@@ -63,6 +63,11 @@ struct AppConfig {
   bool anim_schedule_enabled  = true;        // [animation] schedule
   int  anim_duration_sec      = 10;          // [animation] duration
   bool menu_sounds            = true;        // [menu] sounds
+  // [birthdays] dates — up to 8 entries in DD-MM-YYYY format.
+  // Only day & month are compared; the year is kept as reference in the file.
+  // Default: empty (no birthday greetings).
+  char birthday_dates[8][16]  = {};          // [birthdays] dates (comma-separated)
+  int  birthday_count         = 0;           // number of parsed birthday entries
 } cfg;
 
 // ─── Pin definitions ─────────────────────────────────────────────────────────
@@ -82,12 +87,13 @@ struct AppConfig {
 #define BAT_PIN         0
 
 // ─── GIF paths — SD card root is mapped to LVGL drive letter "S" ──────────────
-#define GIF_SMILE_PATH  "S:/cruzr_emotions/cruzr_smile.gif"
-#define GIF_SLEEP_PATH  "S:/cruzr_emotions/cruzr_sleep.gif"
-#define GIF_SAD_PATH    "S:/cruzr_emotions/cruzr_sad.gif"
-#define GIF_JOY_PATH    "S:/cruzr_emotions/cruzr_joy.gif"
-#define GIF_ALARM_PATH  "S:/cruzr_emotions/alarm_animation.gif"
-#define GIF_TIMER_PATH  "S:/cruzr_emotions/timer_animation.gif"
+#define GIF_SMILE_PATH    "S:/cruzr_emotions/cruzr_smile.gif"
+#define GIF_SLEEP_PATH    "S:/cruzr_emotions/cruzr_sleep.gif"
+#define GIF_SAD_PATH      "S:/cruzr_emotions/cruzr_sad.gif"
+#define GIF_JOY_PATH      "S:/cruzr_emotions/cruzr_joy.gif"
+#define GIF_ALARM_PATH    "S:/cruzr_emotions/alarm_animation.gif"
+#define GIF_TIMER_PATH    "S:/cruzr_emotions/timer_animation.gif"
+#define GIF_BIRTHDAY_PATH "S:/cruzr_emotions/happybirthday.gif"
 
 // ─── Forward declarations ─────────────────────────────────────────────────────
 static void home_screen_init(void);
@@ -102,6 +108,7 @@ static void lvgl_sd_fs_init(void);
 static void show_carousel(void);
 static void save_config(void);
 static void apply_wifi_state(void);
+static void buzzer_start_birthday(int sequences_ignored);
 
 
 // ─── Display ─────────────────────────────────────────────────────────────────
@@ -348,7 +355,12 @@ static void buzzer_start(int sequences)
 static void buzzer_start_alarm()
 {
   buzzer_fade_after = (cfg.alarm_beep_sequences > 0); // only when finite
-  buzzer_start(cfg.alarm_beep_sequences);
+  if (is_birthday_today()) {
+    buzzer_fade_after = true; // birthday melody always fades after playing
+    buzzer_start_birthday(1);
+  } else {
+    buzzer_start(cfg.alarm_beep_sequences);
+  }
 }
 
 // This will keep the animation on screen after the alarm is done
@@ -358,7 +370,12 @@ static void buzzer_start_alarm()
 static void buzzer_start_timer()
 {
   buzzer_fade_after = (cfg.timer_beep_sequences > 0);
-  buzzer_start(cfg.timer_beep_sequences);
+  if (is_birthday_today()) {
+    buzzer_fade_after = true; // birthday melody always fades after playing
+    buzzer_start_birthday(1);
+  } else {
+    buzzer_start(cfg.timer_beep_sequences);
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -385,6 +402,41 @@ void set_brightness(int percent)
   if (label_brightness) {
     lv_label_set_text_fmt(label_brightness, LV_SYMBOL_IMAGE "  Brightness: %d%%", percent);
   }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  BIRTHDAY DETECTION
+//  Returns true if today's day+month matches any entry in cfg.birthday_dates.
+//  Comparison is day/month only; the year stored in the file is reference only.
+// ══════════════════════════════════════════════════════════════════════════════
+static bool is_birthday_today()
+{
+  if (cfg.birthday_count == 0) return false;
+  time_t now = time(nullptr);
+  if (now < 1735689600UL) return false; // RTC not yet valid
+  struct tm t;
+  localtime_r(&now, &t);
+  int today_day = t.tm_mday;
+  int today_mon = t.tm_mon + 1; // 1-based
+  for (int i = 0; i < cfg.birthday_count; i++) {
+    int d = 0, m = 0;
+    // Parse DD-MM-YYYY — ignore the year
+    if (sscanf(cfg.birthday_dates[i], "%d-%d-%*d", &d, &m) == 2) {
+      if (d == today_day && m == today_mon) {
+        Serial.printf("[BDAY] Birthday match on entry %d (%s)\n", i, cfg.birthday_dates[i]);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Returns the correct alarm/timer GIF path — birthday GIF takes priority
+static const char *alarm_gif_path() {
+  return is_birthday_today() ? GIF_BIRTHDAY_PATH : GIF_ALARM_PATH;
+}
+static const char *timer_gif_path() {
+  return is_birthday_today() ? GIF_BIRTHDAY_PATH : GIF_TIMER_PATH;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -541,7 +593,31 @@ static void load_config()
         Serial.printf("[CFG]   menu.sounds    = %s\n", cfg.menu_sounds?"true":"false");
       }
     }
-  }
+
+    // ── [birthdays] ──────────────────────────────────────────────────────────
+    // dates = DD-MM-YYYY,DD-MM-YYYY,...   (up to 8 entries)
+    // Only the day and month are used for comparison; the year is stored for
+    // reference but not evaluated.
+    else if (strcmp(section, "birthdays") == 0) {
+      if (strcmp(key, "dates") == 0) {
+        cfg.birthday_count = 0;
+        char buf[128];
+        strncpy(buf, val, sizeof(buf) - 1);
+        buf[sizeof(buf) - 1] = '\0';
+        char *tok = strtok(buf, ",");
+        while (tok && cfg.birthday_count < 8) {
+          char *entry = ini_trim(tok);
+          if (strlen(entry) >= 8) { // at least DD-MM-YY
+            strncpy(cfg.birthday_dates[cfg.birthday_count], entry, 15);
+            cfg.birthday_dates[cfg.birthday_count][15] = '\0';
+            cfg.birthday_count++;
+          }
+          tok = strtok(nullptr, ",");
+        }
+        Serial.printf("[CFG]   birthdays.count    = %d\n", cfg.birthday_count);
+      }
+    }
+  } // end while(f.available())
 
   f.close();
   Serial.printf("[CFG] Done. (%d lines read)\n", lineNum);
@@ -756,7 +832,7 @@ static void countdown_tick_cb(lv_timer_t * /*t*/)
     // Hide the 00:00 label immediately — GIF animation takes over
     if (home_timer_lbl) lv_obj_add_flag(home_timer_lbl, LV_OBJ_FLAG_HIDDEN);
     close_scheduled_gif();  // evict any running scheduled animation
-    show_gif_fullscreen(GIF_TIMER_PATH);
+    show_gif_fullscreen(timer_gif_path());
     buzzer_start_timer();
   }
 }
@@ -1247,7 +1323,7 @@ static void run_daily_automation(int hour, int minute)
       Serial.println("[ALARM] NTP synced — firing pending alarm");
       close_scheduled_gif();
       set_brightness(50);
-      show_gif_fullscreen(GIF_ALARM_PATH);
+      show_gif_fullscreen(alarm_gif_path());
       buzzer_start_alarm();
     } else if (UPTIME_MS > NTP_GIVE_UP_MS) {
       // 15 min elapsed, NTP never synced — show warning alarm
@@ -1290,7 +1366,7 @@ static void run_daily_automation(int hour, int minute)
                     hour, minute, UPTIME_MS / 1000, timeSynced ? "yes" : "no");
       close_scheduled_gif();
       set_brightness(50);
-      show_gif_fullscreen(GIF_ALARM_PATH);
+      show_gif_fullscreen(alarm_gif_path());
       buzzer_start_alarm();
     } else {
       // Case B2: fresh boot, NTP not yet synced — hold
@@ -2316,8 +2392,12 @@ static void clock_face_show(lv_timer_t *t)
 // menu_tone() is a short blocking call — safe in LVGL timer callbacks because
 // the longest note (500ms) is still shorter than any LVGL watchdog threshold.
 #define NOTE_C4  262
+#define NOTE_D4  294
+#define NOTE_E4  330
+#define NOTE_F4  349
 #define NOTE_G4  392
 #define NOTE_A4  440
+#define NOTE_BB4 466
 #define NOTE_B4  494
 #define NOTE_C5  523
 #define NOTE_D5  587
@@ -2325,6 +2405,73 @@ static void clock_face_show(lv_timer_t *t)
 #define NOTE_A5  880
 #define NOTE_B5  988
 #define NOTE_HI  1046  // high C6
+
+// ── Happy Birthday melody (non-blocking, LVGL-timer-driven) ──────────────────
+// Played instead of the standard 4-beep pattern when today matches a birthday.
+// Each entry is {frequency_hz, duration_ms}; freq=0 is an articulation gap.
+// Key: C major. Tempo: ~90 BPM (quarter ≈ 667ms).
+static const struct { uint16_t freq; uint16_t ms; } HB_NOTES[] = {
+  // "Hap-py  Birth-day  to   You"
+  {NOTE_C4,187},{0,63},{NOTE_C4,125},{0,63},
+  {NOTE_D4,375},{0,63},{NOTE_C4,375},{0,63},
+  {NOTE_F4,375},{0,63},{NOTE_E4,750},{0,200},
+  // "Hap-py  Birth-day  to   You"
+  {NOTE_C4,187},{0,63},{NOTE_C4,125},{0,63},
+  {NOTE_D4,375},{0,63},{NOTE_C4,375},{0,63},
+  {NOTE_G4,375},{0,63},{NOTE_F4,750},{0,200},
+  // "Hap-py  Birth-day  dear  [child]"
+  {NOTE_C4,187},{0,63},{NOTE_C4,125},{0,63},
+  {NOTE_C5,375},{0,63},{NOTE_A4,375},{0,63},
+  {NOTE_F4,375},{0,63},{NOTE_E4,375},{0,63},
+  {NOTE_D4,750},{0,200},
+  // "Hap-py  Birth-day  to   You"
+  {NOTE_BB4,187},{0,63},{NOTE_BB4,125},{0,63},
+  {NOTE_A4,375},{0,63}, {NOTE_F4,375},{0,63},
+  {NOTE_G4,375},{0,63}, {NOTE_F4,875}
+};
+#define HB_NOTE_COUNT (sizeof(HB_NOTES)/sizeof(HB_NOTES[0]))
+
+static int  hb_step    = 0;
+
+static void hb_tick_cb(lv_timer_t *t)
+{
+  if (hb_step >= (int)HB_NOTE_COUNT) {
+    // Melody finished — same teardown path as buzzer_stop()
+    lv_timer_del(t);
+    buzzer_timer  = nullptr;
+    ledcWrite(BUZZER_PIN, 0);
+    ledcChangeFrequency(BUZZER_PIN, 2000, 8); // restore alarm freq
+    buzzer_active = false;
+    hb_step       = 0;
+    Serial.println("[BUZZ] Birthday melody finished");
+    if (buzzer_fade_after) {
+      buzzer_fade_after = false;
+      overlay_fade_and_close();
+    }
+    return;
+  }
+  uint16_t freq = HB_NOTES[hb_step].freq;
+  uint16_t dur  = HB_NOTES[hb_step].ms;
+  if (freq == 0) {
+    ledcWrite(BUZZER_PIN, 0);
+  } else {
+    ledcChangeFrequency(BUZZER_PIN, freq, 8);
+    ledcWrite(BUZZER_PIN, 128);
+  }
+  lv_timer_set_period(t, dur);
+  hb_step++;
+}
+
+static void buzzer_start_birthday(int /*sequences_ignored*/)
+{
+  // Plays the Happy Birthday melody once, then fades the overlay.
+  if (buzzer_active) buzzer_stop();
+  hb_step           = 0;
+  buzzer_active     = true;
+  // buzzer_fade_after must already be set by the caller (same as normal alarm)
+  buzzer_timer = lv_timer_create(hb_tick_cb, 1, nullptr); // fires immediately
+  Serial.println("[BUZZ] Birthday melody started");
+}
 
 static void menu_tone(int freq, int ms)
 {

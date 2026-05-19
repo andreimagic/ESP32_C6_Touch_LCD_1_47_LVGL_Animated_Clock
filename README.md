@@ -43,6 +43,7 @@ A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47
 | **Rolling Dice** | Animated rolling frames → final dice face reveal |
 | **Flip a Coin** | Instant flip with ASCII coin art (heads/tails) |
 | **Apps sounds** | Melody on correct math answer, failure tune on wrong; beeps during animations; toggleable |
+| **Birthday Easter egg** | If today matches any date in the `[birthdays]` list, both the Alarm and Timer play the **Happy Birthday** melody and show `happybirthday.gif` instead of their normal GIF — fully transparent to the user |
 | **SD card config** | All settings in `/config.ini` — no recompile needed |
 | **LVGL v9** | Hardware-accelerated UI, zero blocking in the main loop |
 
@@ -188,7 +189,8 @@ SD root/
     ├── cruzr_sad.gif            ← 160 × 86 px  (emotion: tilt forward)
     ├── cruzr_joy.gif            ← 160 × 86 px  (emotion: tilt left or right)
     ├── alarm_animation.gif      ← 160 × 86 px  (plays when alarm fires)
-    └── timer_animation.gif      ← 160 × 86 px  (plays when countdown reaches zero)
+    ├── timer_animation.gif      ← 160 × 86 px  (plays when countdown reaches zero)
+    └── happybirthday.gif        ← 160 × 86 px  (Easter egg — replaces alarm/timer GIF on birthdays)
 ```
 
 ### GIF Requirements
@@ -250,6 +252,14 @@ duration = 10
 [menu]
 # Mutes/unmutes Apps Menu math sounds and game audio only
 sounds = true
+
+[birthdays]
+# Comma-separated list of birthdays in DD-MM-YYYY format.
+# Only day and month are compared — the year is stored as reference only.
+# On a matching day, both the Alarm and Timer replace their normal GIF with
+# happybirthday.gif and play the Happy Birthday melody instead of the usual beeps.
+# Remove this section (or leave it empty) to disable the Easter egg entirely.
+dates = 06-08-2017,20-08-1989,07-09-2017,21-03-1989
 ```
 
 | Section | Key | Default | Description |
@@ -267,6 +277,7 @@ sounds = true
 | `[animation]` | `schedule` | `true` | Enable periodic GIF animation |
 | `[animation]` | `duration` | `10` | Seconds each scheduled GIF plays before fading |
 | `[menu]` | `sounds` | `true` | Apps menu and game sounds on/off |
+| `[birthdays]` | `dates` | _(empty)_ | Comma-separated birthdays `DD-MM-YYYY`. On a matching day, alarm and timer use `happybirthday.gif` and the Happy Birthday melody. Up to 8 entries. Section may be omitted to disable the Easter egg. |
 
 > If `config.ini` is missing the firmware boots with the hardcoded defaults shown above.
 
@@ -530,6 +541,10 @@ Skipped silently if any screen, overlay, or carousel is already open. Alarm and 
 
 **4 × (200 ms ON + 100 ms OFF) + 1000 ms pause** = one sequence. `beep_sequences` controls how many repeat before auto-stop (0 = until touch). When finite, the animation fades out automatically after the last beep.
 
+### Birthday override
+
+When today matches a `[birthdays]` entry, the standard alarm/timer beep pattern is **replaced** by a single non-blocking play of the **Happy Birthday to You** melody (~11 seconds, C major, ~90 BPM). The melody is driven by an LVGL timer (no blocking delays) and fades the overlay automatically when it finishes — exactly like a finite beep sequence.
+
 ### Apps menu sounds (respects `[menu] sounds`)
 
 | Event | Sound |
@@ -542,6 +557,32 @@ Skipped silently if any screen, overlay, or carousel is already open. Alarm and 
 | Dice result reveal | High C6 tone |
 | Coin flip result | High C6 tone |
 | Sounds toggle turned ON | High C6 tone (confirmation) |
+
+---
+
+## Birthday Easter Egg 🎂
+
+Add a `[birthdays]` section to `config.ini` to unlock a hidden birthday greeting mode.
+
+```ini
+[birthdays]
+dates = 06-08-2017,20-08-1989,07-09-2017,21-03-1989
+```
+
+**How it works:**
+- Dates are written in `DD-MM-YYYY` format, comma-separated, up to 8 entries.
+- Only the **day and month** are compared at runtime. The year is kept in the file purely as a human-readable reference (e.g. to remember who was born in that year).
+- At boot and at every alarm/timer trigger, the firmware calls `is_birthday_today()`, which reads today's local date from the RTC and checks it against every entry.
+- If there is a match, **both the Alarm Clock and the Timer Alarm** automatically switch to:
+  - 🎂 `happybirthday.gif` — shown fullscreen instead of `alarm_animation.gif` / `timer_animation.gif`
+  - 🎵 **Happy Birthday to You** melody played on the buzzer (~11 s, C major, ~90 BPM, fully non-blocking via LVGL timer) instead of the standard 4-beep pattern
+- The melody fades the overlay automatically when it finishes, just like a finite beep sequence.
+- If `[birthdays]` is absent or `dates` is empty, the feature is completely inactive — no performance overhead.
+
+**SD card:** place `happybirthday.gif` (160 × 86 px, same rules as all other GIFs) at:
+```
+/cruzr_emotions/happybirthday.gif
+```
 
 ---
 
@@ -640,6 +681,7 @@ read: 8161
 | Black screen after boot | Display init failed | Check SPI wiring; confirm `gfx->begin() OK` in serial log |
 | `SD card mount failed` | Wrong MISO pin or card not FAT32 | Confirm GPIO 3 = MISO; reformat card as FAT32 |
 | `GIF not found` | Wrong filename or path | Path is case-sensitive: `/cruzr_emotions/cruzr_smile.gif` |
+| Birthday GIF not showing | `happybirthday.gif` absent or wrong date format | Place the file at `/cruzr_emotions/happybirthday.gif` (160×86 px); verify `dates` entries are `DD-MM-YYYY` |
 | GIF shows but wrong size | GIF not resized | Resize to 160 × 86 px using ezgif.com/resize |
 | `Not enough RAM for GIF` | GIF still full-size | Must be 160 × 86 px — see [GIF Requirements](#gif-requirements) |
 | Clock shows `--:--` permanently | No WiFi, no log, no manual set | Set date+time via Carousel → Clock editor |
@@ -701,6 +743,7 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v1.4.1 | ✅ released | Bugfix: Fix RTC drift after long deep sleep in the event of an alarm set, allow time for NTP sync |
 | v1.5.0 | ✅ released | Apps menu: math gate, Rock Paper Scissors, Rolling Dice, Flip a Coin, game sounds, DST-aware timezone |
 | v2.0.0 | ✅ released | Analog clock view & low-power startup gate |
+| v2.1.0 | ✅ released | Birthday Easter egg: `[birthdays]` in config.ini, Happy Birthday melody, `happybirthday.gif` for alarm & timer |
 
 ## License
 

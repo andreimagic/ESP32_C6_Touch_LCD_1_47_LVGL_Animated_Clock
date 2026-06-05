@@ -66,7 +66,7 @@ struct AppConfig {
   // [birthdays] dates — up to 8 entries in DD-MM-YYYY format.
   // Only day & month are compared; the year is kept as reference in the file.
   // Default: empty (no birthday greetings).
-  char birthday_dates[8][16]  = {"01-01-1970","06-08-2017"};          // [birthdays] dates (comma-separated)
+  char birthday_dates[8][16]  = {"01-01-1970","06-08-2017","07-09-2025"};          // [birthdays] dates (comma-separated, parsed at boot)
   int  birthday_count         = 2;           // number of parsed birthday entries
 } cfg;
 
@@ -721,53 +721,36 @@ static void log_last_seen() {
 
 static void save_config()
 {
-  // Re-read existing config line by line, rewrite with updated [alarm] section.
-  // We load all non-alarm lines into a buffer then append the updated alarm block.
-  // This preserves [wifi] and any comments in the original file.
-  const char *path = "/config.ini";
-  char lines[32][128];
-  int  lineCount = 0;
-  bool inAlarm   = false;  // also covers [wifi] and [timer]
+  // cfg is the single source of truth.
+  // Always write the complete file from cfg — never read the existing file.
+  // SD.remove() first: FILE_WRITE on some ESP32 SD builds is "r+" (no truncate),
+  // so removing guarantees the new file is written clean with no stale tail bytes.
 
-  File fr = SD.open(path, FILE_READ);
-  if (fr) {
-    while (fr.available() && lineCount < 30) {
-      int len = 0;
-      while (fr.available() && len < 126) {
-        char ch = fr.read();
-        if (ch == '\n') break;
-        lines[lineCount][len++] = ch;
-      }
-      lines[lineCount][len] = '\0';
-      // Detect [alarm] section and skip its lines — we'll rewrite them fresh
-      char *trimmed = lines[lineCount];
-      while (*trimmed == ' ' || *trimmed == '\t') trimmed++;
-      if (strncmp(trimmed,"[wifi]", 6)==0||
-          strncmp(trimmed,"[alarm]",7)==0||
-          strncmp(trimmed,"[timer]",7)==0||
-          strncmp(trimmed,"[menu]", 6)==0) { inAlarm=true; continue; }
-      if (*trimmed=='[') inAlarm=false;
-      if (!inAlarm) lineCount++;
-    }
-    fr.close();
-  }
+  Serial.printf("[CFG] save_config: wifi='%s' tz='%s' alarm=%02d:%02d timer=%02d:%02d sounds=%s bdays=%d\n",
+                cfg.wifi_ssid, cfg.tz_string,
+                cfg.alarm_hour, cfg.alarm_minute,
+                cfg.timer_hours, cfg.timer_minutes,
+                cfg.menu_sounds ? "on" : "off",
+                cfg.birthday_count);
 
-  File fw = SD.open(path, FILE_WRITE);
-  if (!fw) { Serial.println("[CFG] save_config: cannot open for write"); return; }
+  SD.remove("/config.ini");
 
-  // Write preserved lines
-  for (int i = 0; i < lineCount; i++) {
-    fw.println(lines[i]);
-  }
-  fw.println();
+  File fw = SD.open("/config.ini", FILE_WRITE);
+  if (!fw) { Serial.println("[CFG] save_config: cannot open /config.ini for write"); return; }
+
   fw.println("[wifi]");
-  fw.printf("enabled = %s\n",  cfg.wifi_enabled ?"true":"false");
+  fw.printf("enabled = %s\n",  cfg.wifi_enabled ? "true" : "false");
   fw.printf("ssid = %s\n",     cfg.wifi_ssid);
   fw.printf("password = %s\n", cfg.wifi_password);
 
   fw.println();
+  fw.println("[clock]");
+  fw.printf("ntp_server = %s\n", cfg.ntp_server);
+  fw.printf("tz = %s\n",         cfg.tz_string);
+
+  fw.println();
   fw.println("[alarm]");
-  fw.printf("enabled = %s\n",        cfg.alarm_enabled?"true":"false");
+  fw.printf("enabled = %s\n",        cfg.alarm_enabled ? "true" : "false");
   fw.printf("time = %02d:%02d\n",    cfg.alarm_hour, cfg.alarm_minute);
   fw.printf("beep_sequences = %d\n", cfg.alarm_beep_sequences);
 
@@ -778,12 +761,26 @@ static void save_config()
 
   fw.println();
   fw.println("[menu]");
-  fw.printf("sounds = %s\n", cfg.menu_sounds?"true":"false");
-  fw.close();
+  fw.printf("sounds = %s\n", cfg.menu_sounds ? "true" : "false");
 
-  Serial.println("[CFG] Saved wifi/alarm/timer/menu.");
-  
-  // Save the current timestamp to the log file as well
+  fw.println();
+  fw.println("[animation]");
+  fw.printf("schedule = %s\n",  cfg.anim_schedule_enabled ? "true" : "false");
+  fw.printf("duration = %d\n",  cfg.anim_duration_sec);
+
+  if (cfg.birthday_count > 0) {
+    fw.println();
+    fw.println("[birthdays]");
+    fw.print("dates = ");
+    for (int i = 0; i < cfg.birthday_count; i++) {
+      if (i > 0) fw.print(",");
+      fw.print(cfg.birthday_dates[i]);
+    }
+    fw.println();
+  }
+
+  fw.close();
+  Serial.println("[CFG] Saved.");
   log_last_seen();
 }
 

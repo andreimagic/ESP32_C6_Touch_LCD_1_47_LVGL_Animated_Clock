@@ -743,7 +743,7 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v1.4.1 | ✅ released | Bugfix: Fix RTC drift after long deep sleep in the event of an alarm set, allow time for NTP sync |
 | v1.5.0 | ✅ released | Apps menu: math gate, Rock Paper Scissors, Rolling Dice, Flip a Coin, game sounds, DST-aware timezone |
 | v2.0.0 | ✅ released | Analog clock view & low-power startup gate |
-| v2.1.0 | ✅ released | Birthday Easter egg: `[birthdays]` in config.ini, Happy Birthday melody, `happybirthday.gif` for alarm & timer |
+| v2.1.0 | ✅ released | Birthday Easter egg: `[birthdays]` in config.ini, Happy Birthday melody, `happybirthday.gif` for alarm & timer. Fixed Read/Write config.ini |
 
 ## License
 

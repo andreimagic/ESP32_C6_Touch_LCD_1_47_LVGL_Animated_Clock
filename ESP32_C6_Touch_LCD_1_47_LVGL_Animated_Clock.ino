@@ -66,7 +66,7 @@ struct AppConfig {
   // [birthdays] dates — up to 8 entries in DD-MM-YYYY format.
   // Only day & month are compared; the year is kept as reference in the file.
   // Default: empty (no birthday greetings).
-  char birthday_dates[8][16]  = {"01-01-1970","06-08-2017","07-09-2025"};          // [birthdays] dates (comma-separated, parsed at boot)
+  char birthday_dates[8][16]  = {"01-01-1970","06-08-2017"};          // [birthdays] dates (comma-separated, parsed at boot)
   int  birthday_count         = 2;           // number of parsed birthday entries
 } cfg;
 

@@ -37,6 +37,8 @@
 #include <SPI.h>
 #include <WiFi.h>
 #include <WiFiMulti.h>
+#include <WebServer.h>
+#include <ESPmDNS.h>
 #include <time.h>
 #include <FastIMU.h>
 #include "esp_timer.h"   // hardware microsecond timer for accurate metronome
@@ -63,6 +65,11 @@ struct AppConfig {
   bool anim_schedule_enabled  = true;        // [animation] schedule
   int  anim_duration_sec      = 10;          // [animation] duration
   bool menu_sounds            = true;        // [menu] sounds
+  // [birthdays] dates — up to 8 entries in DD-MM-YYYY format.
+  // Only day & month are compared; the year is kept as reference in the file.
+  // Default: empty (no birthday greetings).
+  char birthday_dates[8][16]  = {"01-01-1970","06-08-2017"};          // [birthdays] dates (comma-separated)
+  int  birthday_count         = 2;           // number of parsed birthday entries
 } cfg;
 
 // ─── Pin definitions ─────────────────────────────────────────────────────────
@@ -82,12 +89,13 @@ struct AppConfig {
 #define BAT_PIN         0
 
 // ─── GIF paths — SD card root is mapped to LVGL drive letter "S" ──────────────
-#define GIF_SMILE_PATH  "S:/cruzr_emotions/cruzr_smile.gif"
-#define GIF_SLEEP_PATH  "S:/cruzr_emotions/cruzr_sleep.gif"
-#define GIF_SAD_PATH    "S:/cruzr_emotions/cruzr_sad.gif"
-#define GIF_JOY_PATH    "S:/cruzr_emotions/cruzr_joy.gif"
-#define GIF_ALARM_PATH  "S:/cruzr_emotions/alarm_animation.gif"
-#define GIF_TIMER_PATH  "S:/cruzr_emotions/timer_animation.gif"
+#define GIF_SMILE_PATH    "S:/cruzr_emotions/cruzr_smile.gif"
+#define GIF_SLEEP_PATH    "S:/cruzr_emotions/cruzr_sleep.gif"
+#define GIF_SAD_PATH      "S:/cruzr_emotions/cruzr_sad.gif"
+#define GIF_JOY_PATH      "S:/cruzr_emotions/cruzr_joy.gif"
+#define GIF_ALARM_PATH    "S:/cruzr_emotions/alarm_animation.gif"
+#define GIF_TIMER_PATH    "S:/cruzr_emotions/timer_animation.gif"
+#define GIF_BIRTHDAY_PATH "S:/cruzr_emotions/happybirthday.gif"
 
 // ─── Forward declarations ─────────────────────────────────────────────────────
 static void home_screen_init(void);
@@ -102,6 +110,10 @@ static void lvgl_sd_fs_init(void);
 static void show_carousel(void);
 static void save_config(void);
 static void apply_wifi_state(void);
+static void start_ap_mode(void);
+static void start_web_server(void);
+static void show_wifi_detail_popup(void);
+static void buzzer_start_birthday(int sequences);
 
 
 // ─── Display ─────────────────────────────────────────────────────────────────
@@ -119,6 +131,15 @@ uint32_t  screenHeight;
 // ─── WiFi / NTP state ────────────────────────────────────────────────────────
 WiFiMulti wifiMulti;
 bool wifiConnected = false;
+
+// ── Extended WiFi / web-server state ─────────────────────────────────────────
+// Tracks the current WiFi mode so the status screen can display it concisely.
+enum WifiMode : uint8_t { WM_IDLE=0, WM_CONNECTING, WM_STA, WM_AP };
+static WifiMode  wifiMode         = WM_IDLE;
+static uint32_t  wifi_sta_start   = 0;       // millis() when STA attempt began
+static bool      webServerRunning = false;
+static WebServer web_server(80);             // HTTP server, port 80
+#define WIFI_STA_TIMEOUT_MS 12000            // fall back to AP after 12 s
 bool timeSynced    = false;
 
 // ─── UI handles ──────────────────────────────────────────────────────────────
@@ -143,6 +164,7 @@ lv_obj_t   *shutdown_popup       = nullptr;  // countdown confirmation card
 lv_obj_t   *shutdown_cntdown_lbl = nullptr;  // "Shutting down in N..." label
 lv_timer_t *shutdown_timer       = nullptr;  // 1-second tick
 int         shutdown_count       = 5;
+lv_obj_t   *wifi_detail_popup    = nullptr;  // long-press popup in status screen
 
 LV_FONT_DECLARE(montserrat_96);
 LV_FONT_DECLARE(dejavu_mono_8);
@@ -348,7 +370,11 @@ static void buzzer_start(int sequences)
 static void buzzer_start_alarm()
 {
   buzzer_fade_after = (cfg.alarm_beep_sequences > 0); // only when finite
-  buzzer_start(cfg.alarm_beep_sequences);
+  if (is_birthday_today()) {
+    buzzer_start_birthday(cfg.alarm_beep_sequences);
+  } else {
+    buzzer_start(cfg.alarm_beep_sequences);
+  }
 }
 
 // This will keep the animation on screen after the alarm is done
@@ -358,7 +384,11 @@ static void buzzer_start_alarm()
 static void buzzer_start_timer()
 {
   buzzer_fade_after = (cfg.timer_beep_sequences > 0);
-  buzzer_start(cfg.timer_beep_sequences);
+  if (is_birthday_today()) {
+    buzzer_start_birthday(cfg.timer_beep_sequences);
+  } else {
+    buzzer_start(cfg.timer_beep_sequences);
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -385,6 +415,41 @@ void set_brightness(int percent)
   if (label_brightness) {
     lv_label_set_text_fmt(label_brightness, LV_SYMBOL_IMAGE "  Brightness: %d%%", percent);
   }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  BIRTHDAY DETECTION
+//  Returns true if today's day+month matches any entry in cfg.birthday_dates.
+//  Comparison is day/month only; the year stored in the file is reference only.
+// ══════════════════════════════════════════════════════════════════════════════
+static bool is_birthday_today()
+{
+  if (cfg.birthday_count == 0) return false;
+  time_t now = time(nullptr);
+  if (now < 1735689600UL) return false; // RTC not yet valid
+  struct tm t;
+  localtime_r(&now, &t);
+  int today_day = t.tm_mday;
+  int today_mon = t.tm_mon + 1; // 1-based
+  for (int i = 0; i < cfg.birthday_count; i++) {
+    int d = 0, m = 0;
+    // Parse DD-MM-YYYY — ignore the year
+    if (sscanf(cfg.birthday_dates[i], "%d-%d-%*d", &d, &m) == 2) {
+      if (d == today_day && m == today_mon) {
+        Serial.printf("[BDAY] Birthday match on entry %d (%s)\n", i, cfg.birthday_dates[i]);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Returns the correct alarm/timer GIF path — birthday GIF takes priority
+static const char *alarm_gif_path() {
+  return is_birthday_today() ? GIF_BIRTHDAY_PATH : GIF_ALARM_PATH;
+}
+static const char *timer_gif_path() {
+  return is_birthday_today() ? GIF_BIRTHDAY_PATH : GIF_TIMER_PATH;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -541,7 +606,31 @@ static void load_config()
         Serial.printf("[CFG]   menu.sounds    = %s\n", cfg.menu_sounds?"true":"false");
       }
     }
-  }
+
+    // ── [birthdays] ──────────────────────────────────────────────────────────
+    // dates = DD-MM-YYYY,DD-MM-YYYY,...   (up to 8 entries)
+    // Only the day and month are used for comparison; the year is stored for
+    // reference but not evaluated.
+    else if (strcmp(section, "birthdays") == 0) {
+      if (strcmp(key, "dates") == 0) {
+        cfg.birthday_count = 0;
+        char buf[128];
+        strncpy(buf, val, sizeof(buf) - 1);
+        buf[sizeof(buf) - 1] = '\0';
+        char *tok = strtok(buf, ",");
+        while (tok && cfg.birthday_count < 8) {
+          char *entry = ini_trim(tok);
+          if (strlen(entry) >= 8) { // at least DD-MM-YY
+            strncpy(cfg.birthday_dates[cfg.birthday_count], entry, 15);
+            cfg.birthday_dates[cfg.birthday_count][15] = '\0';
+            cfg.birthday_count++;
+          }
+          tok = strtok(nullptr, ",");
+        }
+        Serial.printf("[CFG]   birthdays.count    = %d\n", cfg.birthday_count);
+      }
+    }
+  } // end while(f.available())
 
   f.close();
   Serial.printf("[CFG] Done. (%d lines read)\n", lineNum);
@@ -714,6 +803,211 @@ static void save_config()
 }
 
 // ── WiFi runtime toggle ───────────────────────────────────────────────────────
+// ── AP hotspot fallback ───────────────────────────────────────────────────────
+static void start_ap_mode()
+{
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP("ESP32-Clock");  // open, no password — safe since it serves only local config
+  wifiMode      = WM_AP;
+  wifiConnected = false;
+  timeSynced    = false;
+  Serial.printf("[WiFi] AP started. SSID=ESP32-Clock  IP=%s\n",
+                WiFi.softAPIP().toString().c_str());
+  start_web_server();
+}
+
+// ── HTTP web server ───────────────────────────────────────────────────────────
+// Three routes:
+//   GET  /        — dark-themed editor page; textarea pre-filled with config.ini
+//   POST /config  — saves posted content to SD, reloads cfg, redirects back
+//   GET  /log     — streams last_seen.txt as plain-text download
+//
+// Runs identically in both STA and AP mode.
+// Called at most once; guarded by webServerRunning.
+static void start_web_server()
+{
+  if (webServerRunning) return;
+
+  // ── GET / — config editor page ────────────────────────────────────────────
+  web_server.on("/", HTTP_GET, []() {
+    String cfg_text;
+    File f = SD.open("/config.ini", FILE_READ);
+    if (f) { while (f.available()) cfg_text += (char)f.read(); f.close(); }
+
+    String ip  = (wifiMode == WM_STA) ? WiFi.localIP().toString()
+                                      : WiFi.softAPIP().toString();
+    String url = (wifiMode == WM_STA) ? "http://esp32clock.local"
+                                      : "http://192.168.4.1";
+
+    // Escape < and > in config content so textarea renders correctly
+    cfg_text.replace("&", "&amp;");
+    cfg_text.replace("<", "&lt;");
+    cfg_text.replace(">", "&gt;");
+
+    String html =
+      F("<!DOCTYPE html><html><head>"
+        "<meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>ESP32 Clock</title>"
+        "<style>"
+        "*{box-sizing:border-box;margin:0;padding:0}"
+        "body{font:14px/1.5 sans-serif;background:#0d1117;color:#c9d1d9;padding:16px;max-width:520px;margin:0 auto}"
+        "h2{color:#79c0ff;margin-bottom:10px;font-size:17px}"
+        ".info{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#8b949e}"
+        ".info b{color:#79c0ff}"
+        ".card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px;margin-bottom:10px}"
+        "label{font-size:11px;color:#8b949e;display:block;margin-bottom:6px}"
+        "textarea{width:100%;height:300px;font:12px/1.4 monospace;background:#0d1117;color:#7ee787;"
+        "border:1px solid #30363d;border-radius:6px;padding:8px;resize:vertical}"
+        ".row{display:flex;gap:8px;margin-top:10px}"
+        ".btn{flex:1;padding:10px;border:none;border-radius:6px;font-size:14px;cursor:pointer;font-weight:600;text-align:center;text-decoration:none;display:flex;align-items:center;justify-content:center}"
+        ".save{background:#238636;color:#fff}"
+        ".log{background:#1f6feb;color:#fff}"
+        ".note{font-size:11px;color:#8b949e;margin-top:8px}"
+        "</style></head><body>"
+        "<h2>&#x23F0; ESP32 Clock</h2>"
+        "<div class='info'>"
+        "<b>IP:</b> ");
+    html += ip;
+    html += F(" &nbsp; <b>URL:</b> ");
+    html += url;
+    html += F("</div>"
+        "<div class='card'>"
+        "<form method='POST' action='/config'>"
+        "<label>config.ini &mdash; edit and tap Save to apply immediately</label>"
+        "<textarea name='cfg'>");
+    html += cfg_text;
+    html += F("</textarea>"
+        "<div class='row'>"
+        "<button class='btn save' type='submit'>&#x1F4BE; Save &amp; Reload</button>"
+        "<a class='btn log' href='/log'>&#x1F4CB; Download Log</a>"
+        "</div>"
+        "<p class='note'>Alarm, timer, menu and birthday changes take effect immediately."
+        " WiFi/NTP/TZ changes need a reboot.</p>"
+        "</form></div>"
+        "</body></html>");
+
+    web_server.send(200, "text/html", html);
+  });
+
+  // ── POST /config — save and reload ───────────────────────────────────────
+  web_server.on("/config", HTTP_POST, []() {
+    if (!web_server.hasArg("cfg")) {
+      web_server.send(400, "text/plain", "Missing cfg field"); return;
+    }
+    String body = web_server.arg("cfg");
+    // Normalise line endings from browser (\r\n → \n)
+    body.replace("\r\n", "\n");
+    body.replace("\r",   "\n");
+
+    SD.remove("/config.ini");
+    File fw = SD.open("/config.ini", FILE_WRITE);
+    if (!fw) { web_server.send(500, "text/plain", "SD write failed"); return; }
+    fw.print(body);
+    fw.close();
+
+    // Reload cfg from the new file
+    load_config();
+    // Apply TZ / NTP immediately (no WiFi restart)
+    setenv("TZ", cfg.tz_string, 1);
+    tzset();
+    if (wifiConnected) configTzTime(cfg.tz_string, cfg.ntp_server);
+    Serial.println("[WEB] config.ini updated via web");
+
+    // Redirect back to editor
+    web_server.sendHeader("Location", "/");
+    web_server.send(303);
+  });
+
+  // ── GET /log — download last_seen.txt ─────────────────────────────────────
+  web_server.on("/log", HTTP_GET, []() {
+    File f = SD.open("/last_seen.txt", FILE_READ);
+    if (!f) { web_server.send(404, "text/plain", "Log not found"); return; }
+    web_server.sendHeader("Content-Disposition", "attachment; filename=\"last_seen.txt\"");
+    web_server.streamFile(f, "text/plain");
+    f.close();
+  });
+
+  web_server.begin();
+  webServerRunning = true;
+  Serial.println("[WEB] HTTP server started on port 80");
+}
+
+// ── WiFi detail popup — shown on long-press of WiFi row in status screen ─────
+// Displays SSID / IP / URL so the user knows where to point their browser.
+// Tap anywhere on the popup to dismiss.
+static void wifi_status_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  lv_indev_wait_release(lv_indev_get_act());
+  show_wifi_detail_popup();
+}
+
+static void show_wifi_detail_popup()
+{
+  if (wifi_detail_popup || !overlay_cont) return;
+
+  wifi_detail_popup = lv_obj_create(overlay_cont);
+  lv_obj_set_size(wifi_detail_popup, 272, 96);
+  lv_obj_align(wifi_detail_popup, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(wifi_detail_popup, lv_color_make(10, 18, 42), 0);
+  lv_obj_set_style_bg_opa(wifi_detail_popup, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(wifi_detail_popup, lv_color_make(60, 110, 200), 0);
+  lv_obj_set_style_border_width(wifi_detail_popup, 1, 0);
+  lv_obj_set_style_radius(wifi_detail_popup, 8, 0);
+  lv_obj_set_style_pad_all(wifi_detail_popup, 0, 0);
+  lv_obj_clear_flag(wifi_detail_popup, LV_OBJ_FLAG_SCROLLABLE);
+  // Tap closes only the popup, not the whole status screen
+  lv_obj_add_event_cb(wifi_detail_popup, [](lv_event_t *ev) {
+    if (lv_event_get_code(ev) != LV_EVENT_CLICKED) return;
+    if (wifi_detail_popup) { lv_obj_del(wifi_detail_popup); wifi_detail_popup = nullptr; }
+  }, LV_EVENT_CLICKED, nullptr);
+
+  // Row 1: SSID or AP name
+  lv_obj_t *l1 = lv_label_create(wifi_detail_popup);
+  if (wifiMode == WM_STA && wifiConnected) {
+    lv_label_set_text_fmt(l1, LV_SYMBOL_WIFI "  %s", WiFi.SSID().c_str());
+    lv_obj_set_style_text_color(l1, lv_color_make(80, 200, 120), 0);
+  } else if (wifiMode == WM_AP) {
+    lv_label_set_text(l1, LV_SYMBOL_WIFI "  ESP32-Clock  (AP)");
+    lv_obj_set_style_text_color(l1, lv_color_make(80, 180, 220), 0);
+  } else {
+    lv_label_set_text(l1, LV_SYMBOL_WIFI "  Connecting...");
+    lv_obj_set_style_text_color(l1, lv_color_make(220, 160, 50), 0);
+  }
+  lv_obj_set_style_text_font(l1, &lv_font_montserrat_14, 0);
+  lv_obj_align(l1, LV_ALIGN_TOP_MID, 0, 10);
+
+  // Row 2: IP address
+  lv_obj_t *l2 = lv_label_create(wifi_detail_popup);
+  if (wifiMode == WM_STA && wifiConnected)
+    lv_label_set_text_fmt(l2, "IP  %s", WiFi.localIP().toString().c_str());
+  else if (wifiMode == WM_AP)
+    lv_label_set_text_fmt(l2, "IP  %s", WiFi.softAPIP().toString().c_str());
+  else
+    lv_label_set_text(l2, "IP  —");
+  lv_obj_set_style_text_color(l2, lv_color_make(180, 180, 200), 0);
+  lv_obj_align(l2, LV_ALIGN_TOP_MID, 0, 36);
+
+  // Row 3: URL
+  lv_obj_t *l3 = lv_label_create(wifi_detail_popup);
+  lv_label_set_text(l3, (wifiMode == WM_STA) ? "http://esp32clock.local"
+                                              : "http://192.168.4.1");
+  lv_obj_set_style_text_color(l3, lv_color_make(100, 200, 255), 0);
+  lv_obj_align(l3, LV_ALIGN_TOP_MID, 0, 58);
+
+  // Dismiss hint
+  lv_obj_t *hint = lv_label_create(wifi_detail_popup);
+  lv_label_set_text(hint, "tap to close");
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(hint, lv_color_make(80, 80, 120), 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_RIGHT, -8, -4);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  WiFi / NTP state management
+// ══════════════════════════════════════════════════════════════════════════════
 static void apply_wifi_state()
 {
   // Apply POSIX TZ immediately — makes localtime_r correct even offline
@@ -722,18 +1016,19 @@ static void apply_wifi_state()
   Serial.printf("[TZ] Applied: %s\n", cfg.tz_string);
 
   if (cfg.wifi_enabled) {
-    Serial.println("[WiFi] Enabling...");
+    Serial.println("[WiFi] Enabling STA mode...");
+    wifiMode         = WM_CONNECTING;
+    wifi_sta_start   = millis();
     WiFi.mode(WIFI_STA);
     wifiMulti.addAP(cfg.wifi_ssid, cfg.wifi_password);
     // configTzTime sets TZ env var AND starts SNTP in one call.
     // NTP delivers UTC; localtime_r converts to local using tz_string.
     configTzTime(cfg.tz_string, cfg.ntp_server);
+    // Kick off the first connection attempt immediately (non-blocking; ~50ms)
+    wifiMulti.run(0);
   } else {
-    Serial.println("[WiFi] Disabled by user.");
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
-    wifiConnected = false;
-    timeSynced    = false;
+    Serial.println("[WiFi] STA disabled — starting AP hotspot");
+    start_ap_mode();
   }
 }
 
@@ -756,7 +1051,7 @@ static void countdown_tick_cb(lv_timer_t * /*t*/)
     // Hide the 00:00 label immediately — GIF animation takes over
     if (home_timer_lbl) lv_obj_add_flag(home_timer_lbl, LV_OBJ_FLAG_HIDDEN);
     close_scheduled_gif();  // evict any running scheduled animation
-    show_gif_fullscreen(GIF_TIMER_PATH);
+    show_gif_fullscreen(timer_gif_path());
     buzzer_start_timer();
   }
 }
@@ -1079,23 +1374,52 @@ static void battery_timer_callback(lv_timer_t * /*timer*/)
 // ══════════════════════════════════════════════════════════════════════════════
 static void wifi_poll_cb(lv_timer_t *t)
 {
-  wl_status_t wst = WiFi.status();  // instant read, never blocks
+  // AP mode has no polling to do — web server runs independently in loop()
+  if (wifiMode == WM_AP) { lv_timer_set_period(t, 5000); return; }
+
+  wl_status_t wst = WiFi.status();
+
   if (wst == WL_CONNECTED) {
-    wifiConnected = true;
+    if (!wifiConnected) {
+      // First connection — start mDNS and web server exactly once
+      wifiConnected = true;
+      wifiMode      = WM_STA;
+      MDNS.begin("esp32clock");
+      start_web_server();
+      Serial.printf("[WiFi] Connected: SSID=%s  IP=%s  URL=http://esp32clock.local\n",
+                    WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+    }
     time_t now = time(nullptr);
     timeSynced = (now >= 8 * 3600 * 2);
-    lv_timer_set_period(t, 5000);   // back to 5s when connected
+    lv_timer_set_period(t, 5000);   // steady-state: poll every 5 s
+
   } else {
-    wifiConnected = false;
-    timeSynced    = false;
-    // wifiMulti.run() briefly takes the radio lock and stalls the
-    // FreeRTOS scheduler for 20-80ms, causing visible UI stutter.
-    // Only attempt reconnect when no modal/editor is open, and slow
-    // down to every 30s so the stall is infrequent.
+    // Not connected
+    if (wifiConnected) {
+      // Connection was just lost
+      wifiConnected = false;
+      wifiMode      = WM_CONNECTING;
+      wifi_sta_start = millis();    // restart timeout clock on disconnect
+    }
+
+    // Timeout: give up on STA and fall back to AP
+    if (wifiMode == WM_CONNECTING &&
+        (millis() - wifi_sta_start) > WIFI_STA_TIMEOUT_MS) {
+      Serial.println("[WiFi] STA timeout — falling back to AP hotspot");
+      start_ap_mode();
+      lv_timer_set_period(t, 5000);
+      return;
+    }
+
+    timeSynced = false;
+    // wifiMulti.run() briefly stalls the FreeRTOS scheduler (20–80 ms).
+    // Only attempt reconnect when no modal/editor/overlay is open.
     if (!modal_cont && !overlay_cont && !apps_cont && cfg.wifi_enabled) {
       wifiMulti.run(0);
     }
-    lv_timer_set_period(t, 30000);  // 30s between reconnect attempts
+    // Poll frequently while connecting so we detect success quickly,
+    // slow down once settled into disconnect-retry mode.
+    lv_timer_set_period(t, (wifiMode == WM_CONNECTING) ? 2000 : 30000);
   }
 }
 
@@ -1247,7 +1571,7 @@ static void run_daily_automation(int hour, int minute)
       Serial.println("[ALARM] NTP synced — firing pending alarm");
       close_scheduled_gif();
       set_brightness(50);
-      show_gif_fullscreen(GIF_ALARM_PATH);
+      show_gif_fullscreen(alarm_gif_path());
       buzzer_start_alarm();
     } else if (UPTIME_MS > NTP_GIVE_UP_MS) {
       // 15 min elapsed, NTP never synced — show warning alarm
@@ -1290,7 +1614,7 @@ static void run_daily_automation(int hour, int minute)
                     hour, minute, UPTIME_MS / 1000, timeSynced ? "yes" : "no");
       close_scheduled_gif();
       set_brightness(50);
-      show_gif_fullscreen(GIF_ALARM_PATH);
+      show_gif_fullscreen(alarm_gif_path());
       buzzer_start_alarm();
     } else {
       // Case B2: fresh boot, NTP not yet synced — hold
@@ -1352,6 +1676,8 @@ static void overlay_close_event_cb(lv_event_t *e)
     if (shutdown_popup) { lv_obj_del(shutdown_popup); shutdown_popup = nullptr; }
     shutdown_cntdown_lbl = nullptr;
     shutdown_count = 5;
+    // Clear WiFi detail popup pointer (object will be destroyed with overlay)
+    wifi_detail_popup = nullptr;
     // Stop tilt timer (status screen brightness or emotion GIF mode)
     if (tilt_timer) {
       lv_timer_del(tilt_timer);
@@ -1565,23 +1891,38 @@ static void show_status_screen(void)
   // ── Row 1: WiFi  (y = -28 from mid = ~58px from top) ─────────────────────
   lv_obj_t *wifi_icon = lv_label_create(overlay_cont);
   lv_label_set_text(wifi_icon, LV_SYMBOL_WIFI);
-  lv_obj_set_style_text_color(wifi_icon,
-    wifiConnected ? lv_color_make(80, 200, 120) : lv_color_make(200, 80, 80), 0);
+  lv_color_t wifi_color;
+  if      (wifiMode == WM_STA && wifiConnected) wifi_color = lv_color_make(80, 200, 120);  // green
+  else if (wifiMode == WM_AP)                   wifi_color = lv_color_make(80, 180, 220);  // cyan
+  else if (wifiMode == WM_CONNECTING)           wifi_color = lv_color_make(220, 160, 50);  // amber
+  else                                          wifi_color = lv_color_make(200, 80, 80);   // red
+  lv_obj_set_style_text_color(wifi_icon, wifi_color, 0);
   lv_obj_align(wifi_icon, LV_ALIGN_LEFT_MID, 20, -28);
   lv_obj_add_flag(wifi_icon, LV_OBJ_FLAG_IGNORE_LAYOUT);
 
   lv_obj_t *wifi_val = lv_label_create(overlay_cont);
-  if (wifiConnected) {
-    char ssid_buf[48];
-    snprintf(ssid_buf, sizeof(ssid_buf), "WiFi: %s", WiFi.SSID().c_str());
+  if (wifiMode == WM_STA && wifiConnected) {
+    // Truncate SSID to avoid overflowing the 320px screen
+    char ssid_buf[28];
+    strncpy(ssid_buf, WiFi.SSID().c_str(), 24); ssid_buf[24] = '\0';
     lv_label_set_text(wifi_val, ssid_buf);
-    lv_obj_set_style_text_color(wifi_val, lv_color_make(80, 200, 120), 0);
+  } else if (wifiMode == WM_AP) {
+    char ap_buf[32];
+    snprintf(ap_buf, sizeof(ap_buf), "AP  %s", WiFi.softAPIP().toString().c_str());
+    lv_label_set_text(wifi_val, ap_buf);
+  } else if (wifiMode == WM_CONNECTING) {
+    lv_label_set_text(wifi_val, "Connecting...");
   } else {
-    lv_label_set_text(wifi_val, "WiFi: disconnected");
-    lv_obj_set_style_text_color(wifi_val, lv_color_make(200, 80, 80), 0);
+    lv_label_set_text(wifi_val, "Offline");
   }
+  lv_obj_set_style_text_color(wifi_val, wifi_color, 0);
   lv_obj_align(wifi_val, LV_ALIGN_LEFT_MID, 44, -28);
   lv_obj_add_flag(wifi_val, LV_OBJ_FLAG_IGNORE_LAYOUT);
+
+  // Long-press anywhere on the status overlay shows the WiFi detail popup
+  // (SSID / IP / URL) — mirrors how the battery screen shows the shutdown popup.
+  lv_obj_add_event_cb(overlay_cont, wifi_status_longpress_cb,
+                      LV_EVENT_LONG_PRESSED, nullptr);
 
   // ── Row 2: NTP  (y = 0 from mid = 86px from top) ─────────────────────────
   lv_obj_t *ntp_icon = lv_label_create(overlay_cont);
@@ -2316,8 +2657,12 @@ static void clock_face_show(lv_timer_t *t)
 // menu_tone() is a short blocking call — safe in LVGL timer callbacks because
 // the longest note (500ms) is still shorter than any LVGL watchdog threshold.
 #define NOTE_C4  262
+#define NOTE_D4  294
+#define NOTE_E4  330
+#define NOTE_F4  349
 #define NOTE_G4  392
 #define NOTE_A4  440
+#define NOTE_BB4 466
 #define NOTE_B4  494
 #define NOTE_C5  523
 #define NOTE_D5  587
@@ -2325,6 +2670,94 @@ static void clock_face_show(lv_timer_t *t)
 #define NOTE_A5  880
 #define NOTE_B5  988
 #define NOTE_HI  1046  // high C6
+
+// ── Happy Birthday melody (non-blocking, LVGL-timer-driven) ──────────────────
+// Played instead of the standard 4-beep pattern when today matches a birthday.
+// Each entry is {frequency_hz, duration_ms}; freq=0 is an articulation gap.
+// Key: C major. Tempo: ~90 BPM (quarter ≈ 667ms).
+static const struct { uint16_t freq; uint16_t ms; } HB_NOTES[] = {
+  // "Hap-py  Birth-day  to   You"
+  {NOTE_C4,187},{0,63},{NOTE_C4,125},{0,63},
+  {NOTE_D4,375},{0,63},{NOTE_C4,375},{0,63},
+  {NOTE_F4,375},{0,63},{NOTE_E4,750},{0,200},
+  // "Hap-py  Birth-day  to   You"
+  {NOTE_C4,187},{0,63},{NOTE_C4,125},{0,63},
+  {NOTE_D4,375},{0,63},{NOTE_C4,375},{0,63},
+  {NOTE_G4,375},{0,63},{NOTE_F4,750},{0,200},
+  // "Hap-py  Birth-day  dear  [child]"
+  {NOTE_C4,187},{0,63},{NOTE_C4,125},{0,63},
+  {NOTE_C5,375},{0,63},{NOTE_A4,375},{0,63},
+  {NOTE_F4,375},{0,63},{NOTE_E4,375},{0,63},
+  {NOTE_D4,750},{0,200},
+  // "Hap-py  Birth-day  to   You"
+  {NOTE_BB4,187},{0,63},{NOTE_BB4,125},{0,63},
+  {NOTE_A4,375},{0,63}, {NOTE_F4,375},{0,63},
+  {NOTE_G4,375},{0,63}, {NOTE_F4,875}
+};
+#define HB_NOTE_COUNT (sizeof(HB_NOTES)/sizeof(HB_NOTES[0]))
+
+static int  hb_step      = 0;
+static int  hb_seq_total = 0;  // 0 = repeat until buzzer_stop() (touch to dismiss)
+static int  hb_seq_done  = 0;
+
+static void hb_tick_cb(lv_timer_t *t)
+{
+  if (hb_step >= (int)HB_NOTE_COUNT) {
+    // One full pass of the melody just finished
+    hb_seq_done++;
+    Serial.printf("[BUZZ] Birthday melody pass %d/%s done\n",
+                  hb_seq_done, hb_seq_total == 0 ? "∞" : String(hb_seq_total).c_str());
+
+    bool all_done = (hb_seq_total > 0 && hb_seq_done >= hb_seq_total);
+    if (all_done) {
+      // All requested repetitions finished — same teardown path as buzzer_stop()
+      lv_timer_del(t);
+      buzzer_timer  = nullptr;
+      ledcWrite(BUZZER_PIN, 0);
+      ledcChangeFrequency(BUZZER_PIN, 2000, 8); // restore alarm freq
+      buzzer_active = false;
+      hb_step       = 0;
+      hb_seq_done   = 0;
+      Serial.println("[BUZZ] Birthday melody finished (all sequences done)");
+      if (buzzer_fade_after) {
+        buzzer_fade_after = false;
+        overlay_fade_and_close();
+      }
+    } else {
+      // More repeats to go — silence the buzzer and wait 1500 ms before the
+      // next pass (mirrors the 1000 ms end-pause of the normal beep pattern,
+      // slightly longer here to give the tune a natural breath between verses).
+      ledcWrite(BUZZER_PIN, 0);
+      hb_step = 0;
+      lv_timer_set_period(t, 1500);
+    }
+    return;
+  }
+  uint16_t freq = HB_NOTES[hb_step].freq;
+  uint16_t dur  = HB_NOTES[hb_step].ms;
+  if (freq == 0) {
+    ledcWrite(BUZZER_PIN, 0);
+  } else {
+    ledcChangeFrequency(BUZZER_PIN, freq, 8);
+    ledcWrite(BUZZER_PIN, 128);
+  }
+  lv_timer_set_period(t, dur);
+  hb_step++;
+}
+
+static void buzzer_start_birthday(int sequences)
+{
+  // Plays the Happy Birthday melody `sequences` times (0 = until touch).
+  if (buzzer_active) buzzer_stop();
+  hb_step      = 0;
+  hb_seq_total = sequences;
+  hb_seq_done  = 0;
+  buzzer_active = true;
+  // buzzer_fade_after must already be set by the caller (same as normal alarm)
+  buzzer_timer = lv_timer_create(hb_tick_cb, 1, nullptr); // fires immediately
+  Serial.printf("[BUZZ] Birthday melody started (%s sequences)\n",
+                sequences == 0 ? "∞" : String(sequences).c_str());
+}
 
 static void menu_tone(int freq, int ms)
 {
@@ -4021,5 +4454,11 @@ void setup()
 void loop()
 {
   lv_timer_handler();  // drive LVGL: renders, animations, timers
+  // Process one pending HTTP request per loop iteration.
+  // handleClient() returns immediately when no client is connected,
+  // so it does not interfere with LVGL animations or the hardware-timer
+  // metronome. Brief stalls (~5–20 ms) only occur during actual transfers,
+  // which are user-triggered and therefore acceptable.
+  if (webServerRunning) web_server.handleClient();
   delay(5);
 }

@@ -114,6 +114,7 @@ static void start_ap_mode(void);
 static void start_web_server(void);
 static void show_wifi_detail_popup(void);
 static void buzzer_start_birthday(int sequences);
+static void generate_ap_pin(void);
 
 
 // ─── Display ─────────────────────────────────────────────────────────────────
@@ -141,6 +142,12 @@ static bool      webServerRunning = false;
 static WebServer web_server(80);             // HTTP server, port 80
 #define WIFI_STA_TIMEOUT_MS 12000            // fall back to AP after 12 s
 bool timeSynced    = false;
+
+// ── AP / web PIN — random 6-digit code generated once at boot ─────────────────
+// Shown on the device via the long-press WiFi detail popup.
+// Required by every mutating web route (POST /config, POST /reboot).
+// Never logged or transmitted in plain sight; used as WPA2 AP password too.
+static char ap_pin[7] = "000000";   // filled in setup() via generate_ap_pin()
 
 // ─── UI handles ──────────────────────────────────────────────────────────────
 lv_obj_t   *overlay_cont   = nullptr;
@@ -802,26 +809,43 @@ static void save_config()
   log_last_seen();
 }
 
+// ── Generate a random 6-digit PIN at boot ─────────────────────────────────────
+// Used as both the WPA2 AP password and the web UI PIN.
+// A new PIN is produced on every power cycle — physical access to the screen
+// is required to read it, so no fixed credential is ever embedded in firmware.
+static void generate_ap_pin()
+{
+  randomSeed(esp_timer_get_time());   // seed from hardware µs counter
+  uint32_t n = random(100000, 999999);
+  snprintf(ap_pin, sizeof(ap_pin), "%06lu", (unsigned long)n);
+  Serial.printf("[AP]  PIN generated: %s\n", ap_pin);
+}
+
 // ── WiFi runtime toggle ───────────────────────────────────────────────────────
 // ── AP hotspot fallback ───────────────────────────────────────────────────────
 static void start_ap_mode()
 {
   WiFi.disconnect(true);
   WiFi.mode(WIFI_AP);
-  WiFi.softAP("ESP32-Clock");  // open, no password — safe since it serves only local config
+  // Use the boot-generated PIN as the WPA2 password — read it from the
+  // long-press WiFi popup on the device screen.
+  WiFi.softAP("ESP32-Clock", ap_pin);
   wifiMode      = WM_AP;
   wifiConnected = false;
   timeSynced    = false;
-  Serial.printf("[WiFi] AP started. SSID=ESP32-Clock  IP=%s\n",
+  Serial.printf("[WiFi] AP started. SSID=ESP32-Clock  IP=%s  (PIN protected)\n",
                 WiFi.softAPIP().toString().c_str());
   start_web_server();
 }
 
 // ── HTTP web server ───────────────────────────────────────────────────────────
-// Three routes:
-//   GET  /        — dark-themed editor page; textarea pre-filled with config.ini
-//   POST /config  — saves posted content to SD, reloads cfg, redirects back
-//   GET  /log     — streams last_seen.txt as plain-text download
+// Routes:
+//   GET  /        — dark-themed editor; textarea with masked wifi password,
+//                   date/time setter, PIN input required for all mutations
+//   POST /config  — validates PIN, saves config.ini, applies settings
+//   POST /settime — validates PIN, applies date+time immediately to RTC
+//   POST /reboot  — validates PIN, reboots the ESP32
+//   GET  /log     — streams last_seen.txt as plain-text download (read-only)
 //
 // Runs identically in both STA and AP mode.
 // Called at most once; guarded by webServerRunning.
@@ -829,21 +853,51 @@ static void start_web_server()
 {
   if (webServerRunning) return;
 
-  // ── GET / — config editor page ────────────────────────────────────────────
+  // ── GET / — config editor page ───────────────────────────────────────────
   web_server.on("/", HTTP_GET, []() {
+
+    // Read config.ini from SD
     String cfg_text;
     File f = SD.open("/config.ini", FILE_READ);
     if (f) { while (f.available()) cfg_text += (char)f.read(); f.close(); }
+
+    // ── Mask the wifi password line before sending to browser ───────────────
+    // Replace "password = <anything>" with a fixed placeholder so the real
+    // credential is never transmitted over HTTP.  The POST handler only
+    // writes a new password when the placeholder is absent.
+    String cfg_display = cfg_text;
+    {
+      int idx = cfg_display.indexOf("password = ");
+      if (idx >= 0) {
+        int eol = cfg_display.indexOf('\n', idx);
+        if (eol < 0) eol = cfg_display.length();
+        cfg_display = cfg_display.substring(0, idx)
+                    + "password = ••••••••"
+                    + cfg_display.substring(eol);
+      }
+    }
+
+    // Escape HTML special chars so the textarea renders correctly
+    cfg_display.replace("&", "&amp;");
+    cfg_display.replace("<", "&lt;");
+    cfg_display.replace(">", "&gt;");
+
+    // Build current local time string for the datetime-local input default
+    char dt_buf[20] = "";
+    {
+      time_t now = time(nullptr);
+      struct tm tm_local;
+      localtime_r(&now, &tm_local);
+      if (now > 1735689600UL)   // only if RTC looks valid
+        snprintf(dt_buf, sizeof(dt_buf), "%04d-%02d-%02dT%02d:%02d",
+                 tm_local.tm_year + 1900, tm_local.tm_mon + 1, tm_local.tm_mday,
+                 tm_local.tm_hour, tm_local.tm_min);
+    }
 
     String ip  = (wifiMode == WM_STA) ? WiFi.localIP().toString()
                                       : WiFi.softAPIP().toString();
     String url = (wifiMode == WM_STA) ? "http://esp32clock.local"
                                       : "http://192.168.4.1";
-
-    // Escape < and > in config content so textarea renders correctly
-    cfg_text.replace("&", "&amp;");
-    cfg_text.replace("<", "&lt;");
-    cfg_text.replace(">", "&gt;");
 
     String html =
       F("<!DOCTYPE html><html><head>"
@@ -852,75 +906,234 @@ static void start_web_server()
         "<title>ESP32 Clock</title>"
         "<style>"
         "*{box-sizing:border-box;margin:0;padding:0}"
-        "body{font:14px/1.5 sans-serif;background:#0d1117;color:#c9d1d9;padding:16px;max-width:520px;margin:0 auto}"
+        "body{font:14px/1.5 sans-serif;background:#0d1117;color:#c9d1d9;"
+             "padding:16px;max-width:520px;margin:0 auto}"
         "h2{color:#79c0ff;margin-bottom:10px;font-size:17px}"
-        ".info{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#8b949e}"
+        ".info{background:#161b22;border:1px solid #30363d;border-radius:6px;"
+              "padding:8px 12px;margin-bottom:10px;font-size:12px;color:#8b949e}"
         ".info b{color:#79c0ff}"
-        ".card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px;margin-bottom:10px}"
-        "label{font-size:11px;color:#8b949e;display:block;margin-bottom:6px}"
-        "textarea{width:100%;height:300px;font:12px/1.4 monospace;background:#0d1117;color:#7ee787;"
-        "border:1px solid #30363d;border-radius:6px;padding:8px;resize:vertical}"
+        ".card{background:#161b22;border:1px solid #30363d;border-radius:8px;"
+              "padding:12px;margin-bottom:10px}"
+        "label{font-size:11px;color:#8b949e;display:block;margin-bottom:4px}"
+        "textarea{width:100%;height:280px;font:12px/1.4 monospace;"
+                 "background:#0d1117;color:#7ee787;"
+                 "border:1px solid #30363d;border-radius:6px;padding:8px;resize:vertical}"
+        "input[type=password],input[type=datetime-local]{"
+          "width:100%;padding:8px 10px;background:#0d1117;color:#c9d1d9;"
+          "border:1px solid #30363d;border-radius:6px;font-size:13px;"
+          "margin-bottom:8px}"
+        "input[type=password]{letter-spacing:2px}"
+        ".pin-row{display:flex;gap:8px;align-items:flex-end;margin-bottom:4px}"
+        ".pin-row input{flex:1;margin-bottom:0}"
         ".row{display:flex;gap:8px;margin-top:10px}"
-        ".btn{flex:1;padding:10px;border:none;border-radius:6px;font-size:14px;cursor:pointer;font-weight:600;text-align:center;text-decoration:none;display:flex;align-items:center;justify-content:center}"
+        ".btn{flex:1;padding:10px;border:none;border-radius:6px;font-size:14px;"
+             "cursor:pointer;font-weight:600;text-align:center;text-decoration:none;"
+             "display:flex;align-items:center;justify-content:center}"
         ".save{background:#238636;color:#fff}"
+        ".reboot{background:#b62324;color:#fff}"
         ".log{background:#1f6feb;color:#fff}"
+        ".time-btn{background:#6e40c9;color:#fff}"
         ".note{font-size:11px;color:#8b949e;margin-top:8px}"
+        ".err{color:#f85149;font-size:12px;margin-top:6px;display:none}"
+        "hr{border:none;border-top:1px solid #30363d;margin:10px 0}"
         "</style></head><body>"
         "<h2>&#x23F0; ESP32 Clock</h2>"
-        "<div class='info'>"
-        "<b>IP:</b> ");
+        "<div class='info'><b>IP:</b> ");
     html += ip;
     html += F(" &nbsp; <b>URL:</b> ");
     html += url;
     html += F("</div>"
+
+        // ── PIN field (shared across all actions) ─────────────────────────
         "<div class='card'>"
-        "<form method='POST' action='/config'>"
-        "<label>config.ini &mdash; edit and tap Save to apply immediately</label>"
-        "<textarea name='cfg'>");
-    html += cfg_text;
+        "<label>&#x1F511; Device PIN &mdash; shown on the clock screen</label>"
+        "<input type='password' id='pin' inputmode='numeric' maxlength='6'"
+               " placeholder='6-digit PIN' autocomplete='off'>"
+        "</div>"
+
+        // ── config.ini editor ─────────────────────────────────────────────
+        "<div class='card'>"
+        "<label>config.ini &mdash; edit and tap Save to apply</label>"
+        "<textarea id='cfg'>");
+    html += cfg_display;
     html += F("</textarea>"
+        "<p class='note'>WiFi password shown as &bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull; &mdash;"
+        " type a new value to change it, leave as-is to keep current.</p>"
+        "<p class='note'>Alarm, timer, menu &amp; birthday changes apply immediately."
+        " WiFi / NTP / TZ changes need a reboot.</p>"
         "<div class='row'>"
-        "<button class='btn save' type='submit'>&#x1F4BE; Save &amp; Reload</button>"
+        "<button class='btn save' onclick='doSave()'>&#x1F4BE; Save &amp; Reload</button>"
         "<a class='btn log' href='/log'>&#x1F4CB; Download Log</a>"
         "</div>"
-        "<p class='note'>Alarm, timer, menu and birthday changes take effect immediately."
-        " WiFi/NTP/TZ changes need a reboot.</p>"
-        "</form></div>"
+        "<p class='err' id='cfg-err'></p>"
+        "</div>"
+
+        // ── Date / time setter ────────────────────────────────────────────
+        "<div class='card'>"
+        "<label>&#x1F4C5; Set date &amp; time (applied immediately)</label>"
+        "<input type='datetime-local' id='dt' value='");
+    html += dt_buf;
+    html += F("'>"
+        "<div class='row'>"
+        "<button class='btn time-btn' onclick='doSetTime()'>&#x23F1; Apply Time</button>"
+        "</div>"
+        "<p class='err' id='dt-err'></p>"
+        "</div>"
+
+        // ── Reboot ────────────────────────────────────────────────────────
+        "<div class='card'>"
+        "<div class='row'>"
+        "<button class='btn reboot' onclick='doReboot()'>&#x21BA; Reboot Device</button>"
+        "</div>"
+        "<p class='err' id='rb-err'></p>"
+        "</div>"
+
+        // ── JS helpers ───────────────────────────────────────────────────
+        "<script>"
+        "function pin(){return document.getElementById('pin').value.trim();}"
+        "function showErr(id,msg){var e=document.getElementById(id);"
+        "  e.textContent=msg;e.style.display=msg?'block':'none';}"
+
+        // Save config
+        "function doSave(){"
+        "  showErr('cfg-err','');"
+        "  var p=pin();"
+        "  if(p.length!==6){showErr('cfg-err','PIN must be 6 digits.');return;}"
+        "  var fd=new FormData();"
+        "  fd.append('pin',p);"
+        "  fd.append('cfg',document.getElementById('cfg').value);"
+        "  fetch('/config',{method:'POST',body:fd})"
+        "  .then(function(r){if(r.redirected){window.location=r.url;return;}"
+        "    return r.text().then(function(t){"
+        "      if(r.ok){window.location='/';}"
+        "      else{showErr('cfg-err',t);}});}"
+        "  ).catch(function(e){showErr('cfg-err','Network error.');});}"
+
+        // Set time
+        "function doSetTime(){"
+        "  showErr('dt-err','');"
+        "  var p=pin();"
+        "  if(p.length!==6){showErr('dt-err','PIN must be 6 digits.');return;}"
+        "  var v=document.getElementById('dt').value;"
+        "  if(!v){showErr('dt-err','Select a date and time first.');return;}"
+        "  var fd=new FormData();"
+        "  fd.append('pin',p);fd.append('dt',v);"
+        "  fetch('/settime',{method:'POST',body:fd})"
+        "  .then(function(r){return r.text().then(function(t){"
+        "    if(r.ok){showErr('dt-err','\\u2713 Time updated.');}"
+        "    else{showErr('dt-err',t);}});})"
+        "  .catch(function(){showErr('dt-err','Network error.');});}"
+
+        // Reboot
+        "function doReboot(){"
+        "  showErr('rb-err','');"
+        "  var p=pin();"
+        "  if(p.length!==6){showErr('rb-err','PIN must be 6 digits.');return;}"
+        "  if(!confirm('Reboot the device now?'))return;"
+        "  var fd=new FormData();fd.append('pin',p);"
+        "  fetch('/reboot',{method:'POST',body:fd})"
+        "  .then(function(r){return r.text().then(function(t){"
+        "    if(r.ok){showErr('rb-err','Rebooting\\u2026 reconnect in ~5 s.');}"
+        "    else{showErr('rb-err',t);}});})"
+        "  .catch(function(){showErr('rb-err','Network error.');});}"
+        "</script>"
         "</body></html>");
 
     web_server.send(200, "text/html", html);
   });
 
-  // ── POST /config — save and reload ───────────────────────────────────────
+  // ── POST /config — validate PIN, save and reload ─────────────────────────
   web_server.on("/config", HTTP_POST, []() {
+    // PIN check
+    if (!web_server.hasArg("pin") || web_server.arg("pin") != String(ap_pin)) {
+      web_server.send(403, "text/plain", "Wrong PIN."); return;
+    }
     if (!web_server.hasArg("cfg")) {
-      web_server.send(400, "text/plain", "Missing cfg field"); return;
+      web_server.send(400, "text/plain", "Missing cfg field."); return;
     }
     String body = web_server.arg("cfg");
+
+    // ── Re-inject the real password if the user left the placeholder ────────
+    // The textarea shows "password = ••••••••"; if that string is still
+    // present the user did not change the password — keep cfg.wifi_password.
+    // If they replaced it with something else, use their new value.
+    if (body.indexOf("password = \xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2") >= 0) {
+      // Placeholder still present — substitute real password back in
+      body.replace(
+        String("password = \xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2"),
+        String("password = ") + String(cfg.wifi_password)
+      );
+    }
+
     // Normalise line endings from browser (\r\n → \n)
     body.replace("\r\n", "\n");
     body.replace("\r",   "\n");
 
     SD.remove("/config.ini");
     File fw = SD.open("/config.ini", FILE_WRITE);
-    if (!fw) { web_server.send(500, "text/plain", "SD write failed"); return; }
+    if (!fw) { web_server.send(500, "text/plain", "SD write failed."); return; }
     fw.print(body);
     fw.close();
 
-    // Reload cfg from the new file
+    // Reload cfg from the new file and apply settings that don't need a reboot
     load_config();
-    // Apply TZ / NTP immediately (no WiFi restart)
     setenv("TZ", cfg.tz_string, 1);
     tzset();
     if (wifiConnected) configTzTime(cfg.tz_string, cfg.ntp_server);
     Serial.println("[WEB] config.ini updated via web");
 
-    // Redirect back to editor
-    web_server.sendHeader("Location", "/");
-    web_server.send(303);
+    // JS fetch handler will redirect to / on 200
+    web_server.send(200, "text/plain", "OK");
   });
 
-  // ── GET /log — download last_seen.txt ─────────────────────────────────────
+  // ── POST /settime — validate PIN, set RTC immediately ───────────────────
+  // Body field: dt = "YYYY-MM-DDTHH:MM"  (datetime-local format)
+  web_server.on("/settime", HTTP_POST, []() {
+    if (!web_server.hasArg("pin") || web_server.arg("pin") != String(ap_pin)) {
+      web_server.send(403, "text/plain", "Wrong PIN."); return;
+    }
+    if (!web_server.hasArg("dt")) {
+      web_server.send(400, "text/plain", "Missing dt field."); return;
+    }
+    String dt = web_server.arg("dt");  // e.g. "2026-06-10T14:30"
+    int yr=0, mo=0, dy=0, hr=0, mn=0;
+    if (sscanf(dt.c_str(), "%d-%d-%dT%d:%d", &yr, &mo, &dy, &hr, &mn) != 5
+        || yr < 2020 || mo < 1 || mo > 12 || dy < 1 || dy > 31
+        || hr < 0 || hr > 23 || mn < 0 || mn > 59) {
+      web_server.send(400, "text/plain", "Invalid date/time format."); return;
+    }
+    struct tm tm_new = {};
+    tm_new.tm_year  = yr - 1900;
+    tm_new.tm_mon   = mo - 1;
+    tm_new.tm_mday  = dy;
+    tm_new.tm_hour  = hr;
+    tm_new.tm_min   = mn;
+    tm_new.tm_sec   = 0;
+    tm_new.tm_isdst = -1;
+    // The browser sends local time; mktime treats it as local (TZ already set)
+    time_t t = mktime(&tm_new);
+    if (t < 0) { web_server.send(400, "text/plain", "mktime failed."); return; }
+    struct timeval tv = { .tv_sec = t, .tv_usec = 0 };
+    settimeofday(&tv, nullptr);
+    timeSynced = true;   // treat as synced so the clock shows the new value
+    Serial.printf("[WEB] RTC set via web: %04d-%02d-%02d %02d:%02d\n",
+                  yr, mo, dy, hr, mn);
+    web_server.send(200, "text/plain", "OK");
+  });
+
+  // ── POST /reboot — validate PIN, schedule reboot ─────────────────────────
+  web_server.on("/reboot", HTTP_POST, []() {
+    if (!web_server.hasArg("pin") || web_server.arg("pin") != String(ap_pin)) {
+      web_server.send(403, "text/plain", "Wrong PIN."); return;
+    }
+    Serial.println("[WEB] Reboot requested via web");
+    web_server.send(200, "text/plain", "OK");
+    web_server.client().flush();
+    delay(200);
+    ESP.restart();
+  });
+
+  // ── GET /log — download last_seen.txt (no PIN required — read-only) ──────
   web_server.on("/log", HTTP_GET, []() {
     File f = SD.open("/last_seen.txt", FILE_READ);
     if (!f) { web_server.send(404, "text/plain", "Log not found"); return; }
@@ -949,7 +1162,7 @@ static void show_wifi_detail_popup()
   if (wifi_detail_popup || !overlay_cont) return;
 
   wifi_detail_popup = lv_obj_create(overlay_cont);
-  lv_obj_set_size(wifi_detail_popup, 272, 96);
+  lv_obj_set_size(wifi_detail_popup, 272, 116);   // taller to fit 4 rows
   lv_obj_align(wifi_detail_popup, LV_ALIGN_CENTER, 0, 0);
   lv_obj_set_style_bg_color(wifi_detail_popup, lv_color_make(10, 18, 42), 0);
   lv_obj_set_style_bg_opa(wifi_detail_popup, LV_OPA_COVER, 0);
@@ -977,7 +1190,7 @@ static void show_wifi_detail_popup()
     lv_obj_set_style_text_color(l1, lv_color_make(220, 160, 50), 0);
   }
   lv_obj_set_style_text_font(l1, &lv_font_montserrat_14, 0);
-  lv_obj_align(l1, LV_ALIGN_TOP_MID, 0, 10);
+  lv_obj_align(l1, LV_ALIGN_TOP_MID, 0, 8);
 
   // Row 2: IP address
   lv_obj_t *l2 = lv_label_create(wifi_detail_popup);
@@ -988,14 +1201,21 @@ static void show_wifi_detail_popup()
   else
     lv_label_set_text(l2, "IP  —");
   lv_obj_set_style_text_color(l2, lv_color_make(180, 180, 200), 0);
-  lv_obj_align(l2, LV_ALIGN_TOP_MID, 0, 36);
+  lv_obj_align(l2, LV_ALIGN_TOP_MID, 0, 30);
 
-  // Row 3: URL
+  // Row 3: PIN (always shown — needed to use the web UI or connect to AP)
   lv_obj_t *l3 = lv_label_create(wifi_detail_popup);
-  lv_label_set_text(l3, (wifiMode == WM_STA) ? "http://esp32clock.local"
+  lv_label_set_text_fmt(l3, LV_SYMBOL_EDIT "  PIN: %s", ap_pin);
+  lv_obj_set_style_text_color(l3, lv_color_make(255, 210, 80), 0);  // amber
+  lv_obj_set_style_text_font(l3, &lv_font_montserrat_14, 0);
+  lv_obj_align(l3, LV_ALIGN_TOP_MID, 0, 52);
+
+  // Row 4: URL
+  lv_obj_t *l4 = lv_label_create(wifi_detail_popup);
+  lv_label_set_text(l4, (wifiMode == WM_STA) ? "http://esp32clock.local"
                                               : "http://192.168.4.1");
-  lv_obj_set_style_text_color(l3, lv_color_make(100, 200, 255), 0);
-  lv_obj_align(l3, LV_ALIGN_TOP_MID, 0, 58);
+  lv_obj_set_style_text_color(l4, lv_color_make(100, 200, 255), 0);
+  lv_obj_align(l4, LV_ALIGN_TOP_MID, 0, 74);
 
   // Dismiss hint
   lv_obj_t *hint = lv_label_create(wifi_detail_popup);
@@ -4249,6 +4469,9 @@ void setup()
   Serial.printf("[BOOT] Wake cause: %s\n",
     wakeup_cause == ESP_SLEEP_WAKEUP_TIMER     ? "TIMER — alarm auto-wake" :
     wakeup_cause == ESP_SLEEP_WAKEUP_UNDEFINED ? "cold boot / RESET button" : "other");
+
+  // ── Generate AP/web PIN — must happen before any WiFi or web-server call ──
+  generate_ap_pin();
 
   // ── Step 1: Pull ALL SPI CS lines HIGH before the bus starts ──────────────
   // This prevents any device from misinterpreting the SPI init sequence.

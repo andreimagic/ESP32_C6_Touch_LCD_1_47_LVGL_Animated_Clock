@@ -66,9 +66,9 @@ struct AppConfig {
   int  anim_duration_sec      = 10;          // [animation] duration
   bool menu_sounds            = true;        // [menu] sounds
   int  tennis_high_score      = 0;           // [tennis] high_score
-  int  tennis_paddle_size     = 3;           // [tennis] paddle_size  (chars, 1-10)
-  int  tennis_ball_speed_ms   = 180;         // [tennis] ball_speed_ms
-  int  tennis_paddle_speed_ms = 400;         // [tennis] paddle_speed_ms
+  int  tennis_paddle_size     = 5;           // [tennis] paddle_size  (chars, 1-10)
+  int  tennis_ball_speed_ms   = 750;         // [tennis] ball_speed_ms
+  int  tennis_paddle_speed_ms = 250;         // [tennis] paddle_speed_ms
   // [birthdays] dates — up to 8 entries in DD-MM-YYYY format.
   // Only day & month are compared; the year is kept as reference in the file.
   // Default: empty (no birthday greetings).
@@ -4089,7 +4089,7 @@ static void app_screen_metronome()
 
 #define TL_COLS        40     // character columns
 #define TL_ROWS         9     // character rows (ball area, no status bar)
-#define TL_GYRO_THRESH 0.5f   // same threshold as brightness tilt
+#define TL_GYRO_THRESH 0.25f   // same threshold as brightness tilt
 
 // Pixel offset of the game field top-left within apps_cont
 // Field height: TL_ROWS * 16 = 144px. Status bar: ~16px. Total: ~160px (fits 172).
@@ -4141,7 +4141,7 @@ static void tl_render()
       } else if (row == TL_ROWS - 1) {
         // Paddle row (no side walls on paddle row — open at sides)
         int rel = col - tl_paddle_x;
-        if (rel >= 0 && rel < cfg.tennis_paddle_size) ch = '_';
+        if (rel >= 0 && rel < cfg.tennis_paddle_size) ch = '=';
       } else {
         // Play area with side walls
         if (col == 0 || col == TL_COLS - 1) {

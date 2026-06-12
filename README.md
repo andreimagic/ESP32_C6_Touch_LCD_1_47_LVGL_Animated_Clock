@@ -30,6 +30,8 @@ A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47
 | **Brightness schedule** | Auto-dims at 19:00 → 19:30 → 20:00, brightens at 06:00 → 07:00 |
 | **Tilt brightness** | Tilt device left/right in the Status screen to adjust brightness in 10% steps |
 | **WiFi + NTP** | Connects at boot, syncs time automatically; can be disabled from the carousel |
+| **Web configuration** | PIN-protected browser UI served by the device — edit `config.ini`, set date/time, reboot; accessible in both STA and AP mode |
+| **AP hotspot** | Falls back to its own WPA2 AP (`ESP32-Clock`) when STA fails; PIN shown on the device screen — physical access required |
 | **DST-aware timezone** | POSIX `tz` string in `config.ini` handles daylight saving automatically forever |
 | **RTC persistence** | Hourly timestamp log on SD card (`/last_seen.txt`) restores time on cold boot without WiFi |
 | **Status screen** | Today's date in the title, WiFi SSID, NTP sync state, current brightness |
@@ -354,6 +356,50 @@ Tap the centre to toggle WiFi on or off. No sub-screen. The description updates 
 
 ---
 
+## Web Configuration
+
+When WiFi is active the device serves a browser-based configuration UI on port 80 — reachable in **both STA and AP mode**.
+
+### Connecting
+
+**STA mode** (connected to your home network): navigate to `http://esp32clock.local` or the IP shown in the Status screen WiFi popup.
+
+**AP mode** (no home WiFi, or STA failed): the device creates a WPA2 hotspot named `ESP32-Clock`. The AP password and web PIN are the same random 6-digit code generated at every boot. Long-press anywhere → Carousel → WiFi to open the detail popup, which shows:
+
+```
+┌───────────────────────────────────┐
+│  📶  ESP32-Clock  (AP)            │
+│  IP  192.168.4.1                  │
+│  🔑  PIN: 483921                  │
+│  http://192.168.4.1               │
+│                          tap to close │
+└───────────────────────────────────┘
+```
+
+A new PIN is generated on every power cycle — reading it requires physical access to the device screen, so no fixed credential is ever embedded in the firmware.
+
+### Web UI
+
+The dark-themed page has three panels:
+
+| Panel | Action |
+|---|---|
+| **PIN field** | Enter the 6-digit PIN shown on the device. All save/apply/reboot actions require a valid PIN. |
+| **config.ini editor** | Textarea pre-filled with the current config. The WiFi password is masked as `••••••••` — leave it unchanged to keep the current password, or type a new value to update it. Tap **Save & Reload** to write the file and apply settings that don't need a reboot (alarm, timer, animation, timezone). WiFi/NTP changes take effect after a reboot. |
+| **Set date & time** | A `datetime-local` picker pre-filled with the current device time. Tap **Apply Time** to set the RTC immediately via `settimeofday()` — no reboot needed. |
+| **Reboot** | Reboots the device remotely after PIN confirmation. |
+| **Download Log** | Downloads `/last_seen.txt` — no PIN needed (read-only). |
+
+### Security model
+
+- The AP uses WPA2 with the boot-generated PIN — not open
+- The PIN is never stored, never sent over the wire in cleartext, and never logged to serial
+- The WiFi password is never transmitted to the browser (masked on GET, re-injected server-side on POST if unchanged)
+- All mutating routes (`POST /config`, `POST /settime`, `POST /reboot`) return HTTP 403 if the PIN is wrong or absent
+- A fresh PIN on every boot means stealing a previous PIN is useless
+
+---
+
 ## Sub-screens
 
 ### Analog Clock (upper-right tap)
@@ -649,6 +695,11 @@ read: 8161
 | Touch zones unresponsive | Touch controller not detected | Check I²C wiring on pins 18/19 |
 | IMU not working | Address mismatch or wiring | Confirm `IMU_ADDRESS = 0x6B`; check serial for IMU error code |
 | Alarm not firing | `enabled = false` or device was asleep | Set `enabled = true`; check boot log for wakeup cause |
+| Web UI returns 403 | Wrong or missing PIN | Read the current PIN from the device screen (long-press → Carousel → WiFi) |
+| Web UI not reachable in AP mode | Not connected to `ESP32-Clock` AP | Connect using the PIN shown on the device screen, then navigate to `http://192.168.4.1` |
+| Web UI not reachable in STA mode | mDNS not resolving | Use the IP address shown in the Status WiFi popup instead of `esp32clock.local` |
+| Config saved but WiFi not reconnecting | WiFi/NTP changes need a reboot | Use the Reboot button in the web UI after saving |
+| Date/time set via web not sticking | RTC drift before next NTP sync | Normal — NTP will correct it at next sync; disable WiFi if you want the manual time to persist |
 | Alarm rings twice | RTC drift + NTP correction | Fixed in v1.4.1 — NTP guard prevents double-fire |
 | Warning screen at alarm time | NTP did not sync within 15 min | Check WiFi; device woke 5 min early specifically to allow sync |
 | Buzzer plays all tones at same pitch | Active buzzer used, or ESP32 core issue | Use a **passive** buzzer; firmware uses `ledcChangeFrequency()` for pitch control |
@@ -680,6 +731,7 @@ read: 8161
 - **Automation gate** — `run_daily_automation()` fires when `now > 2026-01-01` (RTC sanity check) instead of `timeSynced`, so brightness schedules, alarms, and animations all work correctly when WiFi is disabled or the time was set manually.
 - **Deep sleep & Alarm NTP guard** — `boot_millis` captured at the very start of `setup()`. Wakes 5 min before alarm when > 5 min away, 30 s when close. Holds `alarm_ntp_pending` if time unconfirmed; falls back to warning overlay after 15 min.
 - **config.ini** — parsed once at boot with a hand-rolled INI reader (no external library). On save, `[wifi]`, `[alarm]`, `[timer]`, and `[menu]` sections are fully rewritten; all other sections and comments are preserved.
+- **Web configuration server** — `WebServer` on port 80, started once and shared between STA and AP modes. The boot-generated PIN (`ap_pin[7]`) is seeded from `esp_timer_get_time()` and used as both the WPA2 AP password and the web UI gate. `GET /` sends the config textarea with the WiFi password masked; `POST /config` re-injects the real password from RAM if the placeholder is unchanged, then writes to SD and calls `load_config()`. `POST /settime` parses `YYYY-MM-DDTHH:MM` and calls `settimeofday()` directly. `POST /reboot` calls `ESP.restart()` after flushing the HTTP response. All three POST routes return HTTP 403 on PIN mismatch.
 
 ---
 
@@ -701,6 +753,7 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v1.4.1 | ✅ released | Bugfix: Fix RTC drift after long deep sleep in the event of an alarm set, allow time for NTP sync |
 | v1.5.0 | ✅ released | Apps menu: math gate, Rock Paper Scissors, Rolling Dice, Flip a Coin, game sounds, DST-aware timezone |
 | v2.0.0 | ✅ released | Analog clock view & low-power startup gate |
+| v2.1.0 | ✅ released | PIN-protected web configuration UI — edit config, set RTC, reboot; WPA2 AP with boot-generated PIN |
 
 ## License
 

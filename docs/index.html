@@ -22,6 +22,7 @@
                 <li><a href="#features" class="nav-links">Features</a></li>
                 <li><a href="#hardware" class="nav-links">Hardware</a></li>
                 <li><a href="#software" class="nav-links">Software</a></li>
+                <li><a href="#webconfig" class="nav-links">Web Config</a></li>
                 <li><a href="#usage" class="nav-links">Usage</a></li>
                 <li><a href="#architecture" class="nav-links">Architecture</a></li>
                 <li><a href="#build" class="nav-links">Build</a></li>
@@ -90,6 +91,8 @@
                         <tr><td><strong>Emotion tilt</strong></td><td>Tilt the device to change emotion in real-time</td></tr>
                         <tr><td><strong>Clock editor</strong></td><td>Sets HH:MM and DD/MON/YYYY offline, no WiFi needed</td></tr>
                         <tr><td><strong>WiFi + NTP</strong></td><td>Connects at boot, syncs time automatically; DST-aware timezone</td></tr>
+                        <tr><td><strong>Web configuration</strong></td><td>PIN-protected browser UI — edit <code>config.ini</code>, set date/time, reboot; accessible in both STA and AP mode</td></tr>
+                        <tr><td><strong>AP hotspot</strong></td><td>WPA2 fallback AP (<code>ESP32-Clock</code>) with boot-generated PIN shown on the device screen — physical access required</td></tr>
                         <tr><td><strong>Battery monitor</strong></td><td>Live percentage, voltage, ADC raw — with LiPo discharge curve</td></tr>
                         <tr><td><strong>Low-power gate</strong></td><td>Refuses to boot if battery ≤ 10%, shows empty battery icon and deep sleeps.</td></tr>
                         <tr><td><strong>Apps menu</strong></td><td>Math challenge gate, Rock Paper Scissors, Rolling Dice, Coin Flip</td></tr>
@@ -207,6 +210,47 @@ duration = 10
 </code></pre>
         </section>
 
+        <section id="webconfig">
+            <h2>🌐 Web Configuration</h2>
+            <p>When WiFi is active the device serves a browser-based configuration UI on port 80, accessible in both STA and AP mode — no app or cable needed.</p>
+
+            <h3>Connecting</h3>
+            <p><strong>STA mode</strong> (connected to your home network): navigate to <code>http://esp32clock.local</code> or the IP address shown in the long-press WiFi detail popup.</p>
+            <p><strong>AP mode</strong> (no home WiFi, or STA connection failed): the device creates a WPA2 hotspot named <code>ESP32-Clock</code>. Long-press anywhere → Carousel → WiFi to open the detail popup, which shows the AP name, IP address, the 6-digit PIN, and the URL — everything you need to connect:</p>
+<pre><code>┌───────────────────────────────────┐
+│  📶  ESP32-Clock  (AP)            │
+│  IP  192.168.4.1                  │
+│  🔑  PIN: 483921                  │
+│  http://192.168.4.1               │
+└───────────────────────────────────┘</code></pre>
+            <p>A new PIN is generated at every boot from a hardware timer seed. Reading it requires physical access to the device, so no fixed credential is ever embedded in the firmware.</p>
+
+            <h3>Web UI panels</h3>
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr><th>Panel</th><th>What it does</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><strong>PIN field</strong></td><td>Enter the 6-digit PIN shown on the device screen. Required for all save / apply / reboot actions.</td></tr>
+                        <tr><td><strong>config.ini editor</strong></td><td>Textarea pre-filled with the current config. WiFi password is masked as <code>••••••••</code> — leave it to keep the current password, or type a new value to change it. <strong>Save &amp; Reload</strong> writes the file and applies non-reboot settings immediately.</td></tr>
+                        <tr><td><strong>Set date &amp; time</strong></td><td>A date/time picker pre-filled with the current device time. <strong>Apply Time</strong> sets the RTC immediately via <code>settimeofday()</code> — no reboot needed.</td></tr>
+                        <tr><td><strong>Reboot</strong></td><td>Reboots the device remotely after PIN confirmation.</td></tr>
+                        <tr><td><strong>Download Log</strong></td><td>Downloads <code>/last_seen.txt</code> — read-only, no PIN required.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h3>Security model</h3>
+            <ul>
+                <li>The AP uses <strong>WPA2</strong> — not open. The PIN is the WPA2 password.</li>
+                <li>The PIN is never stored in flash, never sent in cleartext, and never printed to serial.</li>
+                <li>The WiFi password is <strong>never transmitted to the browser</strong> — masked on GET, re-injected server-side on POST if unchanged.</li>
+                <li>All mutating routes return <strong>HTTP 403</strong> if the PIN is wrong or absent.</li>
+                <li>A fresh PIN on every boot means a captured PIN from a previous session is useless.</li>
+            </ul>
+        </section>
+
         <section id="architecture">
             <h2>🏗 Architecture Notes</h2>
             <ul>
@@ -252,6 +296,7 @@ duration = 10
                         <tr><td>v1.4.0</td><td>✅ released</td><td>Emotion tilt GIF mode on upper-left tap (smile/sleep/sad/joy via IMU).</td></tr>
                         <tr><td>v1.5.0</td><td>✅ released</td><td>Apps menu: math gate, Rock Paper Scissors, Rolling Dice, Flip a Coin, DST-aware timezone.</td></tr>
                         <tr><td>v2.0.0</td><td>✅ released</td><td>Analog clock view & low-power startup gate.</td></tr>
+                        <tr><td>v2.1.0</td><td>✅ released</td><td>PIN-protected web configuration UI — edit config, set RTC, reboot; WPA2 AP with boot-generated PIN.</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -278,6 +323,9 @@ duration = 10
                         <tr><td>`SD card mount failed`</td><td>Wrong MISO pin or card not FAT32</td><td>Confirm GPIO 3 = MISO; reformat card as FAT32</td></tr>
                         <tr><td>`Not enough RAM for GIF`</td><td>GIF still full-size</td><td>Resize exactly to 160 × 86 px</td></tr>
                         <tr><td>Apps menu not opening</td><td>Wrong touch zone</td><td>Long-press the <strong>smile GIF</strong> specifically, not just anywhere</td></tr>
+                        <tr><td>Web UI returns 403</td><td>Wrong or missing PIN</td><td>Read the current PIN from the device screen (long-press → Carousel → WiFi)</td></tr>
+                        <tr><td>Web UI not reachable in AP mode</td><td>Not connected to <code>ESP32-Clock</code> AP</td><td>Connect using the PIN shown on the device screen, then navigate to <code>http://192.168.4.1</code></td></tr>
+                        <tr><td>Config saved but WiFi not reconnecting</td><td>WiFi/NTP changes need a reboot</td><td>Use the Reboot button in the web UI after saving</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -290,6 +338,7 @@ duration = 10
                 <li><strong>SD ↔ LVGL filesystem bridge:</strong> Allows `lv_gif_set_src("S:/...")` natively.</li>
                 <li><strong>DST-aware timekeeping:</strong> `configTzTime` sets POSIX TZ handling DST automatically.</li>
                 <li><strong>Emotion tilt in-place swap:</strong> Swaps the GIF path dynamically based on IMU data without rebuilding the overlay.</li>
+                <li><strong>Web configuration server:</strong> <code>WebServer</code> on port 80 shared between STA and AP modes. Boot PIN seeded from <code>esp_timer_get_time()</code>; used as both the WPA2 AP password and the web gate. <code>POST /config</code> re-injects the masked WiFi password from RAM before writing to SD. <code>POST /settime</code> calls <code>settimeofday()</code> directly. All mutating routes return 403 on PIN mismatch.</li>
             </ul>
         </section>
 

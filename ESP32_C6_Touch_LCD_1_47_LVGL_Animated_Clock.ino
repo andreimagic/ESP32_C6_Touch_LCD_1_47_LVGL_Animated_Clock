@@ -4068,7 +4068,7 @@ static void app_screen_metronome()
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  TENNIS LETTERS  (apps_idx == 5)
+//  TENNIS LETTERS  (apps_idx == 4)
 //
 //  A Breakout-style ASCII tennis game. The ball is a letter (a→z cycling).
 //  The paddle (___) is moved left/right by tilting the device on the Y axis,
@@ -4371,13 +4371,13 @@ static void tl_gyro_tick_cb(lv_timer_t * /*t*/)
 
   float y = accelData.accelY;
   if (y > TL_GYRO_THRESH) {
-    // Tilt right → paddle moves right
-    if (tl_paddle_x + cfg.tennis_paddle_size < TL_COLS - 1)
-      tl_paddle_x++;
-  } else if (y < -TL_GYRO_THRESH) {
-    // Tilt left → paddle moves left (col 1 is the first non-wall column)
+    // Tilt right → paddle moves left
     if (tl_paddle_x > 1)
       tl_paddle_x--;
+  } else if (y < -TL_GYRO_THRESH) {
+    // Tilt left → paddle moves right
+    if (tl_paddle_x + cfg.tennis_paddle_size < TL_COLS - 1)
+      tl_paddle_x++;
   }
   tl_render();
 }
@@ -4467,7 +4467,7 @@ static void app_screen_start()
     app_screen_dice_start();
     return;
   }
-  if (apps_idx == 5) {
+  if (apps_idx == 4) {
     tl_game_start();
     return;
   }
@@ -4496,7 +4496,7 @@ static void app_screen_start()
 static void apps_tap_enter_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-  if (apps_idx == 4) {
+  if (apps_idx == 5) {
     cfg.menu_sounds = !cfg.menu_sounds;
     save_config();
     if (cfg.menu_sounds) menu_tone_hi();  // confirm it's on
@@ -4518,8 +4518,8 @@ static void apps_carousel_build()
     {"Rolling Dice",        "An interactive ASCII Dice"},
     {"Flip a Coin",         "An interactive ASCII Coin"},
     {"Metronome",           "Tempo keeper for musicians"},
-    {nullptr,               nullptr},  // item 4 = Sounds toggle
-    {"Tennis Letters",      "Catch the alphabet!"},
+    {nullptr,               nullptr},  // item 4 = Tennis Letters (rendered inline)
+    {nullptr,               nullptr},  // item 5 = Sounds toggle  (rendered inline)
   };
 
   // Left arrow + zone
@@ -4550,7 +4550,7 @@ static void apps_carousel_build()
     lv_obj_add_event_cb(z,apps_right_cb,LV_EVENT_PRESSED,nullptr);
     lv_obj_add_event_cb(z,apps_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr); }
 
-  if (apps_idx == 4) {
+  if (apps_idx == 5) {
     // ── Sounds toggle (inline, mirrors WiFi toggle in settings) ──────────
     lv_obj_t *sicon = lv_label_create(apps_cont);
     lv_label_set_text(sicon, cfg.menu_sounds ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE);
@@ -4564,8 +4564,34 @@ static void apps_carousel_build()
     lv_obj_set_style_text_color(sdesc,
       cfg.menu_sounds ? lv_color_make(80,200,120) : lv_color_make(180,60,60), 0);
     lv_obj_align(sdesc, LV_ALIGN_CENTER, 0, 28);
+  } else if (apps_idx == 4) {
+    // ── Tennis Letters ────────────────────────────────────────────────────
+    lv_obj_t *name_lbl = lv_label_create(apps_cont);
+    lv_label_set_text(name_lbl, "Tennis Letters");
+    lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(name_lbl, lv_color_white(), 0);
+    lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(name_lbl, 180);
+    lv_obj_set_style_text_align(name_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(name_lbl, LV_ALIGN_CENTER, 0, -14);
+
+    lv_obj_t *desc_lbl = lv_label_create(apps_cont);
+    lv_label_set_text(desc_lbl, "Catch the alphabet!");
+    lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
+    lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
+
+    if (cfg.tennis_high_score > 0) {
+      lv_obj_t *hs_lbl = lv_label_create(apps_cont);
+      char hs_buf[32];
+      snprintf(hs_buf, sizeof(hs_buf), "Best: %d letters", cfg.tennis_high_score);
+      lv_label_set_text(hs_lbl, hs_buf);
+      lv_obj_set_style_text_font(hs_lbl, &lv_font_montserrat_14, 0);
+      lv_obj_set_style_text_color(hs_lbl, lv_color_make(255, 210, 60), 0);
+      lv_obj_align(hs_lbl, LV_ALIGN_CENTER, 0, 44);
+    }
   } else {
-    // ── Game item ─────────────────────────────────────────────────────────
+    // ── Named game items (0=RPS, 1=Dice, 2=Coin, 3=Metronome) ────────────
     lv_obj_t *name_lbl = lv_label_create(apps_cont);
     lv_label_set_text(name_lbl, items[apps_idx].name);
     lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_24, 0);
@@ -4575,23 +4601,11 @@ static void apps_carousel_build()
     lv_obj_set_style_text_align(name_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(name_lbl, LV_ALIGN_CENTER, 0, -14);
 
-    // Description
     lv_obj_t *desc_lbl = lv_label_create(apps_cont);
     lv_label_set_text(desc_lbl, items[apps_idx].desc);
     lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
     lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
-
-    // For Tennis: show current high score as a sub-hint
-    if (apps_idx == 5 && cfg.tennis_high_score > 0) {
-      lv_obj_t *hs_lbl = lv_label_create(apps_cont);
-      char hs_buf[32];
-      snprintf(hs_buf, sizeof(hs_buf), "Best: %d letters", cfg.tennis_high_score);
-      lv_label_set_text(hs_lbl, hs_buf);
-      lv_obj_set_style_text_font(hs_lbl, &lv_font_montserrat_14, 0);
-      lv_obj_set_style_text_color(hs_lbl, lv_color_make(255, 210, 60), 0);
-      lv_obj_align(hs_lbl, LV_ALIGN_CENTER, 0, 44);
-    }
   }
 
   // Centre tap zone — CLICKED enters, LONG_PRESSED exits
@@ -4605,8 +4619,8 @@ static void apps_carousel_build()
 
   // Hint above dots
   lv_obj_t *hint = lv_label_create(apps_cont);
-  lv_label_set_text(hint, apps_idx == 4 ? "tap to toggle  .  hold to exit"
-                                         : "tap to play  .  hold to exit");
+  lv_label_set_text(hint, apps_idx == 5 ? "tap to toggle  .  hold to exit"
+                                        : "tap to play  .  hold to exit");
   lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(hint, lv_color_make(70, 70, 95), 0);
   lv_obj_set_style_text_opa(hint, LV_OPA_60, 0);

@@ -37,6 +37,8 @@
 #include <SPI.h>
 #include <WiFi.h>
 #include <WiFiMulti.h>
+#include <WebServer.h>
+#include <ESPmDNS.h>
 #include <time.h>
 #include <FastIMU.h>
 #include "esp_timer.h"   // hardware microsecond timer for accurate metronome
@@ -63,11 +65,6 @@ struct AppConfig {
   bool anim_schedule_enabled  = true;        // [animation] schedule
   int  anim_duration_sec      = 10;          // [animation] duration
   bool menu_sounds            = true;        // [menu] sounds
-  // [birthdays] dates — up to 8 entries in DD-MM-YYYY format.
-  // Only day & month are compared; the year is kept as reference in the file.
-  // Default: empty (no birthday greetings).
-  char birthday_dates[8][16]  = {"01-01-1970","06-08-2017"};          // [birthdays] dates (comma-separated, parsed at boot)
-  int  birthday_count         = 2;           // number of parsed birthday entries
 } cfg;
 
 // ─── Pin definitions ─────────────────────────────────────────────────────────
@@ -108,7 +105,6 @@ static void lvgl_sd_fs_init(void);
 static void show_carousel(void);
 static void save_config(void);
 static void apply_wifi_state(void);
-static void buzzer_start_birthday(int sequences);
 
 
 // ─── Display ─────────────────────────────────────────────────────────────────
@@ -126,7 +122,22 @@ uint32_t  screenHeight;
 // ─── WiFi / NTP state ────────────────────────────────────────────────────────
 WiFiMulti wifiMulti;
 bool wifiConnected = false;
+
+// ── Extended WiFi / web-server state ─────────────────────────────────────────
+// Tracks the current WiFi mode so the status screen can display it concisely.
+enum WifiMode : uint8_t { WM_IDLE=0, WM_CONNECTING, WM_STA, WM_AP };
+static WifiMode  wifiMode         = WM_IDLE;
+static uint32_t  wifi_sta_start   = 0;       // millis() when STA attempt began
+static bool      webServerRunning = false;
+static WebServer web_server(80);             // HTTP server, port 80
+#define WIFI_STA_TIMEOUT_MS 12000            // fall back to AP after 12 s
 bool timeSynced    = false;
+
+// ── AP / web PIN — random 6-digit code generated once at boot ─────────────────
+// Shown on the device via the long-press WiFi detail popup.
+// Required by every mutating web route (POST /config, POST /reboot).
+// Never logged or transmitted in plain sight; used as WPA2 AP password too.
+static char ap_pin[7] = "000000";   // filled in setup() via generate_ap_pin()
 
 // ─── UI handles ──────────────────────────────────────────────────────────────
 lv_obj_t   *overlay_cont   = nullptr;
@@ -150,6 +161,7 @@ lv_obj_t   *shutdown_popup       = nullptr;  // countdown confirmation card
 lv_obj_t   *shutdown_cntdown_lbl = nullptr;  // "Shutting down in N..." label
 lv_timer_t *shutdown_timer       = nullptr;  // 1-second tick
 int         shutdown_count       = 5;
+lv_obj_t   *wifi_detail_popup    = nullptr;  // long-press popup in status screen
 
 LV_FONT_DECLARE(montserrat_96);
 LV_FONT_DECLARE(dejavu_mono_8);
@@ -784,7 +796,425 @@ static void save_config()
   log_last_seen();
 }
 
+// ── Generate a random 6-digit PIN at boot ─────────────────────────────────────
+// Used as both the WPA2 AP password and the web UI PIN.
+// A new PIN is produced on every power cycle — physical access to the screen
+// is required to read it, so no fixed credential is ever embedded in firmware.
+static void generate_ap_pin()
+{
+  randomSeed(esp_timer_get_time());   // seed from hardware µs counter
+  uint32_t n = random(100000, 999999);
+  snprintf(ap_pin, sizeof(ap_pin), "%06lu", (unsigned long)n);
+  Serial.printf("[AP]  PIN generated: %s\n", ap_pin);
+}
+
 // ── WiFi runtime toggle ───────────────────────────────────────────────────────
+// ── AP hotspot fallback ───────────────────────────────────────────────────────
+static void start_ap_mode()
+{
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_AP);
+  // Use the boot-generated PIN as the WPA2 password — read it from the
+  // long-press WiFi popup on the device screen.
+  WiFi.softAP("ESP32-Clock", ap_pin);
+  wifiMode      = WM_AP;
+  wifiConnected = false;
+  timeSynced    = false;
+  Serial.printf("[WiFi] AP started. SSID=ESP32-Clock  IP=%s  (PIN protected)\n",
+                WiFi.softAPIP().toString().c_str());
+  start_web_server();
+}
+
+// ── HTTP web server ───────────────────────────────────────────────────────────
+// Routes:
+//   GET  /        — dark-themed editor; textarea with masked wifi password,
+//                   date/time setter, PIN input required for all mutations
+//   POST /config  — validates PIN, saves config.ini, applies settings
+//   POST /settime — validates PIN, applies date+time immediately to RTC
+//   POST /reboot  — validates PIN, reboots the ESP32
+//   GET  /log     — streams last_seen.txt as plain-text download (read-only)
+//
+// Runs identically in both STA and AP mode.
+// Called at most once; guarded by webServerRunning.
+static void start_web_server()
+{
+  if (webServerRunning) return;
+
+  // ── GET / — config editor page ───────────────────────────────────────────
+  web_server.on("/", HTTP_GET, []() {
+
+    // Read config.ini from SD
+    String cfg_text;
+    File f = SD.open("/config.ini", FILE_READ);
+    if (f) { while (f.available()) cfg_text += (char)f.read(); f.close(); }
+
+    // ── Mask the wifi password line before sending to browser ───────────────
+    // Replace "password = <anything>" with a fixed placeholder so the real
+    // credential is never transmitted over HTTP.  The POST handler only
+    // writes a new password when the placeholder is absent.
+    String cfg_display = cfg_text;
+    {
+      int idx = cfg_display.indexOf("password = ");
+      if (idx >= 0) {
+        int eol = cfg_display.indexOf('\n', idx);
+        if (eol < 0) eol = cfg_display.length();
+        cfg_display = cfg_display.substring(0, idx)
+                    + "password = ••••••••"
+                    + cfg_display.substring(eol);
+      }
+    }
+
+    // Escape HTML special chars so the textarea renders correctly
+    cfg_display.replace("&", "&amp;");
+    cfg_display.replace("<", "&lt;");
+    cfg_display.replace(">", "&gt;");
+
+    // Build current local time string for the datetime-local input default
+    char dt_buf[20] = "";
+    {
+      time_t now = time(nullptr);
+      struct tm tm_local;
+      localtime_r(&now, &tm_local);
+      if (now > 1735689600UL)   // only if RTC looks valid
+        snprintf(dt_buf, sizeof(dt_buf), "%04d-%02d-%02dT%02d:%02d",
+                 tm_local.tm_year + 1900, tm_local.tm_mon + 1, tm_local.tm_mday,
+                 tm_local.tm_hour, tm_local.tm_min);
+    }
+
+    String ip  = (wifiMode == WM_STA) ? WiFi.localIP().toString()
+                                      : WiFi.softAPIP().toString();
+    String url = (wifiMode == WM_STA) ? "http://esp32clock.local"
+                                      : "http://192.168.4.1";
+
+    String html =
+      F("<!DOCTYPE html><html><head>"
+        "<meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>ESP32 Clock</title>"
+        "<style>"
+        "*{box-sizing:border-box;margin:0;padding:0}"
+        "body{font:14px/1.5 sans-serif;background:#0d1117;color:#c9d1d9;"
+             "padding:16px;max-width:520px;margin:0 auto}"
+        "h2{color:#79c0ff;margin-bottom:10px;font-size:17px}"
+        ".info{background:#161b22;border:1px solid #30363d;border-radius:6px;"
+              "padding:8px 12px;margin-bottom:10px;font-size:12px;color:#8b949e}"
+        ".info b{color:#79c0ff}"
+        ".card{background:#161b22;border:1px solid #30363d;border-radius:8px;"
+              "padding:12px;margin-bottom:10px}"
+        "label{font-size:11px;color:#8b949e;display:block;margin-bottom:4px}"
+        "textarea{width:100%;height:280px;font:12px/1.4 monospace;"
+                 "background:#0d1117;color:#7ee787;"
+                 "border:1px solid #30363d;border-radius:6px;padding:8px;resize:vertical}"
+        "input[type=password],input[type=datetime-local]{"
+          "width:100%;padding:8px 10px;background:#0d1117;color:#c9d1d9;"
+          "border:1px solid #30363d;border-radius:6px;font-size:13px;"
+          "margin-bottom:8px}"
+        "input[type=password]{letter-spacing:2px}"
+        ".pin-row{display:flex;gap:8px;align-items:flex-end;margin-bottom:4px}"
+        ".pin-row input{flex:1;margin-bottom:0}"
+        ".row{display:flex;gap:8px;margin-top:10px}"
+        ".btn{flex:1;padding:10px;border:none;border-radius:6px;font-size:14px;"
+             "cursor:pointer;font-weight:600;text-align:center;text-decoration:none;"
+             "display:flex;align-items:center;justify-content:center}"
+        ".save{background:#238636;color:#fff}"
+        ".reboot{background:#b62324;color:#fff}"
+        ".log{background:#1f6feb;color:#fff}"
+        ".time-btn{background:#6e40c9;color:#fff}"
+        ".note{font-size:11px;color:#8b949e;margin-top:8px}"
+        ".err{color:#f85149;font-size:12px;margin-top:6px;display:none}"
+        "hr{border:none;border-top:1px solid #30363d;margin:10px 0}"
+        "</style></head><body>"
+        "<h2>&#x23F0; ESP32 Clock</h2>"
+        "<div class='info'><b>IP:</b> ");
+    html += ip;
+    html += F(" &nbsp; <b>URL:</b> ");
+    html += url;
+    html += F("</div>"
+
+        // ── PIN field (shared across all actions) ─────────────────────────
+        "<div class='card'>"
+        "<label>&#x1F511; Device PIN &mdash; shown on the clock screen</label>"
+        "<input type='password' id='pin' inputmode='numeric' maxlength='6'"
+               " placeholder='6-digit PIN' autocomplete='off'>"
+        "</div>"
+
+        // ── config.ini editor ─────────────────────────────────────────────
+        "<div class='card'>"
+        "<label>config.ini &mdash; edit and tap Save to apply</label>"
+        "<textarea id='cfg'>");
+    html += cfg_display;
+    html += F("</textarea>"
+        "<p class='note'>WiFi password shown as &bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull; &mdash;"
+        " type a new value to change it, leave as-is to keep current.</p>"
+        "<p class='note'>Alarm, timer, menu &amp; birthday changes apply immediately."
+        " WiFi / NTP / TZ changes need a reboot.</p>"
+        "<div class='row'>"
+        "<button class='btn save' onclick='doSave()'>&#x1F4BE; Save &amp; Reload</button>"
+        "<a class='btn log' href='/log'>&#x1F4CB; Download Log</a>"
+        "</div>"
+        "<p class='err' id='cfg-err'></p>"
+        "</div>"
+
+        // ── Date / time setter ────────────────────────────────────────────
+        "<div class='card'>"
+        "<label>&#x1F4C5; Set date &amp; time (applied immediately)</label>"
+        "<input type='datetime-local' id='dt' value='");
+    html += dt_buf;
+    html += F("'>"
+        "<div class='row'>"
+        "<button class='btn time-btn' onclick='doSetTime()'>&#x23F1; Apply Time</button>"
+        "</div>"
+        "<p class='err' id='dt-err'></p>"
+        "</div>"
+
+        // ── Reboot ────────────────────────────────────────────────────────
+        "<div class='card'>"
+        "<div class='row'>"
+        "<button class='btn reboot' onclick='doReboot()'>&#x21BA; Reboot Device</button>"
+        "</div>"
+        "<p class='err' id='rb-err'></p>"
+        "</div>"
+
+        // ── JS helpers ───────────────────────────────────────────────────
+        "<script>"
+        "function pin(){return document.getElementById('pin').value.trim();}"
+        "function showErr(id,msg){var e=document.getElementById(id);"
+        "  e.textContent=msg;e.style.display=msg?'block':'none';}"
+
+        // Save config
+        "function doSave(){"
+        "  showErr('cfg-err','');"
+        "  var p=pin();"
+        "  if(p.length!==6){showErr('cfg-err','PIN must be 6 digits.');return;}"
+        "  var fd=new FormData();"
+        "  fd.append('pin',p);"
+        "  fd.append('cfg',document.getElementById('cfg').value);"
+        "  fetch('/config',{method:'POST',body:fd})"
+        "  .then(function(r){if(r.redirected){window.location=r.url;return;}"
+        "    return r.text().then(function(t){"
+        "      if(r.ok){window.location='/';}"
+        "      else{showErr('cfg-err',t);}});}"
+        "  ).catch(function(e){showErr('cfg-err','Network error.');});}"
+
+        // Set time
+        "function doSetTime(){"
+        "  showErr('dt-err','');"
+        "  var p=pin();"
+        "  if(p.length!==6){showErr('dt-err','PIN must be 6 digits.');return;}"
+        "  var v=document.getElementById('dt').value;"
+        "  if(!v){showErr('dt-err','Select a date and time first.');return;}"
+        "  var fd=new FormData();"
+        "  fd.append('pin',p);fd.append('dt',v);"
+        "  fetch('/settime',{method:'POST',body:fd})"
+        "  .then(function(r){return r.text().then(function(t){"
+        "    if(r.ok){showErr('dt-err','\\u2713 Time updated.');}"
+        "    else{showErr('dt-err',t);}});})"
+        "  .catch(function(){showErr('dt-err','Network error.');});}"
+
+        // Reboot
+        "function doReboot(){"
+        "  showErr('rb-err','');"
+        "  var p=pin();"
+        "  if(p.length!==6){showErr('rb-err','PIN must be 6 digits.');return;}"
+        "  if(!confirm('Reboot the device now?'))return;"
+        "  var fd=new FormData();fd.append('pin',p);"
+        "  fetch('/reboot',{method:'POST',body:fd})"
+        "  .then(function(r){return r.text().then(function(t){"
+        "    if(r.ok){showErr('rb-err','Rebooting\\u2026 reconnect in ~5 s.');}"
+        "    else{showErr('rb-err',t);}});})"
+        "  .catch(function(){showErr('rb-err','Network error.');});}"
+        "</script>"
+        "</body></html>");
+
+    web_server.send(200, "text/html", html);
+  });
+
+  // ── POST /config — validate PIN, save and reload ─────────────────────────
+  web_server.on("/config", HTTP_POST, []() {
+    // PIN check
+    if (!web_server.hasArg("pin") || web_server.arg("pin") != String(ap_pin)) {
+      web_server.send(403, "text/plain", "Wrong PIN."); return;
+    }
+    if (!web_server.hasArg("cfg")) {
+      web_server.send(400, "text/plain", "Missing cfg field."); return;
+    }
+    String body = web_server.arg("cfg");
+
+    // ── Re-inject the real password if the user left the placeholder ────────
+    // The textarea shows "password = ••••••••"; if that string is still
+    // present the user did not change the password — keep cfg.wifi_password.
+    // If they replaced it with something else, use their new value.
+    if (body.indexOf("password = \xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2") >= 0) {
+      // Placeholder still present — substitute real password back in
+      body.replace(
+        String("password = \xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2"),
+        String("password = ") + String(cfg.wifi_password)
+      );
+    }
+
+    // Normalise line endings from browser (\r\n → \n)
+    body.replace("\r\n", "\n");
+    body.replace("\r",   "\n");
+
+    SD.remove("/config.ini");
+    File fw = SD.open("/config.ini", FILE_WRITE);
+    if (!fw) { web_server.send(500, "text/plain", "SD write failed."); return; }
+    fw.print(body);
+    fw.close();
+
+    // Reload cfg from the new file and apply settings that don't need a reboot
+    load_config();
+    setenv("TZ", cfg.tz_string, 1);
+    tzset();
+    if (wifiConnected) configTzTime(cfg.tz_string, cfg.ntp_server);
+    Serial.println("[WEB] config.ini updated via web");
+
+    // JS fetch handler will redirect to / on 200
+    web_server.send(200, "text/plain", "OK");
+  });
+
+  // ── POST /settime — validate PIN, set RTC immediately ───────────────────
+  // Body field: dt = "YYYY-MM-DDTHH:MM"  (datetime-local format)
+  web_server.on("/settime", HTTP_POST, []() {
+    if (!web_server.hasArg("pin") || web_server.arg("pin") != String(ap_pin)) {
+      web_server.send(403, "text/plain", "Wrong PIN."); return;
+    }
+    if (!web_server.hasArg("dt")) {
+      web_server.send(400, "text/plain", "Missing dt field."); return;
+    }
+    String dt = web_server.arg("dt");  // e.g. "2026-06-10T14:30"
+    int yr=0, mo=0, dy=0, hr=0, mn=0;
+    if (sscanf(dt.c_str(), "%d-%d-%dT%d:%d", &yr, &mo, &dy, &hr, &mn) != 5
+        || yr < 2020 || mo < 1 || mo > 12 || dy < 1 || dy > 31
+        || hr < 0 || hr > 23 || mn < 0 || mn > 59) {
+      web_server.send(400, "text/plain", "Invalid date/time format."); return;
+    }
+    struct tm tm_new = {};
+    tm_new.tm_year  = yr - 1900;
+    tm_new.tm_mon   = mo - 1;
+    tm_new.tm_mday  = dy;
+    tm_new.tm_hour  = hr;
+    tm_new.tm_min   = mn;
+    tm_new.tm_sec   = 0;
+    tm_new.tm_isdst = -1;
+    // The browser sends local time; mktime treats it as local (TZ already set)
+    time_t t = mktime(&tm_new);
+    if (t < 0) { web_server.send(400, "text/plain", "mktime failed."); return; }
+    struct timeval tv = { .tv_sec = t, .tv_usec = 0 };
+    settimeofday(&tv, nullptr);
+    timeSynced = true;   // treat as synced so the clock shows the new value
+    Serial.printf("[WEB] RTC set via web: %04d-%02d-%02d %02d:%02d\n",
+                  yr, mo, dy, hr, mn);
+    web_server.send(200, "text/plain", "OK");
+  });
+
+  // ── POST /reboot — validate PIN, schedule reboot ─────────────────────────
+  web_server.on("/reboot", HTTP_POST, []() {
+    if (!web_server.hasArg("pin") || web_server.arg("pin") != String(ap_pin)) {
+      web_server.send(403, "text/plain", "Wrong PIN."); return;
+    }
+    Serial.println("[WEB] Reboot requested via web");
+    web_server.send(200, "text/plain", "OK");
+    web_server.client().flush();
+    delay(200);
+    ESP.restart();
+  });
+
+  // ── GET /log — download last_seen.txt (no PIN required — read-only) ──────
+  web_server.on("/log", HTTP_GET, []() {
+    File f = SD.open("/last_seen.txt", FILE_READ);
+    if (!f) { web_server.send(404, "text/plain", "Log not found"); return; }
+    web_server.sendHeader("Content-Disposition", "attachment; filename=\"last_seen.txt\"");
+    web_server.streamFile(f, "text/plain");
+    f.close();
+  });
+
+  web_server.begin();
+  webServerRunning = true;
+  Serial.println("[WEB] HTTP server started on port 80");
+}
+
+// ── WiFi detail popup — shown on long-press of WiFi row in status screen ─────
+// Displays SSID / IP / URL so the user knows where to point their browser.
+// Tap anywhere on the popup to dismiss.
+static void wifi_status_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  lv_indev_wait_release(lv_indev_get_act());
+  show_wifi_detail_popup();
+}
+
+static void show_wifi_detail_popup()
+{
+  if (wifi_detail_popup || !overlay_cont) return;
+
+  wifi_detail_popup = lv_obj_create(overlay_cont);
+  lv_obj_set_size(wifi_detail_popup, 272, 116);   // taller to fit 4 rows
+  lv_obj_align(wifi_detail_popup, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(wifi_detail_popup, lv_color_make(10, 18, 42), 0);
+  lv_obj_set_style_bg_opa(wifi_detail_popup, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(wifi_detail_popup, lv_color_make(60, 110, 200), 0);
+  lv_obj_set_style_border_width(wifi_detail_popup, 1, 0);
+  lv_obj_set_style_radius(wifi_detail_popup, 8, 0);
+  lv_obj_set_style_pad_all(wifi_detail_popup, 0, 0);
+  lv_obj_clear_flag(wifi_detail_popup, LV_OBJ_FLAG_SCROLLABLE);
+  // Tap closes only the popup, not the whole status screen
+  lv_obj_add_event_cb(wifi_detail_popup, [](lv_event_t *ev) {
+    if (lv_event_get_code(ev) != LV_EVENT_CLICKED) return;
+    if (wifi_detail_popup) { lv_obj_del(wifi_detail_popup); wifi_detail_popup = nullptr; }
+  }, LV_EVENT_CLICKED, nullptr);
+
+  // Row 1: SSID or AP name
+  lv_obj_t *l1 = lv_label_create(wifi_detail_popup);
+  if (wifiMode == WM_STA && wifiConnected) {
+    lv_label_set_text_fmt(l1, LV_SYMBOL_WIFI "  %s", WiFi.SSID().c_str());
+    lv_obj_set_style_text_color(l1, lv_color_make(80, 200, 120), 0);
+  } else if (wifiMode == WM_AP) {
+    lv_label_set_text(l1, LV_SYMBOL_WIFI "  ESP32-Clock  (AP)");
+    lv_obj_set_style_text_color(l1, lv_color_make(80, 180, 220), 0);
+  } else {
+    lv_label_set_text(l1, LV_SYMBOL_WIFI "  Connecting...");
+    lv_obj_set_style_text_color(l1, lv_color_make(220, 160, 50), 0);
+  }
+  lv_obj_set_style_text_font(l1, &lv_font_montserrat_14, 0);
+  lv_obj_align(l1, LV_ALIGN_TOP_MID, 0, 8);
+
+  // Row 2: IP address
+  lv_obj_t *l2 = lv_label_create(wifi_detail_popup);
+  if (wifiMode == WM_STA && wifiConnected)
+    lv_label_set_text_fmt(l2, "IP  %s", WiFi.localIP().toString().c_str());
+  else if (wifiMode == WM_AP)
+    lv_label_set_text_fmt(l2, "IP  %s", WiFi.softAPIP().toString().c_str());
+  else
+    lv_label_set_text(l2, "IP  —");
+  lv_obj_set_style_text_color(l2, lv_color_make(180, 180, 200), 0);
+  lv_obj_align(l2, LV_ALIGN_TOP_MID, 0, 30);
+
+  // Row 3: PIN (always shown — needed to use the web UI or connect to AP)
+  lv_obj_t *l3 = lv_label_create(wifi_detail_popup);
+  lv_label_set_text_fmt(l3, LV_SYMBOL_EDIT "  PIN: %s", ap_pin);
+  lv_obj_set_style_text_color(l3, lv_color_make(255, 210, 80), 0);  // amber
+  lv_obj_set_style_text_font(l3, &lv_font_montserrat_14, 0);
+  lv_obj_align(l3, LV_ALIGN_TOP_MID, 0, 52);
+
+  // Row 4: URL
+  lv_obj_t *l4 = lv_label_create(wifi_detail_popup);
+  lv_label_set_text(l4, (wifiMode == WM_STA) ? "http://esp32clock.local"
+                                              : "http://192.168.4.1");
+  lv_obj_set_style_text_color(l4, lv_color_make(100, 200, 255), 0);
+  lv_obj_align(l4, LV_ALIGN_TOP_MID, 0, 74);
+
+  // Dismiss hint
+  lv_obj_t *hint = lv_label_create(wifi_detail_popup);
+  lv_label_set_text(hint, "tap to close");
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(hint, lv_color_make(80, 80, 120), 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_RIGHT, -8, -4);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  WiFi / NTP state management
+// ══════════════════════════════════════════════════════════════════════════════
 static void apply_wifi_state()
 {
   // Apply POSIX TZ immediately — makes localtime_r correct even offline
@@ -793,18 +1223,19 @@ static void apply_wifi_state()
   Serial.printf("[TZ] Applied: %s\n", cfg.tz_string);
 
   if (cfg.wifi_enabled) {
-    Serial.println("[WiFi] Enabling...");
+    Serial.println("[WiFi] Enabling STA mode...");
+    wifiMode         = WM_CONNECTING;
+    wifi_sta_start   = millis();
     WiFi.mode(WIFI_STA);
     wifiMulti.addAP(cfg.wifi_ssid, cfg.wifi_password);
     // configTzTime sets TZ env var AND starts SNTP in one call.
     // NTP delivers UTC; localtime_r converts to local using tz_string.
     configTzTime(cfg.tz_string, cfg.ntp_server);
+    // Kick off the first connection attempt immediately (non-blocking; ~50ms)
+    wifiMulti.run(0);
   } else {
-    Serial.println("[WiFi] Disabled by user.");
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
-    wifiConnected = false;
-    timeSynced    = false;
+    Serial.println("[WiFi] STA disabled — starting AP hotspot");
+    start_ap_mode();
   }
 }
 
@@ -1150,23 +1581,52 @@ static void battery_timer_callback(lv_timer_t * /*timer*/)
 // ══════════════════════════════════════════════════════════════════════════════
 static void wifi_poll_cb(lv_timer_t *t)
 {
-  wl_status_t wst = WiFi.status();  // instant read, never blocks
+  // AP mode has no polling to do — web server runs independently in loop()
+  if (wifiMode == WM_AP) { lv_timer_set_period(t, 5000); return; }
+
+  wl_status_t wst = WiFi.status();
+
   if (wst == WL_CONNECTED) {
-    wifiConnected = true;
+    if (!wifiConnected) {
+      // First connection — start mDNS and web server exactly once
+      wifiConnected = true;
+      wifiMode      = WM_STA;
+      MDNS.begin("esp32clock");
+      start_web_server();
+      Serial.printf("[WiFi] Connected: SSID=%s  IP=%s  URL=http://esp32clock.local\n",
+                    WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+    }
     time_t now = time(nullptr);
     timeSynced = (now >= 8 * 3600 * 2);
-    lv_timer_set_period(t, 5000);   // back to 5s when connected
+    lv_timer_set_period(t, 5000);   // steady-state: poll every 5 s
+
   } else {
-    wifiConnected = false;
-    timeSynced    = false;
-    // wifiMulti.run() briefly takes the radio lock and stalls the
-    // FreeRTOS scheduler for 20-80ms, causing visible UI stutter.
-    // Only attempt reconnect when no modal/editor is open, and slow
-    // down to every 30s so the stall is infrequent.
+    // Not connected
+    if (wifiConnected) {
+      // Connection was just lost
+      wifiConnected = false;
+      wifiMode      = WM_CONNECTING;
+      wifi_sta_start = millis();    // restart timeout clock on disconnect
+    }
+
+    // Timeout: give up on STA and fall back to AP
+    if (wifiMode == WM_CONNECTING &&
+        (millis() - wifi_sta_start) > WIFI_STA_TIMEOUT_MS) {
+      Serial.println("[WiFi] STA timeout — falling back to AP hotspot");
+      start_ap_mode();
+      lv_timer_set_period(t, 5000);
+      return;
+    }
+
+    timeSynced = false;
+    // wifiMulti.run() briefly stalls the FreeRTOS scheduler (20–80 ms).
+    // Only attempt reconnect when no modal/editor/overlay is open.
     if (!modal_cont && !overlay_cont && !apps_cont && cfg.wifi_enabled) {
       wifiMulti.run(0);
     }
-    lv_timer_set_period(t, 30000);  // 30s between reconnect attempts
+    // Poll frequently while connecting so we detect success quickly,
+    // slow down once settled into disconnect-retry mode.
+    lv_timer_set_period(t, (wifiMode == WM_CONNECTING) ? 2000 : 30000);
   }
 }
 
@@ -1423,6 +1883,8 @@ static void overlay_close_event_cb(lv_event_t *e)
     if (shutdown_popup) { lv_obj_del(shutdown_popup); shutdown_popup = nullptr; }
     shutdown_cntdown_lbl = nullptr;
     shutdown_count = 5;
+    // Clear WiFi detail popup pointer (object will be destroyed with overlay)
+    wifi_detail_popup = nullptr;
     // Stop tilt timer (status screen brightness or emotion GIF mode)
     if (tilt_timer) {
       lv_timer_del(tilt_timer);
@@ -1636,23 +2098,38 @@ static void show_status_screen(void)
   // ── Row 1: WiFi  (y = -28 from mid = ~58px from top) ─────────────────────
   lv_obj_t *wifi_icon = lv_label_create(overlay_cont);
   lv_label_set_text(wifi_icon, LV_SYMBOL_WIFI);
-  lv_obj_set_style_text_color(wifi_icon,
-    wifiConnected ? lv_color_make(80, 200, 120) : lv_color_make(200, 80, 80), 0);
+  lv_color_t wifi_color;
+  if      (wifiMode == WM_STA && wifiConnected) wifi_color = lv_color_make(80, 200, 120);  // green
+  else if (wifiMode == WM_AP)                   wifi_color = lv_color_make(80, 180, 220);  // cyan
+  else if (wifiMode == WM_CONNECTING)           wifi_color = lv_color_make(220, 160, 50);  // amber
+  else                                          wifi_color = lv_color_make(200, 80, 80);   // red
+  lv_obj_set_style_text_color(wifi_icon, wifi_color, 0);
   lv_obj_align(wifi_icon, LV_ALIGN_LEFT_MID, 20, -28);
   lv_obj_add_flag(wifi_icon, LV_OBJ_FLAG_IGNORE_LAYOUT);
 
   lv_obj_t *wifi_val = lv_label_create(overlay_cont);
-  if (wifiConnected) {
-    char ssid_buf[48];
-    snprintf(ssid_buf, sizeof(ssid_buf), "WiFi: %s", WiFi.SSID().c_str());
+  if (wifiMode == WM_STA && wifiConnected) {
+    // Truncate SSID to avoid overflowing the 320px screen
+    char ssid_buf[28];
+    strncpy(ssid_buf, WiFi.SSID().c_str(), 24); ssid_buf[24] = '\0';
     lv_label_set_text(wifi_val, ssid_buf);
-    lv_obj_set_style_text_color(wifi_val, lv_color_make(80, 200, 120), 0);
+  } else if (wifiMode == WM_AP) {
+    char ap_buf[32];
+    snprintf(ap_buf, sizeof(ap_buf), "AP  %s", WiFi.softAPIP().toString().c_str());
+    lv_label_set_text(wifi_val, ap_buf);
+  } else if (wifiMode == WM_CONNECTING) {
+    lv_label_set_text(wifi_val, "Connecting...");
   } else {
-    lv_label_set_text(wifi_val, "WiFi: disconnected");
-    lv_obj_set_style_text_color(wifi_val, lv_color_make(200, 80, 80), 0);
+    lv_label_set_text(wifi_val, "Offline");
   }
+  lv_obj_set_style_text_color(wifi_val, wifi_color, 0);
   lv_obj_align(wifi_val, LV_ALIGN_LEFT_MID, 44, -28);
   lv_obj_add_flag(wifi_val, LV_OBJ_FLAG_IGNORE_LAYOUT);
+
+  // Long-press anywhere on the status overlay shows the WiFi detail popup
+  // (SSID / IP / URL) — mirrors how the battery screen shows the shutdown popup.
+  lv_obj_add_event_cb(overlay_cont, wifi_status_longpress_cb,
+                      LV_EVENT_LONG_PRESSED, nullptr);
 
   // ── Row 2: NTP  (y = 0 from mid = 86px from top) ─────────────────────────
   lv_obj_t *ntp_icon = lv_label_create(overlay_cont);
@@ -3980,6 +4457,9 @@ void setup()
     wakeup_cause == ESP_SLEEP_WAKEUP_TIMER     ? "TIMER — alarm auto-wake" :
     wakeup_cause == ESP_SLEEP_WAKEUP_UNDEFINED ? "cold boot / RESET button" : "other");
 
+  // ── Generate AP/web PIN — must happen before any WiFi or web-server call ──
+  generate_ap_pin();
+
   // ── Step 1: Pull ALL SPI CS lines HIGH before the bus starts ──────────────
   // This prevents any device from misinterpreting the SPI init sequence.
   Serial.println("[1] Pulling CS pins HIGH...");
@@ -4184,5 +4664,11 @@ void setup()
 void loop()
 {
   lv_timer_handler();  // drive LVGL: renders, animations, timers
+  // Process one pending HTTP request per loop iteration.
+  // handleClient() returns immediately when no client is connected,
+  // so it does not interfere with LVGL animations or the hardware-timer
+  // metronome. Brief stalls (~5–20 ms) only occur during actual transfers,
+  // which are user-triggered and therefore acceptable.
+  if (webServerRunning) web_server.handleClient();
   delay(5);
 }

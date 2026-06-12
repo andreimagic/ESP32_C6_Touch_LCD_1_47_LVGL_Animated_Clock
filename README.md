@@ -41,10 +41,12 @@ A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47
 | **Alarm auto-wake** | Device wakes from deep sleep 5 min before alarm to allow NTP sync; falls back to warning screen if sync fails |
 | **Apps menu** | Long-press the smile GIF → math challenge gate → ASCII games carousel |
 | **Math challenge** | Random arithmetic gate (+ − × ÷, result < 100) with 4 shuffled answer buttons |
-| **Rock Paper Scissors** | Animated 3-2-1 countdown shake → CPU reveals its hand → GO! |
-| **Rolling Dice** | Animated rolling frames → final dice face reveal |
+| **Rock Paper Scissors** | Animated 3-2-1 countdown shake → CPU reveals its hand → GO! Shake or hard-tilt the device to restart |
+| **Rolling Dice** | Animated rolling frames → final dice face reveal. Shake or hard-tilt to re-roll |
 | **Flip a Coin** | Instant flip with ASCII coin art (heads/tails) |
-| **Apps sounds** | Melody on correct math answer, failure tune on wrong; beeps during animations; toggleable |
+| **Gyro shake/tilt trigger** | While playing RPS or Dice, physically shaking the device (ΔaccelZ > 1.8 g) or tilting it hard sideways (accelY > 1.0 g) restarts the game — no tap needed |
+| **Metronome** | Full-screen BPM metronome (60–240 BPM) with hardware-timer accuracy, visual beat dots, time-signature selector (2/4, 3/4, 4/4), and distinct hi/lo tones for downbeat vs weak beats |
+| **Apps sounds** | Melody on correct math answer, failure tune on wrong; beeps during animations; toggleable. Metronome always sounds regardless of this toggle |
 | **Birthday Easter egg** | If today matches any date in the `[birthdays]` list, both the Alarm and Timer play the **Happy Birthday** melody and show `happybirthday.gif` instead of their normal GIF — fully transparent to the user |
 | **SD card config** | All settings in `/config.ini` — no recompile needed |
 | **LVGL v9** | Hardware-accelerated UI, zero blocking in the main loop |
@@ -473,7 +475,7 @@ A random arithmetic problem (+ − × ÷, result always < 100) is shown in large
 
 ### Apps carousel
 
-Three games plus a sounds toggle, navigated with **◀ ▶**. **Tap** to enter, **long-press** to go back.
+Four games plus a sounds toggle, navigated with **◀ ▶**. **Tap** to enter, **long-press** to go back.
 
 ```
 ┌─────────────────────────────────────────┐
@@ -482,7 +484,7 @@ Three games plus a sounds toggle, navigated with **◀ ▶**. **Tap** to enter, 
 │         An interactive ASCII Game       │
 │                                         │
 │      tap to play  .  hold to exit       │
-│              ● ○ ○ ○                    │
+│              ● ○ ○ ○ ○                  │
 └─────────────────────────────────────────┘
 ```
 
@@ -494,19 +496,55 @@ Tap to start. The device plays an animated countdown in ASCII art:
 Ready? → UP "3" → DOWN "3" ♪ → UP "2" → DOWN "2" ♪ → UP "1" → DOWN "1" ♪ → GO! ♪♪
 ```
 
-Each step is exactly 250 ms. At GO! the CPU's hand is revealed — play against it with your own hand. Tap to play again, long-press to exit.
+Each step is exactly 250 ms. At GO! the CPU's hand is revealed — play against it with your own hand. Tap, **shake**, or **hard-tilt** the device to play again, long-press to exit.
 
 #### Rolling Dice
 
-Tap to start. Three animated rolling frames play at 250 ms each (one beep per frame), then the final face (1–6) is revealed with a high tone. Tap to re-roll.
+Tap to start. Three animated rolling frames play at 250 ms each (one beep per frame), then the final face (1–6) is revealed with a high tone. Tap, **shake**, or **hard-tilt** to re-roll.
+
+#### Gyro shake/tilt trigger (RPS & Dice)
+
+While a game is active, the IMU is polled every 150 ms. Two gestures restart the game:
+
+| Gesture | Axis | Threshold |
+|---|---|---|
+| **Shake** (any direction) | ΔaccelZ between consecutive samples | > 1.8 g |
+| **Hard side tilt** | accelY absolute | > 1.0 g |
+
+Both trigger the same `app_screen_start()` as tapping the screen. The watcher starts automatically when RPS or Dice begins and stops when leaving the game.
 
 #### Flip a Coin
 
 Tap anywhere to flip. Instant result with ASCII coin art (heads / tails) and a high-tone beep. Tap to flip again.
 
+#### Metronome
+
+A full-screen BPM metronome driven by **hardware ESP32 timer** for sample-accurate timing — not affected by WiFi polling or LVGL task load.
+
+```
+┌─────────────────────────────────────────┐
+│  ──────────●──────────  120  BPM        │  ← slider + value
+│  [ -1 ]   [ +1 ]   [    START    ]      │  ← buttons
+│     ●  ○  ○  ○                          │  ← beat dots
+│   [ 2/4 ]  [ 3/4 ]  [ 4/4 ]            │  ← time signature
+└─────────────────────────────────────────┘
+```
+
+| Control | Action |
+|---|---|
+| **Slider** | Drag to set BPM (60–240). Live update — changes tempo while running. |
+| **−1 / +1 buttons** | Fine-tune BPM one step at a time |
+| **START / STOP** | Toggle the metronome on/off |
+| **2/4, 3/4, 4/4 tabs** | Change time signature; rebuilds the beat-dot row immediately |
+| **Beat dots** | Light up in sync with each beat: 🔴 red for the downbeat (beat 1), 🟢 green for weak beats |
+
+**Tones:** downbeat accent at 1800 Hz, weak beats at 900 Hz, each 25 ms long. The metronome always sounds regardless of the `[menu] sounds` toggle — it is a musical tool, not a game effect.
+
+**Implementation:** `metro_hw_beat_cb()` runs in the ESP32 hardware timer task — it writes directly to `ledcChangeFrequency()` and sets a volatile flag. An LVGL 20 ms poll timer (`metro_dot_poll_cb`) reads the flag and updates the dot colours, keeping all UI work on the LVGL thread.
+
 #### Sounds toggle
 
-The fourth carousel item. Tap to mute/unmute all apps menu and game audio. The setting is saved to `config.ini` under `[menu] sounds`. This does **not** affect alarm or timer buzzer sounds.
+The fifth carousel item. Tap to mute/unmute all apps menu and game audio. The setting is saved to `config.ini` under `[menu] sounds`. This does **not** affect alarm, timer, or metronome sounds.
 
 ---
 
@@ -603,6 +641,13 @@ When today matches a `[birthdays]` entry, the standard alarm/timer beep pattern 
 | Dice result reveal | High C6 tone |
 | Coin flip result | High C6 tone |
 | Sounds toggle turned ON | High C6 tone (confirmation) |
+
+### Metronome tones (always active, ignores `[menu] sounds`)
+
+| Beat type | Frequency | Duration |
+|---|---|---|
+| Downbeat (beat 1) | 1800 Hz | 25 ms |
+| Weak beat | 900 Hz | 25 ms |
 
 ---
 
@@ -767,6 +812,8 @@ read: 8161
 - **Animation priority** — `close_scheduled_gif()` forcefully tears down any scheduled overlay (cancels fade timer, deletes overlay synchronously) before alarm or timer open their GIF. Scheduled animation is also skipped entirely if the alarm fires on the same minute.
 - **Apps menu** — `apps_cont` is a global LVGL object separate from `modal_cont` and `overlay_cont`. `wifi_poll_cb` skips `wifiMulti.run()` while it is open to prevent radio lock stalls during gameplay and math input.
 - **ASCII games** — all art is rendered using DejaVu Mono fixed-width font via LVGL labels. RPS and Dice use LVGL timer callbacks (`rps_anim_tick_cb`, `dice_anim_tick_cb`) at 250 ms intervals for consistent animation cadence. Buzzer tones use `ledcChangeFrequency()` to switch pitch without re-attaching the PWM channel.
+- **Gyro shake/tilt trigger** — `app_gyro_poll_cb()` runs as a 150 ms LVGL timer while RPS or Dice is active. It reads `accelZ` and `accelY` from the QMI8658; a Z-axis spike (|ΔaccelZ| > 1.8 g between samples) detects a physical shake, and a hard side tilt (|accelY| > 1.0 g) detects a roll gesture. Both call `app_screen_start()` identically to a screen tap. The timer is created when the game starts and deleted when leaving.
+- **Metronome** — beat timing uses two `esp_timer` hardware timers (`metro_hw_beat_cb`, `metro_hw_off_cb`) running outside the LVGL loop for µs-accurate periods. The beat callback writes directly to `ledcChangeFrequency()` (safe from timer task context) and sets a volatile flag. A 20 ms LVGL poll timer (`metro_dot_poll_cb`) reads the flag and updates dot colours on the LVGL thread. Changing BPM while running stops and restarts the periodic timer with the new `60,000,000 / bpm` µs period. Changing time signature calls `metro_build_ui()` which rebuilds only the dot row, then restarts if it was running.
 - **Emotion tilt** — `zone_ul_cb` sets `emotion_tilt_active = true` and starts `tilt_timer` after opening the smile GIF. `tilt_poll_cb` branches on this flag: in emotion mode it reads both `accelX` (forward/back) and `accelY` (left/right), determines the desired GIF path, and calls `lv_gif_set_src()` on the existing widget (retrieved from `overlay_cont` user data) only when the path changes. This swaps the animation in-place with no overlay rebuild. Both the flag and the timer are cleared by `overlay_close_event_cb`.
 - **Buzzer state machine** — a single 9-step table drives both alarm and timer patterns. `buzzer_fade_after` is set by the caller for finite sequences; `buzzer_stop()` triggers `overlay_fade_and_close()` automatically after the last beep.
 - **WiFi reconnect guard** — `wifi_poll_cb()` skips `wifiMulti.run()` when any modal or overlay is open, when WiFi is manually disabled (`cfg.wifi_enabled`), and reduces attempts to every 30 s when disconnected — preventing radio lock stalls from blocking UI interaction.
@@ -795,7 +842,7 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v1.4.1 | ✅ released | Bugfix: Fix RTC drift after long deep sleep in the event of an alarm set, allow time for NTP sync |
 | v1.5.0 | ✅ released | Apps menu: math gate, Rock Paper Scissors, Rolling Dice, Flip a Coin, game sounds, DST-aware timezone |
 | v2.0.0 | ✅ released | Analog clock view & low-power startup gate |
-| v2.1.0 | ✅ released | Metronome App & Optimizations |
+| v2.1.0 | ✅ released | Metronome app (60–240 BPM, hardware-timer accuracy, 2/4 3/4 4/4, beat dots); gyro shake/tilt trigger for RPS & Dice |
 | v2.2.0 | ✅ released | Birthday Easter egg: `[birthdays]` in config.ini, Happy Birthday melody, `happybirthday.gif` for alarm & timer. Fixed Read/Write config.ini |
 | v2.3.0 | ✅ released | PIN-protected web configuration UI — edit config, set RTC, reboot; WPA2 AP with boot-generated PIN |
 

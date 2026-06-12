@@ -95,7 +95,9 @@
                         <tr><td><strong>AP hotspot</strong></td><td>WPA2 fallback AP (<code>ESP32-Clock</code>) with boot-generated PIN shown on the device screen — physical access required</td></tr>
                         <tr><td><strong>Battery monitor</strong></td><td>Live percentage, voltage, ADC raw — with LiPo discharge curve</td></tr>
                         <tr><td><strong>Low-power gate</strong></td><td>Refuses to boot if battery ≤ 10%, shows empty battery icon and deep sleeps.</td></tr>
-                        <tr><td><strong>Apps menu</strong></td><td>Math challenge gate, Rock Paper Scissors, Rolling Dice, Coin Flip</td></tr>
+                        <tr><td><strong>Apps menu</strong></td><td>Math challenge gate, Rock Paper Scissors, Rolling Dice, Coin Flip, Metronome</td></tr>
+                        <tr><td><strong>Metronome</strong></td><td>60–240 BPM with hardware-timer accuracy, beat dot indicators, 2/4 3/4 4/4 time signatures, distinct hi/lo tones</td></tr>
+                        <tr><td><strong>Gyro shake/tilt</strong></td><td>Physically shaking or hard-tilting the device restarts RPS or Dice — no tap needed</td></tr>
                         <tr><td><strong>SD card config</strong></td><td>All settings in <code>/config.ini</code> — no recompile needed</td></tr>
                     </tbody>
                 </table>
@@ -187,8 +189,20 @@
                 <li><strong>Status (LL):</strong> Shows WiFi, NTP, and Brightness. Tilt left/right to adjust brightness.</li>
                 <li><strong>Battery (LR):</strong> Live %, voltage. Long-press for software power-off.</li>
                 <li><strong>Emotion Tilt:</strong> Tap UL (Smile). While playing, tilt the device to change emotions (sad, joy, sleep) in real-time via IMU.</li>
-                <li><strong>Apps Menu:</strong> Long-press the smile GIF → pass Math Gate → access Rock Paper Scissors, Dice, Coin Flip.</li>
+                <li><strong>Apps Menu:</strong> Long-press the smile GIF → pass Math Gate → access Rock Paper Scissors, Dice, Coin Flip, Metronome.</li>
+                <li><strong>Gyro shake/tilt:</strong> While playing RPS or Dice, physically shake the device or tilt it hard sideways to restart the game — no tap needed.</li>
             </ul>
+
+            <h3>🎵 Metronome</h3>
+            <p>Accessible from the Apps Menu carousel (4th item). A hardware-timer-accurate metronome with a full control UI:</p>
+            <ul>
+                <li><strong>BPM slider:</strong> Drag to set tempo from 60 to 240 BPM. Updates live while running.</li>
+                <li><strong>−1 / +1 buttons:</strong> Fine-tune one step at a time.</li>
+                <li><strong>START / STOP:</strong> Toggle the click on/off.</li>
+                <li><strong>Beat dots:</strong> Flash in sync — 🔴 red for the downbeat, 🟢 green for weak beats.</li>
+                <li><strong>Time signature tabs:</strong> 2/4, 3/4, or 4/4. Switches instantly, even while running.</li>
+            </ul>
+            <p>Downbeat is accented at 1800 Hz; weak beats at 900 Hz, 25 ms each. The metronome always sounds regardless of the mute toggle — it is a musical tool, not a game effect.</p>
 
             <h3>Config.ini Reference</h3>
 <pre><code>[wifi]
@@ -296,7 +310,9 @@ duration = 10
                         <tr><td>v1.4.0</td><td>✅ released</td><td>Emotion tilt GIF mode on upper-left tap (smile/sleep/sad/joy via IMU).</td></tr>
                         <tr><td>v1.5.0</td><td>✅ released</td><td>Apps menu: math gate, Rock Paper Scissors, Rolling Dice, Flip a Coin, DST-aware timezone.</td></tr>
                         <tr><td>v2.0.0</td><td>✅ released</td><td>Analog clock view & low-power startup gate.</td></tr>
-                        <tr><td>v2.1.0</td><td>✅ released</td><td>PIN-protected web configuration UI — edit config, set RTC, reboot; WPA2 AP with boot-generated PIN.</td></tr>
+                        <tr><td>v2.1.0</td><td>✅ released</td><td>Metronome app (60–240 BPM, hardware-timer accuracy, 2/4 3/4 4/4, beat dots); gyro shake/tilt trigger for RPS &amp; Dice.</td></tr>
+                        <tr><td>v2.2.0</td><td>✅ released</td><td>Birthday Easter egg: <code>[birthdays]</code> in config.ini, Happy Birthday melody, happybirthday.gif for alarm &amp; timer.</td></tr>
+                        <tr><td>v2.3.0</td><td>✅ released</td><td>PIN-protected web configuration UI — edit config, set RTC, reboot; WPA2 AP with boot-generated PIN.</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -338,6 +354,8 @@ duration = 10
                 <li><strong>SD ↔ LVGL filesystem bridge:</strong> Allows `lv_gif_set_src("S:/...")` natively.</li>
                 <li><strong>DST-aware timekeeping:</strong> `configTzTime` sets POSIX TZ handling DST automatically.</li>
                 <li><strong>Emotion tilt in-place swap:</strong> Swaps the GIF path dynamically based on IMU data without rebuilding the overlay.</li>
+                <li><strong>Gyro shake/tilt trigger:</strong> <code>app_gyro_poll_cb()</code> runs as a 150 ms LVGL timer while RPS or Dice is active. It detects a physical shake via |ΔaccelZ| &gt; 1.8 g between consecutive samples, and a hard tilt via |accelY| &gt; 1.0 g. Both call <code>app_screen_start()</code> identically to a tap. The timer is created on game start and deleted on exit.</li>
+                <li><strong>Metronome hardware timer:</strong> Beat timing uses two <code>esp_timer</code> hardware timers running outside the LVGL loop. <code>metro_hw_beat_cb()</code> writes directly to <code>ledcChangeFrequency()</code> (safe from timer task context) and sets a volatile flag. A 20 ms LVGL poll timer reads the flag and updates dot colours on the LVGL thread. BPM changes stop and restart the periodic timer with the new period (60,000,000 / bpm µs).</li>
                 <li><strong>Web configuration server:</strong> <code>WebServer</code> on port 80 shared between STA and AP modes. Boot PIN seeded from <code>esp_timer_get_time()</code>; used as both the WPA2 AP password and the web gate. <code>POST /config</code> re-injects the masked WiFi password from RAM before writing to SD. <code>POST /settime</code> calls <code>settimeofday()</code> directly. All mutating routes return 403 on PIN mismatch.</li>
             </ul>
         </section>

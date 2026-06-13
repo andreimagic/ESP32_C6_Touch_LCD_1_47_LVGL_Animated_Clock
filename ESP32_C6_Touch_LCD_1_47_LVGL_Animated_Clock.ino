@@ -773,13 +773,17 @@ static void log_last_seen() {
 
 static void save_config()
 {
-  // Re-read existing config line by line, rewrite with updated [alarm] section.
-  // We load all non-alarm lines into a buffer then append the updated alarm block.
-  // This preserves [wifi] and any comments in the original file.
+  // Re-read existing config, preserve [clock], [animation], [birthdays] and
+  // any comments. [wifi], [alarm], [timer], [menu], [tennis] are rewritten
+  // fresh from cfg on every call.
+  //
+  // Blank lines in the preserved block are intentionally dropped — we add
+  // exactly one blank separator before each managed section, so the file
+  // stays tidy no matter how many times it is rewritten.
   const char *path = "/config.ini";
   char lines[32][128];
   int  lineCount = 0;
-  bool inAlarm   = false;  // also covers [wifi] and [timer]
+  bool inManaged = false;
 
   File fr = SD.open(path, FILE_READ);
   if (fr) {
@@ -788,19 +792,28 @@ static void save_config()
       while (fr.available() && len < 126) {
         char ch = fr.read();
         if (ch == '\n') break;
+        if (ch == '\r') continue;   // strip CR — web editor saves \r\n
         lines[lineCount][len++] = ch;
       }
       lines[lineCount][len] = '\0';
-      // Detect [alarm] section and skip its lines — we'll rewrite them fresh
+
       char *trimmed = lines[lineCount];
       while (*trimmed == ' ' || *trimmed == '\t') trimmed++;
-      if (strncmp(trimmed,"[wifi]", 6)==0||
-          strncmp(trimmed,"[alarm]",7)==0||
-          strncmp(trimmed,"[timer]",7)==0||
-          strncmp(trimmed,"[menu]", 6)==0||
-          strncmp(trimmed,"[tennis]",8)==0) { inAlarm=true; continue; }
-      if (*trimmed=='[') inAlarm=false;
-      if (!inAlarm) lineCount++;
+
+      // Entering a managed section — skip until the next unknown section
+      if (strncmp(trimmed,"[wifi]",   6)==0 ||
+          strncmp(trimmed,"[alarm]",  7)==0 ||
+          strncmp(trimmed,"[timer]",  7)==0 ||
+          strncmp(trimmed,"[menu]",   6)==0 ||
+          strncmp(trimmed,"[tennis]", 8)==0) { inManaged=true;  continue; }
+      if (*trimmed == '[')                    { inManaged=false; }
+      if (inManaged)                            continue;
+
+      // Drop blank / whitespace-only lines from the preserved block.
+      // We add our own single blank separator before each managed section.
+      if (*trimmed == '\0')                   continue;
+
+      lineCount++;
     }
     fr.close();
   }
@@ -808,39 +821,41 @@ static void save_config()
   File fw = SD.open(path, FILE_WRITE);
   if (!fw) { Serial.println("[CFG] save_config: cannot open for write"); return; }
 
-  // Write preserved lines
+  // Preserved lines (clock / animation / birthdays / user comments).
+  // fw.print + "\n" instead of fw.println to avoid the extra \r that
+  // println emits on some Arduino cores, which compounds into blank lines.
   for (int i = 0; i < lineCount; i++) {
-    fw.println(lines[i]);
+    fw.print(lines[i]);
+    fw.print("\n");
   }
-  fw.println();
-  fw.println("[wifi]");
-  fw.printf("enabled = %s\n",  cfg.wifi_enabled ?"true":"false");
+
+  // Managed sections — exactly one blank line before each header
+  fw.print("\n[wifi]\n");
+  fw.printf("enabled = %s\n",  cfg.wifi_enabled ? "true" : "false");
   fw.printf("ssid = %s\n",     cfg.wifi_ssid);
   fw.printf("password = %s\n", cfg.wifi_password);
 
-  fw.println();
-  fw.println("[alarm]");
-  fw.printf("enabled = %s\n",        cfg.alarm_enabled?"true":"false");
+  fw.print("\n[alarm]\n");
+  fw.printf("enabled = %s\n",        cfg.alarm_enabled ? "true" : "false");
   fw.printf("time = %02d:%02d\n",    cfg.alarm_hour, cfg.alarm_minute);
   fw.printf("beep_sequences = %d\n", cfg.alarm_beep_sequences);
 
-  fw.println();
-  fw.println("[timer]");
+  fw.print("\n[timer]\n");
   fw.printf("duration = %02d:%02d\n",  cfg.timer_hours, cfg.timer_minutes);
   fw.printf("beep_sequences = %d\n",   cfg.timer_beep_sequences);
 
-  fw.println();
-  fw.println("[menu]");
-  fw.printf("sounds = %s\n", cfg.menu_sounds?"true":"false");
-  fw.println();
-  fw.println("[tennis]");
+  fw.print("\n[menu]\n");
+  fw.printf("sounds = %s\n", cfg.menu_sounds ? "true" : "false");
+
+  fw.print("\n[tennis]\n");
   fw.printf("high_score = %d\n",      cfg.tennis_high_score);
   fw.printf("paddle_size = %d\n",     cfg.tennis_paddle_size);
   fw.printf("ball_speed_ms = %d\n",   cfg.tennis_ball_speed_ms);
   fw.printf("paddle_speed_ms = %d\n", cfg.tennis_paddle_speed_ms);
+
   fw.close();
 
-  Serial.println("[CFG] Saved wifi/alarm/timer/menu.");
+  Serial.println("[CFG] Saved wifi/alarm/timer/menu/tennis.");
   
   // Save the current timestamp to the log file as well
   log_last_seen();
@@ -864,6 +879,7 @@ static void seed_tennis_config()
     while (fr.available() && len < (int)sizeof(line) - 1) {
       char ch = fr.read();
       if (ch == '\n') break;
+      if (ch == '\r') continue;  // strip CR
       line[len++] = ch;
     }
     line[len] = '\0';
@@ -4327,7 +4343,12 @@ static void tl_ball_tick_cb(lv_timer_t * /*t*/)
           "Score:%-3d   High Score:%-3d",
           tl_score, cfg.tennis_high_score);
     } else {
-      // Missed — game over
+      // Missed — game over — move ball to paddle row so it's visibly on the same line
+      // as the paddle before the losing tune plays, then stop.
+      tl_ball_x = nx;
+      tl_ball_y = ny;   // ny == TL_ROWS - 1  (paddle row)
+      tl_render();
+
       tl_running = false;
       tl_stop_timers();
       ledcWrite(BUZZER_PIN, 0);

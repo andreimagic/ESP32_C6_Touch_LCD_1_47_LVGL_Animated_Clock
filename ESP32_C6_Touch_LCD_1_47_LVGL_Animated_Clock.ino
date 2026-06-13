@@ -4128,6 +4128,25 @@ static lv_timer_t *tl_gyro_timer  = nullptr;
 static lv_obj_t   *tl_field_lbl   = nullptr;   // main ASCII art label
 static lv_obj_t   *tl_status_lbl  = nullptr;   // score bar label
 
+// ── Tune player types — defined here so the Arduino IDE auto-prototype
+//    injector sees TlNote before it generates prototypes for tl_play_success
+//    and tl_play_failure (neither of which uses TlNote in their signature,
+//    but tl_tune_notes pointer type depends on the struct being known).
+struct TlNote { uint16_t freq; uint16_t ms; };
+
+static const TlNote TL_SUCCESS[] = {   // same melody as menu_play_success
+  {880,100},{988,100},{523,100},{494,100},
+  {523,100},{587,100},{523,100},{587,100},
+  {659,100},{587,100},{659,100},{659,100}
+};
+static const TlNote TL_FAILURE[] = {   // same melody as menu_play_failure
+  {392,250},{262,500}
+};
+
+static const TlNote *tl_tune_notes = nullptr;
+static int           tl_tune_total = 0;
+static int           tl_tune_step  = 0;
+
 // ── Render the game field into a char buffer and update the label ─────────────
 static void tl_render()
 {
@@ -4192,6 +4211,59 @@ static void tl_beep()
     lv_timer_del(t);
   }, 40, nullptr);
   lv_timer_set_repeat_count(off, 1);
+}
+
+// ── Non-blocking tune player for Tennis ──────────────────────────────────────
+// Plays a sequence of {freq_hz, duration_ms} notes via LVGL one-shot timers
+// so the ball timer keeps ticking and the game stays responsive throughout.
+// freq=0 = silence gap.  Shares the buzzer with tl_beep; if a beep is in
+// flight it will be overridden (acceptable — tunes are only triggered on
+// catch/complete/lose, not during rapid bounces).
+// (TlNote struct, TL_SUCCESS/TL_FAILURE arrays and tl_tune_* state vars are
+//  declared with the Tennis globals above. tl_play_success/failure are kept
+//  as simple void() functions with no TlNote in their signatures so the
+//  Arduino IDE prototype injector never needs to forward-declare the type.)
+
+static void tl_tune_tick_cb(lv_timer_t *t)
+{
+  if (tl_tune_step >= tl_tune_total) {
+    // Sequence finished — silence and clean up
+    ledcWrite(BUZZER_PIN, 0);
+    ledcChangeFrequency(BUZZER_PIN, 2000, 8);
+    lv_timer_del(t);
+    tl_tune_notes = nullptr;
+    return;
+  }
+  uint16_t freq = tl_tune_notes[tl_tune_step].freq;
+  uint16_t dur  = tl_tune_notes[tl_tune_step].ms;
+  if (freq == 0) {
+    ledcWrite(BUZZER_PIN, 0);
+  } else {
+    ledcChangeFrequency(BUZZER_PIN, freq, 8);
+    ledcWrite(BUZZER_PIN, 96);
+  }
+  lv_timer_set_period(t, dur);
+  tl_tune_step++;
+}
+
+static void tl_play_success()
+{
+  if (!cfg.menu_sounds) return;
+  tl_tune_notes = TL_SUCCESS;
+  tl_tune_total = 12;
+  tl_tune_step  = 0;
+  lv_timer_t *t = lv_timer_create(tl_tune_tick_cb, 1, nullptr);
+  lv_timer_set_repeat_count(t, -1);
+}
+
+static void tl_play_failure()
+{
+  if (!cfg.menu_sounds) return;
+  tl_tune_notes = TL_FAILURE;
+  tl_tune_total = 2;
+  tl_tune_step  = 0;
+  lv_timer_t *t = lv_timer_create(tl_tune_tick_cb, 1, nullptr);
+  lv_timer_set_repeat_count(t, -1);
 }
 
 // ── Stop all Tennis timers ────────────────────────────────────────────────────
@@ -4330,9 +4402,9 @@ static void tl_ball_tick_cb(lv_timer_t * /*t*/)
         tl_beat_high = true;
         cfg.tennis_high_score = tl_score;
         save_config();
-        menu_play_success();  // winning tune for new high score
+        tl_play_success();    // winning tune for new high score
       } else if (completed_alphabet) {
-        menu_play_success();  // winning tune for completing alphabet
+        tl_play_success();    // winning tune for completing alphabet
       }
       // Advance letter
       tl_letter_idx = (tl_letter_idx + 1) % 26;
@@ -4363,9 +4435,9 @@ static void tl_ball_tick_cb(lv_timer_t * /*t*/)
       int  alphabets   = tl_score / 26;
 
       if (is_new_high || alphabets >= 1) {
-        menu_play_success();  // winning tune: completed alphabet OR new high
+        tl_play_success();    // winning tune: completed alphabet OR new high
       } else {
-        menu_play_failure();  // losing tune
+        tl_play_failure();    // losing tune
       }
 
       tl_show_popup(is_new_high);
@@ -4455,6 +4527,10 @@ static void tl_stop()
 {
   tl_running = false;
   tl_stop_timers();
+  // Silence any tune that may still be playing
+  tl_tune_notes = nullptr;
+  ledcWrite(BUZZER_PIN, 0);
+  ledcChangeFrequency(BUZZER_PIN, 2000, 8);
   tl_field_lbl  = nullptr;
   tl_status_lbl = nullptr;
 }

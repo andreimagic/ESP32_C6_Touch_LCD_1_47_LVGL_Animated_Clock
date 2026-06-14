@@ -4174,9 +4174,13 @@ static void tl_render()
         // Top wall
         ch = '-';
       } else if (row == TL_ROWS - 1) {
-        // Paddle row (no side walls on paddle row — open at sides)
-        int rel = col - tl_paddle_x;
-        if (rel >= 0 && rel < cfg.tennis_paddle_size) ch = '=';
+        // Paddle row — ball takes priority over paddle so it's visible on miss
+        if (col == tl_ball_x && tl_ball_y == TL_ROWS - 1) {
+          ch = (char)('a' + tl_letter_idx);
+        } else {
+          int rel = col - tl_paddle_x;
+          if (rel >= 0 && rel < cfg.tennis_paddle_size) ch = '=';
+        }
       } else {
         // Play area with side walls
         if (col == 0 || col == TL_COLS - 1) {
@@ -4415,15 +4419,15 @@ static void tl_ball_tick_cb(lv_timer_t * /*t*/)
           "Score:%-3d   High Score:%-3d",
           tl_score, cfg.tennis_high_score);
     } else {
-      // Missed — game over — move ball to paddle row so it's visibly on the same line
-      // as the paddle before the losing tune plays, then stop.
+      // Missed — move ball to paddle row and render it there so the player
+      // can see exactly where it landed, then wait one short moment before
+      // playing the tune and showing the popup (giving LVGL time to paint).
       tl_ball_x = nx;
       tl_ball_y = ny;   // ny == TL_ROWS - 1  (paddle row)
-      tl_render();
-
       tl_running = false;
       tl_stop_timers();
       ledcWrite(BUZZER_PIN, 0);
+      tl_render();  // paint ball on paddle row
 
       // Save high score if beaten
       if (tl_score > cfg.tennis_high_score) {
@@ -4431,16 +4435,21 @@ static void tl_ball_tick_cb(lv_timer_t * /*t*/)
         save_config();
       }
 
-      bool is_new_high = tl_beat_high;
-      int  alphabets   = tl_score / 26;
+      // Defer tune + popup by 500ms so the rendered frame is actually visible
+      static bool s_end_new_high;
+      s_end_new_high = tl_beat_high;
+      lv_timer_t *end_timer = lv_timer_create([](lv_timer_t *t) {
+        lv_timer_del(t);
+        int alphabets = tl_score / 26;
+        if (s_end_new_high || alphabets >= 1) {
+          tl_play_success();
+        } else {
+          tl_play_failure();
+        }
+        tl_show_popup(s_end_new_high);
+      }, 500, nullptr);
+      lv_timer_set_repeat_count(end_timer, 1);
 
-      if (is_new_high || alphabets >= 1) {
-        tl_play_success();    // winning tune: completed alphabet OR new high
-      } else {
-        tl_play_failure();    // losing tune
-      }
-
-      tl_show_popup(is_new_high);
       return;
     }
   }

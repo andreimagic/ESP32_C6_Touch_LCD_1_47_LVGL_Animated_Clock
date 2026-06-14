@@ -3183,11 +3183,11 @@ static void math_btn_cb(lv_event_t *e)
   if (math_cont) { lv_obj_del(math_cont); math_cont = nullptr; }
 
   if (chosen == math_answer) {
-    menu_play_success();
+    math_play_success();
     math_close_overlay();
     show_apps();
   } else {
-    menu_play_failure();
+    math_play_failure();
     // Wrong: show big white X for 3 s, then return to clock
     math_cont = lv_obj_create(lv_scr_act());
     lv_obj_set_size(math_cont, 320, 172);
@@ -3202,7 +3202,7 @@ static void math_btn_cb(lv_event_t *e)
     lv_obj_set_style_text_font(xl, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(xl, lv_color_white(), 0);
     lv_obj_align(xl, LV_ALIGN_CENTER, 0, 0);
-    math_fail_tmr = lv_timer_create(math_fail_cb, 3000, nullptr);
+    math_fail_tmr = lv_timer_create(math_fail_cb, 1500, nullptr);
     lv_timer_set_repeat_count(math_fail_tmr, 1);
   }
 }
@@ -4134,15 +4134,14 @@ static lv_obj_t   *tl_status_lbl  = nullptr;   // score bar label
 //    but tl_tune_notes pointer type depends on the struct being known).
 struct TlNote { uint16_t freq; uint16_t ms; };
 
-static const TlNote TL_SUCCESS[] = {   // same melody as menu_play_success
+static const TlNote SUCCESS_TUNE[] = {   // success melody, same as menu_play_success
   {880,100},{988,100},{523,100},{494,100},
   {523,100},{587,100},{523,100},{587,100},
   {659,100},{587,100},{659,100},{659,100}
 };
-static const TlNote TL_FAILURE[] = {   // same melody as menu_play_failure
+static const TlNote FAILURE_TUNE[] = {   // failure melody, same as menu_play_failure
   {392,250},{262,500}
 };
-
 static const TlNote *tl_tune_notes = nullptr;
 static int           tl_tune_total = 0;
 static int           tl_tune_step  = 0;
@@ -4223,7 +4222,7 @@ static void tl_beep()
 // freq=0 = silence gap.  Shares the buzzer with tl_beep; if a beep is in
 // flight it will be overridden (acceptable — tunes are only triggered on
 // catch/complete/lose, not during rapid bounces).
-// (TlNote struct, TL_SUCCESS/TL_FAILURE arrays and tl_tune_* state vars are
+// (TlNote struct, SUCCESS_TUNE/FAILURE_TUNE arrays and tl_tune_* state vars are
 //  declared with the Tennis globals above. tl_play_success/failure are kept
 //  as simple void() functions with no TlNote in their signatures so the
 //  Arduino IDE prototype injector never needs to forward-declare the type.)
@@ -4253,7 +4252,7 @@ static void tl_tune_tick_cb(lv_timer_t *t)
 static void tl_play_success()
 {
   if (!cfg.menu_sounds) return;
-  tl_tune_notes = TL_SUCCESS;
+  tl_tune_notes = SUCCESS_TUNE;
   tl_tune_total = 12;
   tl_tune_step  = 0;
   lv_timer_t *t = lv_timer_create(tl_tune_tick_cb, 1, nullptr);
@@ -4263,7 +4262,28 @@ static void tl_play_success()
 static void tl_play_failure()
 {
   if (!cfg.menu_sounds) return;
-  tl_tune_notes = TL_FAILURE;
+  tl_tune_notes = FAILURE_TUNE;
+  tl_tune_total = 2;
+  tl_tune_step  = 0;
+  lv_timer_t *t = lv_timer_create(tl_tune_tick_cb, 1, nullptr);
+  lv_timer_set_repeat_count(t, -1);
+}
+
+// ── Non-blocking math gateway tunes (reuse Tennis async engine) ───────────────
+static void math_play_success()
+{
+  if (!cfg.menu_sounds) return;
+  tl_tune_notes = SUCCESS_TUNE;
+  tl_tune_total = 12;
+  tl_tune_step  = 0;
+  lv_timer_t *t = lv_timer_create(tl_tune_tick_cb, 1, nullptr);
+  lv_timer_set_repeat_count(t, -1);
+}
+
+static void math_play_failure()
+{
+  if (!cfg.menu_sounds) return;
+  tl_tune_notes = FAILURE_TUNE;
   tl_tune_total = 2;
   tl_tune_step  = 0;
   lv_timer_t *t = lv_timer_create(tl_tune_tick_cb, 1, nullptr);

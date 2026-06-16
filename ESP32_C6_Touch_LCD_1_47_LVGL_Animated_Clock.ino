@@ -50,30 +50,34 @@
 // These hardcoded values are the fallback when the card or file is absent.
 
 struct AppConfig {
-  char wifi_ssid[64]          = "myhomewifi";     // [wifi] ssid
-  char wifi_password[64]      = "changeme";       // [wifi] password
-  char ntp_server[64]         = "pool.ntp.org";   // [clock] ntp_server
-  char tz_string[48]          = "CET-1CEST,M3.5.0,M10.5.0/3"; // [clock] tz (POSIX — set once, handles DST forever)
-  bool wifi_enabled           = true;        // [wifi] enabled
-  bool alarm_enabled          = false;       // [alarm] enabled
-  int  alarm_hour             = 7;           // [alarm] time HH
-  int  alarm_minute           = 0;           // [alarm] time MM
-  int  alarm_beep_sequences   = 5;           // [alarm] beep_sequences (0=until touch)
-  int  timer_hours            = 0;           // [timer] hours
-  int  timer_minutes          = 0;           // [timer] minutes
-  int  timer_beep_sequences   = 3;           // [timer] beep_sequences
-  bool anim_schedule_enabled  = true;        // [animation] schedule
-  int  anim_duration_sec      = 10;          // [animation] duration
-  bool menu_sounds            = true;        // [menu] sounds
-  int  tennis_high_score      = 0;           // [tennis] high_score
-  int  tennis_paddle_size     = 5;           // [tennis] paddle_size  (chars, 1-10)
-  int  tennis_ball_speed_ms   = 750;         // [tennis] ball_speed_ms
-  int  tennis_paddle_speed_ms = 250;         // [tennis] paddle_speed_ms
+  char wifi_ssid[64]                 = "myhomewifi";     // [wifi] ssid
+  char wifi_password[64]             = "changeme";       // [wifi] password
+  char ntp_server[64]                = "pool.ntp.org";   // [clock] ntp_server
+  char tz_string[48]                 = "CET-1CEST,M3.5.0,M10.5.0/3"; // [clock] tz (POSIX — set once, handles DST forever)
+  bool wifi_enabled                  = true;    // [wifi] enabled
+  bool alarm_enabled                 = false;   // [alarm] enabled
+  int  alarm_hour                    = 7;       // [alarm] time HH
+  int  alarm_minute                  = 0;       // [alarm] time MM
+  int  alarm_beep_sequences          = 5;       // [alarm] beep_sequences (0=until touch)
+  int  timer_hours                   = 0;       // [timer] hours
+  int  timer_minutes                 = 0;       // [timer] minutes
+  int  timer_beep_sequences          = 3;       // [timer] beep_sequences
+  bool anim_schedule_enabled         = true;    // [animation] schedule
+  int  anim_duration_sec             = 10;      // [animation] duration
+  bool menu_sounds                   = true;    // [menu] sounds
+  int  tennis_high_score             = 0;       // [tennis] high_score
+  int  tennis_paddle_size            = 6;       // [tennis] paddle_size  (chars, 1-10)
+  int  tennis_ball_speed_ms          = 500;     // [tennis] ball_speed_ms
+  int  tennis_ball_speed_min_ms      = 200;     // [tennis] ball_speed_min_ms
+  int  tennis_ball_speed_change_ms   = 10;      // [tennis] ball_speed_change_ms
+  int  tennis_paddle_speed_ms        = 250;     // [tennis] paddle_speed_ms
+  int  tennis_paddle_speed_min_ms    = 100;     // [tennis] paddle_speed_min_ms
+  int  tennis_paddle_speed_change_ms = 5;       // [tennis] paddle_speed_change_ms
   // [birthdays] dates — up to 8 entries in DD-MM-YYYY format.
   // Only day & month are compared; the year is kept as reference in the file.
   // Default: empty (no birthday greetings).
-  char birthday_dates[8][16]  = {"01-01-1970","06-08-2017"};          // [birthdays] dates (comma-separated)
-  int  birthday_count         = 2;           // number of parsed birthday entries
+  char birthday_dates[8][16]  = {"01-01-1970","06-08-2017"};   // [birthdays] dates (comma-separated)
+  int  birthday_count         = 2;   // number of parsed birthday entries
 } cfg;
 
 // ─── Pin definitions ─────────────────────────────────────────────────────────
@@ -632,15 +636,31 @@ static void load_config()
       }
       else if (strcmp(key, "ball_speed_ms") == 0) {
         cfg.tennis_ball_speed_ms = atoi(val);
-        if (cfg.tennis_ball_speed_ms < 50)  cfg.tennis_ball_speed_ms = 50;
+        if (cfg.tennis_ball_speed_ms < 1)  cfg.tennis_ball_speed_ms = 1;
         if (cfg.tennis_ball_speed_ms > 2000) cfg.tennis_ball_speed_ms = 2000;
         Serial.printf("[CFG]   tennis.ball_speed_ms   = %d\n", cfg.tennis_ball_speed_ms);
       }
       else if (strcmp(key, "paddle_speed_ms") == 0) {
         cfg.tennis_paddle_speed_ms = atoi(val);
-        if (cfg.tennis_paddle_speed_ms < 50)  cfg.tennis_paddle_speed_ms = 50;
+        if (cfg.tennis_paddle_speed_ms < 1)  cfg.tennis_paddle_speed_ms = 1;
         if (cfg.tennis_paddle_speed_ms > 2000) cfg.tennis_paddle_speed_ms = 2000;
         Serial.printf("[CFG]   tennis.paddle_speed_ms = %d\n", cfg.tennis_paddle_speed_ms);
+      }
+
+      else if (strcmp(key, "ball_speed_min_ms") == 0) {
+        cfg.tennis_ball_speed_min_ms = min(cfg.tennis_ball_speed_min_ms, cfg.tennis_ball_speed_ms);
+      }
+
+      else if (strcmp(key, "ball_speed_change_ms") == 0) {
+        cfg.tennis_ball_speed_change_ms = max(0, atoi(val));
+      }
+
+      else if (strcmp(key, "paddle_speed_min_ms") == 0) {
+        cfg.tennis_paddle_speed_min_ms = min(cfg.tennis_paddle_speed_min_ms, cfg.tennis_paddle_speed_ms);
+      }
+
+      else if (strcmp(key, "paddle_speed_change_ms") == 0) {
+        cfg.tennis_paddle_speed_change_ms = max(0, atoi(val));
       }
     }
 
@@ -850,8 +870,12 @@ static void save_config()
   fw.print("\n[tennis]\n");
   fw.printf("high_score = %d\n",      cfg.tennis_high_score);
   fw.printf("paddle_size = %d\n",     cfg.tennis_paddle_size);
-  fw.printf("ball_speed_ms = %d\n",   cfg.tennis_ball_speed_ms);
-  fw.printf("paddle_speed_ms = %d\n", cfg.tennis_paddle_speed_ms);
+  fw.printf("ball_speed_ms = %d\n",          cfg.tennis_ball_speed_ms);
+  fw.printf("ball_speed_min_ms = %d\n",      cfg.tennis_ball_speed_min_ms);
+  fw.printf("ball_speed_change_ms = %d\n",   cfg.tennis_ball_speed_change_ms);
+  fw.printf("paddle_speed_ms = %d\n",        cfg.tennis_paddle_speed_ms);
+  fw.printf("paddle_speed_min_ms = %d\n",    cfg.tennis_paddle_speed_min_ms);
+  fw.printf("paddle_speed_change_ms = %d\n", cfg.tennis_paddle_speed_change_ms);
 
   fw.close();
 
@@ -901,8 +925,12 @@ static void seed_tennis_config()
   fa.println("[tennis]");
   fa.printf("high_score = %d\n",      cfg.tennis_high_score);
   fa.printf("paddle_size = %d\n",     cfg.tennis_paddle_size);
-  fa.printf("ball_speed_ms = %d\n",   cfg.tennis_ball_speed_ms);
-  fa.printf("paddle_speed_ms = %d\n", cfg.tennis_paddle_speed_ms);
+  fa.printf("ball_speed_ms = %d\n",          cfg.tennis_ball_speed_ms);
+  fa.printf("ball_speed_min_ms = %d\n",      cfg.tennis_ball_speed_min_ms);
+  fa.printf("ball_speed_change_ms = %d\n",   cfg.tennis_ball_speed_change_ms);
+  fa.printf("paddle_speed_ms = %d\n",        cfg.tennis_paddle_speed_ms);
+  fa.printf("paddle_speed_min_ms = %d\n",    cfg.tennis_paddle_speed_min_ms);
+  fa.printf("paddle_speed_change_ms = %d\n", cfg.tennis_paddle_speed_change_ms);
   fa.close();
   Serial.println("[CFG] [tennis] section seeded into config.ini.");
 }
@@ -4290,6 +4318,9 @@ static void math_play_failure()
   lv_timer_set_repeat_count(t, -1);
 }
 
+static int tl_ball_speed_current_ms   = 0;
+static int tl_paddle_speed_current_ms = 0;
+
 // ── Stop all Tennis timers ────────────────────────────────────────────────────
 static void tl_stop_timers()
 {
@@ -4401,6 +4432,18 @@ static void tl_ball_tick_cb(lv_timer_t * /*t*/)
   // Top wall bounce
   if (ny <= 0) {
     tl_ball_dy = -tl_ball_dy;
+
+      if (cfg.tennis_ball_speed_change_ms > 0) {
+        tl_ball_speed_current_ms = max(cfg.tennis_ball_speed_min_ms,
+          tl_ball_speed_current_ms - cfg.tennis_ball_speed_change_ms);
+        if (tl_ball_timer) lv_timer_set_period(tl_ball_timer, tl_ball_speed_current_ms);
+      }
+
+      if (cfg.tennis_paddle_speed_change_ms > 0) {
+        tl_paddle_speed_current_ms = max(cfg.tennis_paddle_speed_min_ms,
+          tl_paddle_speed_current_ms - cfg.tennis_paddle_speed_change_ms);
+        if (tl_gyro_timer) lv_timer_set_period(tl_gyro_timer, tl_paddle_speed_current_ms);
+      }
     ny = tl_ball_y + tl_ball_dy;
     bounced = true;
   }
@@ -4546,9 +4589,12 @@ static void tl_game_start()
   tl_render();
 
   tl_running = true;
-  tl_ball_timer = lv_timer_create(tl_ball_tick_cb, cfg.tennis_ball_speed_ms, nullptr);
+  tl_ball_speed_current_ms = cfg.tennis_ball_speed_ms;
+  tl_paddle_speed_current_ms = cfg.tennis_paddle_speed_ms;
+
+  tl_ball_timer = lv_timer_create(tl_ball_tick_cb, tl_ball_speed_current_ms, nullptr);
   if (imuReady)
-    tl_gyro_timer = lv_timer_create(tl_gyro_tick_cb, cfg.tennis_paddle_speed_ms, nullptr);
+    tl_gyro_timer = lv_timer_create(tl_gyro_tick_cb, tl_paddle_speed_current_ms, nullptr);
 }
 
 // ── Tennis stop (called from apps_close) ─────────────────────────────────────

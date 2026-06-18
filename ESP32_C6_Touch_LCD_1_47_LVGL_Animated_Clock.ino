@@ -4154,7 +4154,8 @@ static bool  tl_beat_high   = false; // did we beat high score this game?
 static lv_timer_t *tl_ball_timer  = nullptr;
 static lv_timer_t *tl_gyro_timer  = nullptr;
 static lv_obj_t   *tl_field_lbl   = nullptr;   // main ASCII art label
-static lv_obj_t   *tl_status_lbl  = nullptr;   // score bar label
+static lv_obj_t   *tl_score_lbl   = nullptr;   // score bar — left
+static lv_obj_t   *tl_hi_lbl      = nullptr;   // score bar — right
 
 // ── Tune player types — defined here so the Arduino IDE auto-prototype
 //    injector sees TlNote before it generates prototypes for tl_play_success
@@ -4177,7 +4178,7 @@ static int           tl_tune_step  = 0;
 // ── Render the game field into a char buffer and update the label ─────────────
 static void tl_render()
 {
-  if (!tl_field_lbl || !tl_status_lbl) return;
+  if (!tl_field_lbl || !tl_score_lbl || !tl_hi_lbl) return;
 
   // Build a TL_ROWS × TL_COLS character grid
   // Each row is TL_COLS chars + '\n', last row no newline + '\0'
@@ -4223,10 +4224,9 @@ static void tl_render()
   grid[pos] = '\0';
   lv_label_set_text(tl_field_lbl, grid);
 
-  // Status bar
-  lv_label_set_text_fmt(tl_status_lbl,
-    "Score:%-3d   High Score:%-3d",
-    tl_score, cfg.tennis_high_score);
+  // Status bar — two independent labels so digits never shift alignment
+  lv_label_set_text_fmt(tl_score_lbl, "Score: %d", tl_score);
+  lv_label_set_text_fmt(tl_hi_lbl,    "High Score: %d", cfg.tennis_high_score);
 }
 
 // ── Beep helper (non-blocking, direct PWM) ───────────────────────────────────
@@ -4477,10 +4477,8 @@ static void tl_ball_tick_cb(lv_timer_t * /*t*/)
       tl_letter_idx = (tl_letter_idx + 1) % 26;
 
       // Update status bar score immediately
-      if (tl_status_lbl)
-        lv_label_set_text_fmt(tl_status_lbl,
-          "Score:%-3d   High Score:%-3d",
-          tl_score, cfg.tennis_high_score);
+      if (tl_score_lbl)
+        lv_label_set_text_fmt(tl_score_lbl, "Score: %d", tl_score);
     } else {
       // Missed — move ball to paddle row and render it there so the player
       // can see exactly where it landed, then wait one short moment before
@@ -4579,12 +4577,22 @@ static void tl_game_start()
   lv_obj_set_pos(tl_field_lbl, TL_FIELD_X, TL_FIELD_Y);
   lv_obj_set_size(tl_field_lbl, 320, TL_ROWS * 16 + 4);
 
-  // Status bar — same font, one line below the field
-  tl_status_lbl = lv_label_create(apps_cont);
-  lv_obj_set_style_text_font(tl_status_lbl, &dejavu_mono_14, 0);
-  lv_obj_set_style_text_color(tl_status_lbl, lv_color_make(180, 180, 100), 0);
-  lv_obj_set_pos(tl_status_lbl, TL_FIELD_X + 2, TL_FIELD_Y + TL_ROWS * 16 + 4);
-  lv_obj_set_size(tl_status_lbl, 316, 16);
+  // Status bar — two labels, left and right anchored, one line below the field
+  int status_y = TL_FIELD_Y + TL_ROWS * 16 + 4;
+
+  tl_score_lbl = lv_label_create(apps_cont);
+  lv_obj_set_style_text_font(tl_score_lbl, &dejavu_mono_14, 0);
+  lv_obj_set_style_text_color(tl_score_lbl, lv_color_make(180, 180, 100), 0);
+  lv_obj_set_style_text_align(tl_score_lbl, LV_TEXT_ALIGN_LEFT, 0);
+  lv_obj_set_pos(tl_score_lbl, TL_FIELD_X + 2, status_y);
+  lv_obj_set_size(tl_score_lbl, 160, 16);
+
+  tl_hi_lbl = lv_label_create(apps_cont);
+  lv_obj_set_style_text_font(tl_hi_lbl, &dejavu_mono_14, 0);
+  lv_obj_set_style_text_color(tl_hi_lbl, lv_color_make(180, 180, 100), 0);
+  lv_obj_set_style_text_align(tl_hi_lbl, LV_TEXT_ALIGN_RIGHT, 0);
+  lv_obj_set_pos(tl_hi_lbl, 160, status_y);
+  lv_obj_set_size(tl_hi_lbl, 158, 16);
 
   tl_render();
 
@@ -4607,7 +4615,8 @@ static void tl_stop()
   ledcWrite(BUZZER_PIN, 0);
   ledcChangeFrequency(BUZZER_PIN, 2000, 8);
   tl_field_lbl  = nullptr;
-  tl_status_lbl = nullptr;
+  tl_score_lbl  = nullptr;
+  tl_hi_lbl     = nullptr;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

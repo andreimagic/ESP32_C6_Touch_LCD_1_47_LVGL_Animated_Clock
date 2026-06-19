@@ -95,7 +95,7 @@
                         <tr><td><strong>AP hotspot</strong></td><td>WPA2 fallback AP (<code>ESP32-Clock</code>) with boot-generated PIN shown on the device screen — physical access required</td></tr>
                         <tr><td><strong>Battery monitor</strong></td><td>Live percentage, voltage, ADC raw — with LiPo discharge curve</td></tr>
                         <tr><td><strong>Low-power gate</strong></td><td>Refuses to boot if battery ≤ 10%, shows empty battery icon and deep sleeps.</td></tr>
-                        <tr><td><strong>Apps menu</strong></td><td>Math challenge gate, Rock Paper Scissors, Rolling Dice, Coin Flip, Metronome</td></tr>
+                        <tr><td><strong>Apps menu</strong></td><td>Math challenge gate, Rock Paper Scissors, Rolling Dice, Coin Flip, Tennis Letters, Metronome</td></tr>
                         <tr><td><strong>Metronome</strong></td><td>60–240 BPM with hardware-timer accuracy, beat dot indicators, 2/4 3/4 4/4 time signatures, distinct hi/lo tones</td></tr>
                         <tr><td><strong>Gyro shake/tilt</strong></td><td>Physically shaking or hard-tilting the device restarts RPS or Dice — no tap needed</td></tr>
                         <tr><td><strong>SD card config</strong></td><td>All settings in <code>/config.ini</code> — no recompile needed</td></tr>
@@ -203,6 +203,9 @@
                 <li><strong>Time signature tabs:</strong> 2/4, 3/4, or 4/4. Switches instantly, even while running.</li>
             </ul>
             <p>Downbeat is accented at 1800 Hz; weak beats at 900 Hz, 25 ms each. The metronome always sounds regardless of the mute toggle — it is a musical tool, not a game effect.</p>
+
+            <h3>🎾 Tennis Letters</h3>
+            <p>A Breakout-style ASCII game where the ball is a cycling letter (a-z). Use the device's <strong>Y-axis tilt</strong> to move the paddle and catch the ball. Each catch increments the score and advances the letter. Completing a full alphabet plays a success tune. High scores are persisted to <code class="code-inline">config.ini</code>, along with numerous configurable variables to make the game more challenging.</p>
 
             <h3>Config.ini Reference</h3>
 <pre><code>[wifi]
@@ -313,6 +316,7 @@ duration = 10
                         <tr><td>v2.1.0</td><td>✅ released</td><td>Metronome app (60–240 BPM, hardware-timer accuracy, 2/4 3/4 4/4, beat dots); gyro shake/tilt trigger for RPS &amp; Dice.</td></tr>
                         <tr><td>v2.2.0</td><td>✅ released</td><td>Birthday Easter egg: <code>[birthdays]</code> in config.ini, Happy Birthday melody, happybirthday.gif for alarm &amp; timer.</td></tr>
                         <tr><td>v2.3.0</td><td>✅ released</td><td>PIN-protected web configuration UI — edit config, set RTC, reboot; WPA2 AP with boot-generated PIN.</td></tr>
+                        <tr><td>v2.4.0</td><td>🚀 new</td><td>Introducing Tennis Letters game: Breakout-style ASCII game with tilt-controlled paddle and alphabet cycling.</td></tr>
                     </tbody>
                 </table>
             </div>

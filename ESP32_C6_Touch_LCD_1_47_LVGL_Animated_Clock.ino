@@ -73,6 +73,15 @@ struct AppConfig {
   int  tennis_paddle_speed_ms        = 250;     // [tennis] paddle_speed_ms
   int  tennis_paddle_speed_min_ms    = 100;     // [tennis] paddle_speed_min_ms
   int  tennis_paddle_speed_change_ms = 5;       // [tennis] paddle_speed_change_ms
+  int  lr_last_score               = 0;         // [letter_rain] last_score
+  int  lr_paddle_size              = 6;         // [letter_rain] paddle_size  (chars, 3-10)
+  int  lr_max_entities             = 5;         // [letter_rain] max_entities (3 or 5)
+  int  lr_fall_speed_ms            = 500;       // [letter_rain] fall_speed_ms
+  int  lr_fall_speed_min_ms        = 200;       // [letter_rain] fall_speed_min_ms
+  int  lr_fall_speed_change_ms     = 10;        // [letter_rain] fall_speed_change_ms
+  int  lr_paddle_speed_ms          = 250;       // [letter_rain] paddle_speed_ms
+  int  lr_paddle_speed_min_ms      = 100;       // [letter_rain] paddle_speed_min_ms
+  int  lr_paddle_speed_change_ms   = 5;         // [letter_rain] paddle_speed_change_ms
   // [birthdays] dates — up to 8 entries in DD-MM-YYYY format.
   // Only day & month are compared; the year is kept as reference in the file.
   // Default: empty (no birthday greetings).
@@ -664,6 +673,52 @@ static void load_config()
       }
     }
 
+    // ── [letter_rain] ────────────────────────────────────────────────────────
+    else if (strcmp(section, "letter_rain") == 0) {
+      if (strcmp(key, "last_score") == 0) {
+        cfg.lr_last_score = atoi(val);
+        Serial.printf("[CFG]   letter_rain.last_score       = %d\n", cfg.lr_last_score);
+      }
+      else if (strcmp(key, "paddle_size") == 0) {
+        cfg.lr_paddle_size = atoi(val);
+        if (cfg.lr_paddle_size < 3)  cfg.lr_paddle_size = 3;
+        if (cfg.lr_paddle_size > 10) cfg.lr_paddle_size = 10;
+        Serial.printf("[CFG]   letter_rain.paddle_size      = %d\n", cfg.lr_paddle_size);
+      }
+      else if (strcmp(key, "max_entities") == 0) {
+        cfg.lr_max_entities = atoi(val);
+        if (cfg.lr_max_entities < 3) cfg.lr_max_entities = 3;
+        if (cfg.lr_max_entities > 5) cfg.lr_max_entities = 5;
+        Serial.printf("[CFG]   letter_rain.max_entities     = %d\n", cfg.lr_max_entities);
+      }
+      else if (strcmp(key, "fall_speed_ms") == 0) {
+        cfg.lr_fall_speed_ms = atoi(val);
+        if (cfg.lr_fall_speed_ms < 1)    cfg.lr_fall_speed_ms = 1;
+        if (cfg.lr_fall_speed_ms > 2000) cfg.lr_fall_speed_ms = 2000;
+        Serial.printf("[CFG]   letter_rain.fall_speed_ms    = %d\n", cfg.lr_fall_speed_ms);
+      }
+      else if (strcmp(key, "fall_speed_min_ms") == 0) {
+        cfg.lr_fall_speed_min_ms = max(1, atoi(val));
+        cfg.lr_fall_speed_min_ms = min(cfg.lr_fall_speed_min_ms, cfg.lr_fall_speed_ms);
+      }
+      else if (strcmp(key, "fall_speed_change_ms") == 0) {
+        cfg.lr_fall_speed_change_ms = max(0, atoi(val));
+      }
+      else if (strcmp(key, "paddle_speed_ms") == 0) {
+        cfg.lr_paddle_speed_ms = atoi(val);
+        if (cfg.lr_paddle_speed_ms < 1)    cfg.lr_paddle_speed_ms = 1;
+        if (cfg.lr_paddle_speed_ms > 2000) cfg.lr_paddle_speed_ms = 2000;
+        Serial.printf("[CFG]   letter_rain.paddle_speed_ms  = %d\n", cfg.lr_paddle_speed_ms);
+      }
+      else if (strcmp(key, "paddle_speed_min_ms") == 0) {
+        cfg.lr_paddle_speed_min_ms = max(1, atoi(val));
+        cfg.lr_paddle_speed_min_ms = min(cfg.lr_paddle_speed_min_ms, cfg.lr_paddle_speed_ms);
+      }
+      else if (strcmp(key, "paddle_speed_change_ms") == 0) {
+        cfg.lr_paddle_speed_change_ms = max(0, atoi(val));
+      }
+    }
+
     // ── [birthdays] ──────────────────────────────────────────────────────────
     // dates = DD-MM-YYYY,DD-MM-YYYY,...   (up to 8 entries)
     // Only the day and month are used for comparison; the year is stored for
@@ -821,11 +876,12 @@ static void save_config()
       while (*trimmed == ' ' || *trimmed == '\t') trimmed++;
 
       // Entering a managed section — skip until the next unknown section
-      if (strncmp(trimmed,"[wifi]",   6)==0 ||
-          strncmp(trimmed,"[alarm]",  7)==0 ||
-          strncmp(trimmed,"[timer]",  7)==0 ||
-          strncmp(trimmed,"[menu]",   6)==0 ||
-          strncmp(trimmed,"[tennis]", 8)==0) { inManaged=true;  continue; }
+      if (strncmp(trimmed,"[wifi]",        6)==0 ||
+          strncmp(trimmed,"[alarm]",       7)==0 ||
+          strncmp(trimmed,"[timer]",       7)==0 ||
+          strncmp(trimmed,"[menu]",        6)==0 ||
+          strncmp(trimmed,"[tennis]",      8)==0 ||
+          strncmp(trimmed,"[letter_rain]",13)==0) { inManaged=true;  continue; }
       if (*trimmed == '[')                    { inManaged=false; }
       if (inManaged)                            continue;
 
@@ -877,9 +933,20 @@ static void save_config()
   fw.printf("paddle_speed_min_ms = %d\n",    cfg.tennis_paddle_speed_min_ms);
   fw.printf("paddle_speed_change_ms = %d\n", cfg.tennis_paddle_speed_change_ms);
 
+  fw.print("\n[letter_rain]\n");
+  fw.printf("last_score = %d\n",            cfg.lr_last_score);
+  fw.printf("paddle_size = %d\n",           cfg.lr_paddle_size);
+  fw.printf("max_entities = %d\n",          cfg.lr_max_entities);
+  fw.printf("fall_speed_ms = %d\n",         cfg.lr_fall_speed_ms);
+  fw.printf("fall_speed_min_ms = %d\n",     cfg.lr_fall_speed_min_ms);
+  fw.printf("fall_speed_change_ms = %d\n",  cfg.lr_fall_speed_change_ms);
+  fw.printf("paddle_speed_ms = %d\n",       cfg.lr_paddle_speed_ms);
+  fw.printf("paddle_speed_min_ms = %d\n",   cfg.lr_paddle_speed_min_ms);
+  fw.printf("paddle_speed_change_ms = %d\n",cfg.lr_paddle_speed_change_ms);
+
   fw.close();
 
-  Serial.println("[CFG] Saved wifi/alarm/timer/menu/tennis.");
+  Serial.println("[CFG] Saved wifi/alarm/timer/menu/tennis/letter_rain.");
   
   // Save the current timestamp to the log file as well
   log_last_seen();
@@ -933,6 +1000,56 @@ static void seed_tennis_config()
   fa.printf("paddle_speed_change_ms = %d\n", cfg.tennis_paddle_speed_change_ms);
   fa.close();
   Serial.println("[CFG] [tennis] section seeded into config.ini.");
+}
+
+// ── Ensure [letter_rain] section exists in config.ini ────────────────────────
+// Called once at boot after load_config(). If the section is absent (fresh SD
+// card or first flash), it appends the block with current cfg defaults so the
+// web UI always shows all letter_rain settings from the very first power-on.
+static void seed_letter_rain_config()
+{
+  if (!sdCardAvailable) return;
+
+  File fr = SD.open("/config.ini", FILE_READ);
+  if (!fr) return;  // no file at all — save_config() will create it later
+  bool found = false;
+  char line[64];
+  while (fr.available() && !found) {
+    int len = 0;
+    while (fr.available() && len < (int)sizeof(line) - 1) {
+      char ch = fr.read();
+      if (ch == '\n') break;
+      if (ch == '\r') continue;  // strip CR
+      line[len++] = ch;
+    }
+    line[len] = '\0';
+    char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, "[letter_rain]", 13) == 0) { found = true; }
+  }
+  fr.close();
+
+  if (found) {
+    Serial.println("[CFG] [letter_rain] section already present.");
+    return;
+  }
+
+  // Append the section with current (default) values
+  File fa = SD.open("/config.ini", FILE_APPEND);
+  if (!fa) { Serial.println("[CFG] seed_letter_rain_config: cannot open for append"); return; }
+  fa.println();
+  fa.println("[letter_rain]");
+  fa.printf("last_score = %d\n",            cfg.lr_last_score);
+  fa.printf("paddle_size = %d\n",           cfg.lr_paddle_size);
+  fa.printf("max_entities = %d\n",          cfg.lr_max_entities);
+  fa.printf("fall_speed_ms = %d\n",         cfg.lr_fall_speed_ms);
+  fa.printf("fall_speed_min_ms = %d\n",     cfg.lr_fall_speed_min_ms);
+  fa.printf("fall_speed_change_ms = %d\n",  cfg.lr_fall_speed_change_ms);
+  fa.printf("paddle_speed_ms = %d\n",       cfg.lr_paddle_speed_ms);
+  fa.printf("paddle_speed_min_ms = %d\n",   cfg.lr_paddle_speed_min_ms);
+  fa.printf("paddle_speed_change_ms = %d\n",cfg.lr_paddle_speed_change_ms);
+  fa.close();
+  Serial.println("[CFG] [letter_rain] section seeded into config.ini.");
 }
 
 // ── Generate a random 6-digit PIN at boot ─────────────────────────────────────
@@ -3156,6 +3273,8 @@ static void apps_carousel_build(void);
 static void app_screen_start(void);
 static void app_screen_result(int data);
 static void app_anim_stop(void);
+static void lr_game_start(void);
+static void lr_stop(void);
 
 // ── Math problem generator ────────────────────────────────────────────────────
 static void math_generate(char *buf, int blen, int opts[4])
@@ -3306,6 +3425,7 @@ static void apps_close()
   app_gyro_stop();
   metro_stop();
   tl_stop();
+  lr_stop();
   if (apps_cont) { lv_obj_del(apps_cont); apps_cont = nullptr; }
   app_subphase = 0;
 }
@@ -3319,6 +3439,7 @@ static void apps_longpress_cb(lv_event_t *e)
     app_anim_stop();
     app_gyro_stop();
     tl_stop();
+    lr_stop();
     app_subphase = 0;
     apps_carousel_build();
   } else {
@@ -3327,9 +3448,9 @@ static void apps_longpress_cb(lv_event_t *e)
 }
 
 static void apps_left_cb(lv_event_t *e)
-{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+5)%6;apps_carousel_build();} }
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+6)%7;apps_carousel_build();} }
 static void apps_right_cb(lv_event_t *e)
-{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+1)%6;apps_carousel_build();} }
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+1)%7;apps_carousel_build();} }
 
 // Transparent full-screen tap zone helper for game screens
 static lv_obj_t *app_tapzone(lv_obj_t *p, lv_event_cb_t cb)
@@ -4623,6 +4744,45 @@ static void tl_stop()
 //  END TENNIS LETTERS
 // ══════════════════════════════════════════════════════════════════════════════
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  LETTERS RAIN  (apps_idx == 5)
+//
+//  Letters fall in fixed columns. The player uses the gyro paddle to catch
+//  the target letter (A→Z) displayed in the status bar. Wrong letters shrink
+//  the paddle (−1). + enlarges, − shrinks, * restores default paddle size.
+//  Missing the target letter ends the game. Catching all 26 wins.
+//
+//  Screen layout identical to Tennis Letters:
+//    Game field: 40 cols × 9 rows (dejavu_mono_14, 8×16px per cell)
+//    Status bar: "Score: X   Z   Last: Y" below the field
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Stub implementations (game engine added in Step 2) ───────────────────────
+static void lr_game_start()
+{
+  // Step 2 will fill this in.
+  // For now just switch subphase so long-press returns to carousel correctly.
+  lv_obj_clean(apps_cont);
+  app_subphase = 1;
+
+  lv_obj_t *lbl = lv_label_create(apps_cont);
+  lv_label_set_text(lbl, "Letters Rain\n[coming soon]");
+  lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(lbl, lv_color_make(100, 200, 100), 0);
+  lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
+}
+
+static void lr_stop()
+{
+  // Step 2 will fill this in.
+  // No timers or labels to clean up yet.
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  END LETTERS RAIN
+// ══════════════════════════════════════════════════════════════════════════════
+
 // ── App start tap: coin only (rps+dice use their own starters) ────────────────
 static void app_start_tap_cb(lv_event_t *e)
 {
@@ -4633,7 +4793,7 @@ static void app_start_tap_cb(lv_event_t *e)
 // ── Game start screen ─────────────────────────────────────────────────────────
 static void app_screen_start()
 {
-  if (apps_idx >= 6) return;
+  if (apps_idx >= 7) return;
   app_anim_stop();
 
   if (apps_idx == 3) {
@@ -4650,6 +4810,10 @@ static void app_screen_start()
   }
   if (apps_idx == 4) {
     tl_game_start();
+    return;
+  }
+  if (apps_idx == 5) {
+    lr_game_start();
     return;
   }
 
@@ -4677,7 +4841,7 @@ static void app_screen_start()
 static void apps_tap_enter_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-  if (apps_idx == 5) {
+  if (apps_idx == 6) {
     cfg.menu_sounds = !cfg.menu_sounds;
     save_config();
     if (cfg.menu_sounds) menu_tone_hi();  // confirm it's on
@@ -4694,13 +4858,14 @@ static void apps_carousel_build()
   lv_obj_clean(apps_cont);
   app_subphase = 0;
 
-  static const struct { const char *name; const char *desc; } items[6] = {
+  static const struct { const char *name; const char *desc; } items[7] = {
     {"Rock Paper Scissors", "An interactive ASCII Game"},
     {"Rolling Dice",        "An interactive ASCII Dice"},
     {"Flip a Coin",         "An interactive ASCII Coin"},
     {"Metronome",           "Tempo keeper for musicians"},
-    {nullptr,               nullptr},  // item 4 = Tennis Letters (rendered inline)
-    {nullptr,               nullptr},  // item 5 = Sounds toggle  (rendered inline)
+    {nullptr,               nullptr},  // item 4 = Tennis Letters  (rendered inline)
+    {nullptr,               nullptr},  // item 5 = Letters Rain    (rendered inline)
+    {nullptr,               nullptr},  // item 6 = Sounds toggle   (rendered inline)
   };
 
   // Left arrow + zone
@@ -4731,7 +4896,7 @@ static void apps_carousel_build()
     lv_obj_add_event_cb(z,apps_right_cb,LV_EVENT_PRESSED,nullptr);
     lv_obj_add_event_cb(z,apps_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr); }
 
-  if (apps_idx == 5) {
+  if (apps_idx == 6) {
     // ── Sounds toggle (inline, mirrors WiFi toggle in settings) ──────────
     lv_obj_t *sicon = lv_label_create(apps_cont);
     lv_label_set_text(sicon, cfg.menu_sounds ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE);
@@ -4745,6 +4910,32 @@ static void apps_carousel_build()
     lv_obj_set_style_text_color(sdesc,
       cfg.menu_sounds ? lv_color_make(80,200,120) : lv_color_make(180,60,60), 0);
     lv_obj_align(sdesc, LV_ALIGN_CENTER, 0, 28);
+  } else if (apps_idx == 5) {
+    // ── Letters Rain ──────────────────────────────────────────────────────
+    lv_obj_t *name_lbl = lv_label_create(apps_cont);
+    lv_label_set_text(name_lbl, "Letters Rain");
+    lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(name_lbl, lv_color_white(), 0);
+    lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(name_lbl, 180);
+    lv_obj_set_style_text_align(name_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(name_lbl, LV_ALIGN_CENTER, 0, -14);
+
+    lv_obj_t *desc_lbl = lv_label_create(apps_cont);
+    lv_label_set_text(desc_lbl, "Dodge wrong letters!");
+    lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
+    lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
+
+    if (cfg.lr_last_score > 0) {
+      lv_obj_t *ls_lbl = lv_label_create(apps_cont);
+      char ls_buf[32];
+      snprintf(ls_buf, sizeof(ls_buf), "Last: %d letters", cfg.lr_last_score);
+      lv_label_set_text(ls_lbl, ls_buf);
+      lv_obj_set_style_text_font(ls_lbl, &lv_font_montserrat_14, 0);
+      lv_obj_set_style_text_color(ls_lbl, lv_color_make(255, 210, 60), 0);
+      lv_obj_align(ls_lbl, LV_ALIGN_CENTER, 0, 44);
+    }
   } else if (apps_idx == 4) {
     // ── Tennis Letters ────────────────────────────────────────────────────
     lv_obj_t *name_lbl = lv_label_create(apps_cont);
@@ -4800,20 +4991,20 @@ static void apps_carousel_build()
 
   // Hint above dots
   lv_obj_t *hint = lv_label_create(apps_cont);
-  lv_label_set_text(hint, apps_idx == 5 ? "tap to toggle  .  hold to exit"
+  lv_label_set_text(hint, apps_idx == 6 ? "tap to toggle  .  hold to exit"
                                         : "tap to play  .  hold to exit");
   lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(hint, lv_color_make(70, 70, 95), 0);
   lv_obj_set_style_text_opa(hint, LV_OPA_60, 0);
   lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -18);
 
-  // 6 position dots
-  for (int i = 0; i < 6; i++) {
+  // 7 position dots
+  for (int i = 0; i < 7; i++) {
     lv_obj_t *dot = lv_label_create(apps_cont);
     lv_obj_set_style_text_font(dot, &dejavu_mono_14, 0);
     lv_label_set_text(dot, i==apps_idx ? "\xe2\x97\x8f" : "\xe2\x97\x8b");
     lv_obj_set_style_text_color(dot, i==apps_idx ? lv_color_white() : lv_color_make(80,80,100), 0);
-    lv_obj_set_pos(dot, 123 + i * 14, 156);
+    lv_obj_set_pos(dot, 116 + i * 14, 156);
   }
 }
 
@@ -5231,6 +5422,7 @@ void setup()
     // ── Load config.ini ──────────────────────────────────────────────────
     load_config();
     seed_tennis_config();  // append [tennis] section if not yet present
+    seed_letter_rain_config();  // append [letter_rain] section if not yet present
 
     // BUG FIX: Only restore time from log if NOT waking from a scheduled alarm
     if (!boot_from_sleep) {

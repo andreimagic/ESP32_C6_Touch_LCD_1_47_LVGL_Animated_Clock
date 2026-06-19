@@ -44,6 +44,7 @@ A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47
 | **Rock Paper Scissors** | Animated 3-2-1 countdown shake → CPU reveals its hand → GO! Shake or hard-tilt the device to restart |
 | **Rolling Dice** | Animated rolling frames → final dice face reveal. Shake or hard-tilt to re-roll |
 | **Flip a Coin** | Instant flip with ASCII coin art (heads/tails) |
+| **Tennis Letters** | Breakout-style ASCII game. Catch cycling letters (a-z) with a tilt-controlled paddle. Score points and complete alphabets |
 | **Gyro shake/tilt trigger** | While playing RPS or Dice, physically shaking the device (ΔaccelZ > 1.8 g) or tilting it hard sideways (accelY > 1.0 g) restarts the game — no tap needed |
 | **Metronome** | Full-screen BPM metronome (60–240 BPM) with hardware-timer accuracy, visual beat dots, time-signature selector (2/4, 3/4, 4/4), and distinct hi/lo tones for downbeat vs weak beats |
 | **Apps sounds** | Melody on correct math answer, failure tune on wrong; beeps during animations; toggleable. Metronome always sounds regardless of this toggle |
@@ -542,9 +543,19 @@ A full-screen BPM metronome driven by **hardware ESP32 timer** for sample-accura
 
 **Implementation:** `metro_hw_beat_cb()` runs in the ESP32 hardware timer task — it writes directly to `ledcChangeFrequency()` and sets a volatile flag. An LVGL 20 ms poll timer (`metro_dot_poll_cb`) reads the flag and updates the dot colours, keeping all UI work on the LVGL thread.
 
+#### Tennis Letters
+
+A Breakout-style ASCII game where the ball is a cycling letter (a→z).
+
+- **Gameplay:** Use the device's **Y-axis tilt** to move the paddle (`___`) and catch the ball.
+- **Scoring:** Each catch increments the score and advances the letter. Completing a full alphabet (26 letters) plays a success tune.
+- **Game Over:** Losing the ball ends the game. High scores are persisted to `config.ini`.
+- **Controls:** Tilt left/right to move; tap the game-over popup to restart, long-press to exit.
+- **Configuration:** The `config.ini` file includes various configurable variables to increase the challenge.
+
 #### Sounds toggle
 
-The fifth carousel item. Tap to mute/unmute all apps menu and game audio. The setting is saved to `config.ini` under `[menu] sounds`. This does **not** affect alarm, timer, or metronome sounds.
+The sixth carousel item. Tap to mute/unmute all apps menu and game audio. The setting is saved to `config.ini` under `[menu] sounds`. This does **not** affect alarm, timer, or metronome sounds.
 
 ---
 
@@ -845,6 +856,7 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v2.1.0 | ✅ released | Metronome app (60–240 BPM, hardware-timer accuracy, 2/4 3/4 4/4, beat dots); gyro shake/tilt trigger for RPS & Dice |
 | v2.2.0 | ✅ released | Birthday Easter egg: `[birthdays]` in config.ini, Happy Birthday melody, `happybirthday.gif` for alarm & timer. Fixed Read/Write config.ini |
 | v2.3.0 | ✅ released | PIN-protected web configuration UI — edit config, set RTC, reboot; WPA2 AP with boot-generated PIN |
+| v2.4.0 | 🚀 new | Introducing Tennis Letters game: Breakout-style ASCII game with tilt-controlled paddle and alphabet cycling |
 
 ## License
 

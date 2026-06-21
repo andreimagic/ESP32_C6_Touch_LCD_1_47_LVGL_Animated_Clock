@@ -76,11 +76,11 @@ struct AppConfig {
   int  lr_last_score               = 0;         // [letter_rain] last_score
   int  lr_paddle_size              = 6;         // [letter_rain] paddle_size  (chars, 3-10)
   int  lr_max_entities             = 5;         // [letter_rain] max_entities (3 or 5)
-  int  lr_fall_speed_ms            = 500;       // [letter_rain] fall_speed_ms
-  int  lr_fall_speed_min_ms        = 200;       // [letter_rain] fall_speed_min_ms
+  int  lr_fall_speed_ms            = 850;       // [letter_rain] fall_speed_ms
+  int  lr_fall_speed_min_ms        = 600;       // [letter_rain] fall_speed_min_ms
   int  lr_fall_speed_change_ms     = 10;        // [letter_rain] fall_speed_change_ms
-  int  lr_paddle_speed_ms          = 250;       // [letter_rain] paddle_speed_ms
-  int  lr_paddle_speed_min_ms      = 100;       // [letter_rain] paddle_speed_min_ms
+  int  lr_paddle_speed_ms          = 150;       // [letter_rain] paddle_speed_ms
+  int  lr_paddle_speed_min_ms      = 50;       // [letter_rain] paddle_speed_min_ms
   int  lr_paddle_speed_change_ms   = 5;         // [letter_rain] paddle_speed_change_ms
   // [birthdays] dates — up to 8 entries in DD-MM-YYYY format.
   // Only day & month are compared; the year is kept as reference in the file.
@@ -4871,7 +4871,7 @@ static void lr_render()
   lv_label_set_text_fmt(lr_last_lbl,  "Last: %d",  cfg.lr_last_score);
   // Centre label: ✓ on win, capital target letter otherwise
   if (lr_won) {
-    lv_label_set_text(lr_target_lbl, LV_SYMBOL_OK);
+    lv_label_set_text(lr_target_lbl, "OK!");
   } else {
     char tbuf[4];
     tbuf[0] = (char)('A' + lr_target_idx);

@@ -82,7 +82,7 @@ struct AppConfig {
   int  lr_paddle_speed_ms          = 150;       // [letter_rain] paddle_speed_ms
   int  lr_paddle_speed_min_ms      = 50;       // [letter_rain] paddle_speed_min_ms
   int  lr_paddle_speed_change_ms   = 5;         // [letter_rain] paddle_speed_change_ms
-  int  sn_high_score               = 30;        // [snake] high_score
+  int  sn_high_score               = 0;        // [snake] high_score
   int  sn_snake_size               = 3;         // [snake] snake_size (min body length)
   int  sn_speed_ms                 = 800;       // [snake] snake_speed_ms
   int  sn_speed_min_ms             = 300;       // [snake] snake_speed_min_ms
@@ -5663,10 +5663,8 @@ static void sn_render()
 
   // Status bar
   lv_label_set_text_fmt(sn_score_lbl, "Score: %d", sn_score);
-  if (!sn_won) {
-    char tbuf[4]; snprintf(tbuf, sizeof(tbuf), "%c", sn_target_ch);
-    lv_label_set_text(sn_target_lbl, tbuf);
-  }
+  char tbuf[4]; snprintf(tbuf, sizeof(tbuf), "%c", sn_target_ch);
+  lv_label_set_text(sn_target_lbl, tbuf);
   lv_label_set_text_fmt(sn_hi_lbl, "Best: %d", cfg.sn_high_score);
 }
 
@@ -5960,22 +5958,38 @@ static void sn_end_game()
   ledcWrite(BUZZER_PIN, 0);
 
   // Final high-score check — handles scoring that continued after the
-  // initial win trigger
+  // initial win trigger; also ensures sn_won is set so the popup is correct
   if (sn_score > cfg.sn_high_score) {
     sn_beat_high      = true;
+    sn_won            = true;   // may not have been set if only beaten here
     cfg.sn_high_score = sn_score;
     save_config();
   }
 
   sn_render();  // paint final snake position before popup appears
 
-  // Capture win flag for the lambda (static so it outlives this stack frame)
+  // Stamp the status bar with "Excellent!" after the final render
+  // (must come after sn_render() which unconditionally writes the target char)
+  if (sn_won && sn_target_lbl)
+    lv_label_set_text(sn_target_lbl, "Excellent!");
+
+  // Capture flags for the deferred lambda (statics outlive this stack frame)
   static bool s_sn_won;
-  s_sn_won = sn_won;
+  static bool s_sn_beat_high;
+  static bool s_sn_completed_alpha;   // true once 'z' or 'Z' has been eaten
+  s_sn_won             = sn_won;
+  s_sn_beat_high       = sn_beat_high;
+  s_sn_completed_alpha = (sn_seq_idx >= 26);  // seq crosses 26 on eating 'z'
 
   lv_timer_t *et = lv_timer_create([](lv_timer_t *t) {
     lv_timer_del(t);
-    if (!s_sn_won) sn_play_failure();
+    if (s_sn_beat_high) {
+      sn_play_success();          // winning tune for new high score
+    } else if (s_sn_completed_alpha) {
+      sn_play_success();          // winning tune for completing alphabet
+    } else {
+      sn_play_failure();
+    }
     sn_show_popup(s_sn_won);
   }, 500, nullptr);
   lv_timer_set_repeat_count(et, 1);
@@ -6080,9 +6094,6 @@ static void sn_move_tick_cb(lv_timer_t * /*t*/)
         cfg.sn_high_score = sn_score;
         save_config();
       }
-      // Lock the target-label to show ✓ ("\xe2\x9c\x93"); sn_render() won't overwrite it
-      if (sn_target_lbl)
-        lv_label_set_text(sn_target_lbl, "Excellent!");
       sn_play_success();     // async win tune — no separate beep
     } else {
       sn_beep();             // normal catch beep

@@ -45,6 +45,7 @@ A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47
 | **Rolling Dice** | Animated rolling frames → final dice face reveal. Shake or hard-tilt to re-roll |
 | **Flip a Coin** | Instant flip with ASCII coin art (heads/tails) |
 | **Tennis Letters** | Breakout-style ASCII game. Catch cycling letters (a-z) with a tilt-controlled paddle. Score points and complete alphabets |
+| **Letters Rain** | Falling-letters ASCII game. Letters and modifiers rain in waves; catch the target letter (A→Z) with a gyro-controlled paddle. Wrong catches shrink the paddle; `+` / `-` modify its size; `*` restores the default. Miss the target letter and the game ends. Last score saved to `config.ini` |
 | **Gyro shake/tilt trigger** | While playing RPS or Dice, physically shaking the device (ΔaccelZ > 1.8 g) or tilting it hard sideways (accelY > 1.0 g) restarts the game — no tap needed |
 | **Metronome** | Full-screen BPM metronome (60–240 BPM) with hardware-timer accuracy, visual beat dots, time-signature selector (2/4, 3/4, 4/4), and distinct hi/lo tones for downbeat vs weak beats |
 | **Apps sounds** | Melody on correct math answer, failure tune on wrong; beeps during animations; toggleable. Metronome always sounds regardless of this toggle |
@@ -553,6 +554,21 @@ A Breakout-style ASCII game where the ball is a cycling letter (a→z).
 - **Controls:** Tilt left/right to move; tap the game-over popup to restart, long-press to exit.
 - **Configuration:** The `config.ini` file includes various configurable variables to increase the challenge.
 
+#### Letters Rain
+
+An ASCII falling-letters game. Letters and modifiers descend in separate waves — a letter wave (target + decoys) enters first, followed by a modifier wave ( `+` / `-` / `*` ) 3–5 rows behind.
+
+- Use the device's **Y-axis tilt** to move the paddle (`___`) and catch the ball.
+- Catch the **target letter** (shown capitalised in the status bar, A→Z) to score. The remaining decoys clear and a fresh letter wave spawns immediately.
+- Catching a **wrong letter** shrinks the paddle by 1.
+- Catching `+` enlarges the paddle (max 10); `-` shrinks it (min 3).
+- Catching `*` (rare — approx every 20 waves) instantly restores the paddle to its configured default size.
+- If the **target letter falls** through without being caught, the game ends and the last score is saved.
+- Catch all 26 letters to win. The status bar shows ✓ on completion.
+
+Each successive target spawns within 5–15 columns of the previous one, keeping the action in a natural zone. Speed increases with every correct catch. Last score is persisted to `config.ini`.
+
+
 #### Sounds toggle
 
 The sixth carousel item. Tap to mute/unmute all apps menu and game audio. The setting is saved to `config.ini` under `[menu] sounds`. This does **not** affect alarm, timer, or metronome sounds.
@@ -856,7 +872,8 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v2.1.0 | ✅ released | Metronome app (60–240 BPM, hardware-timer accuracy, 2/4 3/4 4/4, beat dots); gyro shake/tilt trigger for RPS & Dice |
 | v2.2.0 | ✅ released | Birthday Easter egg: `[birthdays]` in config.ini, Happy Birthday melody, `happybirthday.gif` for alarm & timer. Fixed Read/Write config.ini |
 | v2.3.0 | ✅ released | PIN-protected web configuration UI — edit config, set RTC, reboot; WPA2 AP with boot-generated PIN |
-| v2.4.0 | 🚀 new | Introducing Tennis Letters game: Breakout-style ASCII game with tilt-controlled paddle and alphabet cycling |
+| v2.4.0 | ✅ released | Tennis Letters game: Breakout-style ASCII game with tilt-controlled paddle and alphabet cycling |
+| v2.5.0 | 🚀 new | Letters Rain game: letters and modifiers fall in waves; catch the target letter (A→Z) with a gyro paddle while dodging wrong letters |
 
 ## License
 

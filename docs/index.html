@@ -95,7 +95,7 @@
                         <tr><td><strong>AP hotspot</strong></td><td>WPA2 fallback AP (<code>ESP32-Clock</code>) with boot-generated PIN shown on the device screen — physical access required</td></tr>
                         <tr><td><strong>Battery monitor</strong></td><td>Live percentage, voltage, ADC raw — with LiPo discharge curve</td></tr>
                         <tr><td><strong>Low-power gate</strong></td><td>Refuses to boot if battery ≤ 10%, shows empty battery icon and deep sleeps.</td></tr>
-                        <tr><td><strong>Apps menu</strong></td><td>Math challenge gate, Rock Paper Scissors, Rolling Dice, Coin Flip, Tennis Letters, Metronome</td></tr>
+                        <tr><td><strong>Apps menu</strong></td><td>Math challenge gate, Rock Paper Scissors, Rolling Dice, Coin Flip, Metronome, Tennis Letters, Letters Rain</td></tr>
                         <tr><td><strong>Metronome</strong></td><td>60–240 BPM with hardware-timer accuracy, beat dot indicators, 2/4 3/4 4/4 time signatures, distinct hi/lo tones</td></tr>
                         <tr><td><strong>Gyro shake/tilt</strong></td><td>Physically shaking or hard-tilting the device restarts RPS or Dice — no tap needed</td></tr>
                         <tr><td><strong>SD card config</strong></td><td>All settings in <code>/config.ini</code> — no recompile needed</td></tr>
@@ -207,6 +207,18 @@
             <h3>🎾 Tennis Letters</h3>
             <p>A Breakout-style ASCII game where the ball is a cycling letter (a-z). Use the device's <strong>Y-axis tilt</strong> to move the paddle and catch the ball. Each catch increments the score and advances the letter. Completing a full alphabet plays a success tune. High scores are persisted to <code class="code-inline">config.ini</code>, along with numerous configurable variables to make the game more challenging.</p>
 
+            <h3>🌧 Letters Rain</h3>
+            <p>An ASCII falling-letters game. Letters and modifiers descend in separate waves — a letter wave (target + decoys) enters first, followed by a modifier wave (<code>+</code> / <code>-</code> / <code>*</code>) 3–5 rows behind. Use the device's <strong>Y-axis tilt</strong> to move the paddle:</p>
+            <ul>
+                <li>Catch the <strong>target letter</strong> (shown capitalised in the status bar, A→Z) to score. The remaining decoys clear and a fresh letter wave spawns immediately.</li>
+                <li>Catching a <strong>wrong letter</strong> shrinks the paddle by 1.</li>
+                <li>Catching <strong><code>+</code></strong> enlarges the paddle (max 10); <strong><code>-</code></strong> shrinks it (min 3).</li>
+                <li>Catching <strong><code>*</code></strong> (rare — approx every 20 waves) instantly restores the paddle to its configured default size.</li>
+                <li>If the <strong>target letter falls through</strong> without being caught, the game ends and the last score is saved.</li>
+                <li>Catch all 26 letters to win. The status bar shows <strong>✓</strong> on completion.</li>
+            </ul>
+            <p>Each successive target spawns within 5–15 columns of the previous one, keeping the action in a natural zone. Speed increases with every correct catch. Last score is persisted to <code class="code-inline">config.ini</code>.</p>
+
             <h3>Config.ini Reference</h3>
 <pre><code>[wifi]
 enabled = true
@@ -316,7 +328,8 @@ duration = 10
                         <tr><td>v2.1.0</td><td>✅ released</td><td>Metronome app (60–240 BPM, hardware-timer accuracy, 2/4 3/4 4/4, beat dots); gyro shake/tilt trigger for RPS &amp; Dice.</td></tr>
                         <tr><td>v2.2.0</td><td>✅ released</td><td>Birthday Easter egg: <code>[birthdays]</code> in config.ini, Happy Birthday melody, happybirthday.gif for alarm &amp; timer.</td></tr>
                         <tr><td>v2.3.0</td><td>✅ released</td><td>PIN-protected web configuration UI — edit config, set RTC, reboot; WPA2 AP with boot-generated PIN.</td></tr>
-                        <tr><td>v2.4.0</td><td>🚀 new</td><td>Introducing Tennis Letters game: Breakout-style ASCII game with tilt-controlled paddle and alphabet cycling.</td></tr>
+                        <tr><td>v2.4.0</td><td>✅ released</td><td>Tennis Letters game: Breakout-style ASCII game with tilt-controlled paddle and alphabet cycling.</td></tr>
+                        <tr><td>v2.5.0</td><td>🚀 new</td><td>Letters Rain game: letters and modifiers fall in waves; catch the target letter (A→Z) with a gyro paddle while dodging wrong letters.</td></tr>
                     </tbody>
                 </table>
             </div>

@@ -80,7 +80,7 @@ struct AppConfig {
   int  lr_fall_speed_min_ms        = 600;       // [letter_rain] fall_speed_min_ms
   int  lr_fall_speed_change_ms     = 10;        // [letter_rain] fall_speed_change_ms
   int  lr_paddle_speed_ms          = 150;       // [letter_rain] paddle_speed_ms
-  int  lr_paddle_speed_min_ms      = 50;       // [letter_rain] paddle_speed_min_ms
+  int  lr_paddle_speed_min_ms      = 50;        // [letter_rain] paddle_speed_min_ms
   int  lr_paddle_speed_change_ms   = 5;         // [letter_rain] paddle_speed_change_ms
   // [birthdays] dates — up to 8 entries in DD-MM-YYYY format.
   // Only day & month are compared; the year is kept as reference in the file.

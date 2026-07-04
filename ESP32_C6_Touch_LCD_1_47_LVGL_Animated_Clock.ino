@@ -73,6 +73,15 @@ struct AppConfig {
   int  tennis_paddle_speed_ms        = 250;     // [tennis] paddle_speed_ms
   int  tennis_paddle_speed_min_ms    = 100;     // [tennis] paddle_speed_min_ms
   int  tennis_paddle_speed_change_ms = 5;       // [tennis] paddle_speed_change_ms
+  int  lr_last_score               = 0;         // [letter_rain] last_score
+  int  lr_paddle_size              = 6;         // [letter_rain] paddle_size  (chars, 3-10)
+  int  lr_max_entities             = 5;         // [letter_rain] max_entities (3 or 5)
+  int  lr_fall_speed_ms            = 850;       // [letter_rain] fall_speed_ms
+  int  lr_fall_speed_min_ms        = 600;       // [letter_rain] fall_speed_min_ms
+  int  lr_fall_speed_change_ms     = 10;        // [letter_rain] fall_speed_change_ms
+  int  lr_paddle_speed_ms          = 150;       // [letter_rain] paddle_speed_ms
+  int  lr_paddle_speed_min_ms      = 50;        // [letter_rain] paddle_speed_min_ms
+  int  lr_paddle_speed_change_ms   = 5;         // [letter_rain] paddle_speed_change_ms
   // [birthdays] dates — up to 8 entries in DD-MM-YYYY format.
   // Only day & month are compared; the year is kept as reference in the file.
   // Default: empty (no birthday greetings).
@@ -664,6 +673,52 @@ static void load_config()
       }
     }
 
+    // ── [letter_rain] ────────────────────────────────────────────────────────
+    else if (strcmp(section, "letter_rain") == 0) {
+      if (strcmp(key, "last_score") == 0) {
+        cfg.lr_last_score = atoi(val);
+        Serial.printf("[CFG]   letter_rain.last_score       = %d\n", cfg.lr_last_score);
+      }
+      else if (strcmp(key, "paddle_size") == 0) {
+        cfg.lr_paddle_size = atoi(val);
+        if (cfg.lr_paddle_size < 3)  cfg.lr_paddle_size = 3;
+        if (cfg.lr_paddle_size > 10) cfg.lr_paddle_size = 10;
+        Serial.printf("[CFG]   letter_rain.paddle_size      = %d\n", cfg.lr_paddle_size);
+      }
+      else if (strcmp(key, "max_entities") == 0) {
+        cfg.lr_max_entities = atoi(val);
+        if (cfg.lr_max_entities < 3) cfg.lr_max_entities = 3;
+        if (cfg.lr_max_entities > 5) cfg.lr_max_entities = 5;
+        Serial.printf("[CFG]   letter_rain.max_entities     = %d\n", cfg.lr_max_entities);
+      }
+      else if (strcmp(key, "fall_speed_ms") == 0) {
+        cfg.lr_fall_speed_ms = atoi(val);
+        if (cfg.lr_fall_speed_ms < 1)    cfg.lr_fall_speed_ms = 1;
+        if (cfg.lr_fall_speed_ms > 2000) cfg.lr_fall_speed_ms = 2000;
+        Serial.printf("[CFG]   letter_rain.fall_speed_ms    = %d\n", cfg.lr_fall_speed_ms);
+      }
+      else if (strcmp(key, "fall_speed_min_ms") == 0) {
+        cfg.lr_fall_speed_min_ms = max(1, atoi(val));
+        cfg.lr_fall_speed_min_ms = min(cfg.lr_fall_speed_min_ms, cfg.lr_fall_speed_ms);
+      }
+      else if (strcmp(key, "fall_speed_change_ms") == 0) {
+        cfg.lr_fall_speed_change_ms = max(0, atoi(val));
+      }
+      else if (strcmp(key, "paddle_speed_ms") == 0) {
+        cfg.lr_paddle_speed_ms = atoi(val);
+        if (cfg.lr_paddle_speed_ms < 1)    cfg.lr_paddle_speed_ms = 1;
+        if (cfg.lr_paddle_speed_ms > 2000) cfg.lr_paddle_speed_ms = 2000;
+        Serial.printf("[CFG]   letter_rain.paddle_speed_ms  = %d\n", cfg.lr_paddle_speed_ms);
+      }
+      else if (strcmp(key, "paddle_speed_min_ms") == 0) {
+        cfg.lr_paddle_speed_min_ms = max(1, atoi(val));
+        cfg.lr_paddle_speed_min_ms = min(cfg.lr_paddle_speed_min_ms, cfg.lr_paddle_speed_ms);
+      }
+      else if (strcmp(key, "paddle_speed_change_ms") == 0) {
+        cfg.lr_paddle_speed_change_ms = max(0, atoi(val));
+      }
+    }
+
     // ── [birthdays] ──────────────────────────────────────────────────────────
     // dates = DD-MM-YYYY,DD-MM-YYYY,...   (up to 8 entries)
     // Only the day and month are used for comparison; the year is stored for
@@ -821,11 +876,12 @@ static void save_config()
       while (*trimmed == ' ' || *trimmed == '\t') trimmed++;
 
       // Entering a managed section — skip until the next unknown section
-      if (strncmp(trimmed,"[wifi]",   6)==0 ||
-          strncmp(trimmed,"[alarm]",  7)==0 ||
-          strncmp(trimmed,"[timer]",  7)==0 ||
-          strncmp(trimmed,"[menu]",   6)==0 ||
-          strncmp(trimmed,"[tennis]", 8)==0) { inManaged=true;  continue; }
+      if (strncmp(trimmed,"[wifi]",        6)==0 ||
+          strncmp(trimmed,"[alarm]",       7)==0 ||
+          strncmp(trimmed,"[timer]",       7)==0 ||
+          strncmp(trimmed,"[menu]",        6)==0 ||
+          strncmp(trimmed,"[tennis]",      8)==0 ||
+          strncmp(trimmed,"[letter_rain]",13)==0) { inManaged=true;  continue; }
       if (*trimmed == '[')                    { inManaged=false; }
       if (inManaged)                            continue;
 
@@ -877,9 +933,20 @@ static void save_config()
   fw.printf("paddle_speed_min_ms = %d\n",    cfg.tennis_paddle_speed_min_ms);
   fw.printf("paddle_speed_change_ms = %d\n", cfg.tennis_paddle_speed_change_ms);
 
+  fw.print("\n[letter_rain]\n");
+  fw.printf("last_score = %d\n",            cfg.lr_last_score);
+  fw.printf("paddle_size = %d\n",           cfg.lr_paddle_size);
+  fw.printf("max_entities = %d\n",          cfg.lr_max_entities);
+  fw.printf("fall_speed_ms = %d\n",         cfg.lr_fall_speed_ms);
+  fw.printf("fall_speed_min_ms = %d\n",     cfg.lr_fall_speed_min_ms);
+  fw.printf("fall_speed_change_ms = %d\n",  cfg.lr_fall_speed_change_ms);
+  fw.printf("paddle_speed_ms = %d\n",       cfg.lr_paddle_speed_ms);
+  fw.printf("paddle_speed_min_ms = %d\n",   cfg.lr_paddle_speed_min_ms);
+  fw.printf("paddle_speed_change_ms = %d\n",cfg.lr_paddle_speed_change_ms);
+
   fw.close();
 
-  Serial.println("[CFG] Saved wifi/alarm/timer/menu/tennis.");
+  Serial.println("[CFG] Saved wifi/alarm/timer/menu/tennis/letter_rain.");
   
   // Save the current timestamp to the log file as well
   log_last_seen();
@@ -933,6 +1000,56 @@ static void seed_tennis_config()
   fa.printf("paddle_speed_change_ms = %d\n", cfg.tennis_paddle_speed_change_ms);
   fa.close();
   Serial.println("[CFG] [tennis] section seeded into config.ini.");
+}
+
+// ── Ensure [letter_rain] section exists in config.ini ────────────────────────
+// Called once at boot after load_config(). If the section is absent (fresh SD
+// card or first flash), it appends the block with current cfg defaults so the
+// web UI always shows all letter_rain settings from the very first power-on.
+static void seed_letter_rain_config()
+{
+  if (!sdCardAvailable) return;
+
+  File fr = SD.open("/config.ini", FILE_READ);
+  if (!fr) return;  // no file at all — save_config() will create it later
+  bool found = false;
+  char line[64];
+  while (fr.available() && !found) {
+    int len = 0;
+    while (fr.available() && len < (int)sizeof(line) - 1) {
+      char ch = fr.read();
+      if (ch == '\n') break;
+      if (ch == '\r') continue;  // strip CR
+      line[len++] = ch;
+    }
+    line[len] = '\0';
+    char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, "[letter_rain]", 13) == 0) { found = true; }
+  }
+  fr.close();
+
+  if (found) {
+    Serial.println("[CFG] [letter_rain] section already present.");
+    return;
+  }
+
+  // Append the section with current (default) values
+  File fa = SD.open("/config.ini", FILE_APPEND);
+  if (!fa) { Serial.println("[CFG] seed_letter_rain_config: cannot open for append"); return; }
+  fa.println();
+  fa.println("[letter_rain]");
+  fa.printf("last_score = %d\n",            cfg.lr_last_score);
+  fa.printf("paddle_size = %d\n",           cfg.lr_paddle_size);
+  fa.printf("max_entities = %d\n",          cfg.lr_max_entities);
+  fa.printf("fall_speed_ms = %d\n",         cfg.lr_fall_speed_ms);
+  fa.printf("fall_speed_min_ms = %d\n",     cfg.lr_fall_speed_min_ms);
+  fa.printf("fall_speed_change_ms = %d\n",  cfg.lr_fall_speed_change_ms);
+  fa.printf("paddle_speed_ms = %d\n",       cfg.lr_paddle_speed_ms);
+  fa.printf("paddle_speed_min_ms = %d\n",   cfg.lr_paddle_speed_min_ms);
+  fa.printf("paddle_speed_change_ms = %d\n",cfg.lr_paddle_speed_change_ms);
+  fa.close();
+  Serial.println("[CFG] [letter_rain] section seeded into config.ini.");
 }
 
 // ── Generate a random 6-digit PIN at boot ─────────────────────────────────────
@@ -3156,6 +3273,8 @@ static void apps_carousel_build(void);
 static void app_screen_start(void);
 static void app_screen_result(int data);
 static void app_anim_stop(void);
+static void lr_game_start(void);
+static void lr_stop(void);
 
 // ── Math problem generator ────────────────────────────────────────────────────
 static void math_generate(char *buf, int blen, int opts[4])
@@ -3306,6 +3425,7 @@ static void apps_close()
   app_gyro_stop();
   metro_stop();
   tl_stop();
+  lr_stop();
   if (apps_cont) { lv_obj_del(apps_cont); apps_cont = nullptr; }
   app_subphase = 0;
 }
@@ -3319,6 +3439,7 @@ static void apps_longpress_cb(lv_event_t *e)
     app_anim_stop();
     app_gyro_stop();
     tl_stop();
+    lr_stop();
     app_subphase = 0;
     apps_carousel_build();
   } else {
@@ -3327,9 +3448,9 @@ static void apps_longpress_cb(lv_event_t *e)
 }
 
 static void apps_left_cb(lv_event_t *e)
-{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+5)%6;apps_carousel_build();} }
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+6)%7;apps_carousel_build();} }
 static void apps_right_cb(lv_event_t *e)
-{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+1)%6;apps_carousel_build();} }
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+1)%7;apps_carousel_build();} }
 
 // Transparent full-screen tap zone helper for game screens
 static lv_obj_t *app_tapzone(lv_obj_t *p, lv_event_cb_t cb)
@@ -4623,6 +4744,631 @@ static void tl_stop()
 //  END TENNIS LETTERS
 // ══════════════════════════════════════════════════════════════════════════════
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  LETTERS RAIN  (apps_idx == 5)
+//
+//  Letters fall in fixed columns. The player uses the gyro paddle to catch
+//  the target letter (A→Z) displayed in the status bar. Wrong letters shrink
+//  the paddle (−1). + enlarges, − shrinks, * restores default paddle size.
+//  Missing the target letter ends the game. Catching all 26 wins.
+//
+//  Screen layout identical to Tennis Letters:
+//    Game field: 40 cols × 9 rows (dejavu_mono_14, 8×16px per cell)
+//    Status bar: "Score: X   Z   Last: Y" below the field
+//
+//  Entity types that fall:
+//    'a'-'z'  : letters (lowercase)
+//    '+'      : paddle size +1 (clamped at LR_PADDLE_MAX)
+//    '-'      : paddle size -1 (clamped at LR_PADDLE_MIN)
+//    '*'      : restore paddle to cfg.lr_paddle_size (rare, ~1 per 20)
+//
+//  Spawn rules:
+//    · Letter wave:   target + decoys all enter on row 1 simultaneously
+//    · Modifier wave: +, -, (and occasionally *) enter on row 1, spawned
+//                     3–5 fall-ticks AFTER the letter wave (random delay)
+//    · Target column stays within 5–15 cols of the previous target
+//    · No duplicate letters within one wave
+//    · '*' appears in the modifier wave approx every 20 waves
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+#define LR_COLS          40      // same grid as Tennis Letters
+#define LR_ROWS           9      // 8 fall rows + 1 paddle row
+#define LR_GYRO_THRESH   0.25f
+#define LR_PADDLE_MIN     3
+#define LR_PADDLE_MAX    10
+#define LR_MAX_ENTITIES   7      // array headroom (max_entities is 3 or 5 from config)
+
+// ── Entity arrays (parallel, index 0..LR_MAX_ENTITIES-1) ─────────────────────
+// Using flat int/char/bool arrays instead of a struct to avoid Arduino IDE
+// auto-prototype issues (same technique used elsewhere in this file).
+static int   lr_ent_col   [LR_MAX_ENTITIES];  // column (1..LR_COLS-2)
+static int   lr_ent_row   [LR_MAX_ENTITIES];  // row (0 = just entered, LR_ROWS-1 = paddle)
+static char  lr_ent_ch    [LR_MAX_ENTITIES];  // character being displayed
+static bool  lr_ent_active[LR_MAX_ENTITIES];  // slot in use?
+
+// ── Game state ────────────────────────────────────────────────────────────────
+static int   lr_paddle_x          = 0;   // left edge column of paddle
+static int   lr_paddle_cur_size   = 0;   // current paddle width
+static int   lr_score             = 0;   // letters caught (0–26)
+static int   lr_target_idx        = 0;   // 0='a'..25='z'
+static bool  lr_running           = false;
+static bool  lr_won               = false; // true after catching Z — lr_render shows ✓
+static bool  lr_target_on_screen  = false; // target letter currently active
+
+// Wave model:
+//   Letters (including target + decoys) always occupy row 1 together.
+//   Modifiers (+/-/*) ride a separate row that enters 3–5 rows BEHIND the letters.
+//   lr_mod_delay_ticks counts down fall ticks before spawning the modifier row.
+static int   lr_mod_delay_ticks   = 0;   // ticks remaining before modifier row spawns
+static int   lr_last_target_col   = -1;  // column of most recently spawned target letter
+static int   lr_since_star        = 0;   // non-star waves since last '*'
+
+static lv_timer_t *lr_fall_timer  = nullptr;
+static lv_timer_t *lr_gyro_timer  = nullptr;
+static lv_obj_t   *lr_field_lbl   = nullptr;  // main ASCII art label
+static lv_obj_t   *lr_score_lbl   = nullptr;  // status bar left  "Score: X"
+static lv_obj_t   *lr_target_lbl  = nullptr;  // status bar centre target letter / ✓
+static lv_obj_t   *lr_last_lbl    = nullptr;  // status bar right "Last: Y"
+
+static int   lr_fall_speed_ms     = 0;   // current fall timer period
+static int   lr_paddle_speed_ms   = 0;   // current gyro timer period
+
+// ── Forward declarations (popup callbacks reference lr_game_start / lr_stop) ──
+static void lr_show_popup(bool won);
+static void lr_popup_tap_cb(lv_event_t *e);
+static void lr_popup_longpress_cb(lv_event_t *e);
+
+// ── Stop all Letters Rain timers ─────────────────────────────────────────────
+static void lr_stop_timers()
+{
+  if (lr_fall_timer) { lv_timer_del(lr_fall_timer); lr_fall_timer = nullptr; }
+  if (lr_gyro_timer) { lv_timer_del(lr_gyro_timer); lr_gyro_timer = nullptr; }
+}
+
+// ── Render the game field ─────────────────────────────────────────────────────
+static void lr_render()
+{
+  if (!lr_field_lbl || !lr_score_lbl || !lr_target_lbl || !lr_last_lbl) return;
+
+  // Build LR_ROWS × LR_COLS character grid (same layout as Tennis Letters)
+  static char grid[(LR_ROWS) * (LR_COLS + 1) + 2];
+  int pos = 0;
+
+  for (int row = 0; row < LR_ROWS; row++) {
+    for (int col = 0; col < LR_COLS; col++) {
+      char ch = ' ';
+
+      if (row == 0) {
+        // Top wall
+        ch = '-';
+      } else if (row == LR_ROWS - 1) {
+        // Paddle row
+        int rel = col - lr_paddle_x;
+        if (rel >= 0 && rel < lr_paddle_cur_size) ch = '=';
+      } else {
+        // Play area: side walls + active entities
+        if (col == 0 || col == LR_COLS - 1) {
+          ch = '|';
+        } else {
+          for (int i = 0; i < LR_MAX_ENTITIES; i++) {
+            if (lr_ent_active[i] && lr_ent_col[i] == col && lr_ent_row[i] == row) {
+              ch = lr_ent_ch[i];
+              break;
+            }
+          }
+        }
+      }
+      grid[pos++] = ch;
+    }
+    if (row < LR_ROWS - 1) grid[pos++] = '\n';
+  }
+  grid[pos] = '\0';
+  lv_label_set_text(lr_field_lbl, grid);
+
+  // Status bar
+  lv_label_set_text_fmt(lr_score_lbl, "Score: %d", lr_score);
+  lv_label_set_text_fmt(lr_last_lbl,  "Last: %d",  cfg.lr_last_score);
+  // Centre label: ✓ on win, capital target letter otherwise
+  if (lr_won) {
+    lv_label_set_text(lr_target_lbl, "OK!");
+  } else {
+    char tbuf[4];
+    tbuf[0] = (char)('A' + lr_target_idx);
+    tbuf[1] = '\0';
+    lv_label_set_text(lr_target_lbl, tbuf);
+  }
+}
+
+// ── Spawn helpers ─────────────────────────────────────────────────────────────
+
+// Find a free entity slot, or -1.
+static int lr_free_slot()
+{
+  for (int i = 0; i < LR_MAX_ENTITIES; i++)
+    if (!lr_ent_active[i]) return i;
+  return -1;
+}
+
+// Pick a column that is (a) not already used by an active entity and
+// (b) within [near-range, near+range] cols of `near_col` if near_col >= 0,
+// otherwise anywhere in the field.  Returns -1 if no column is available.
+static int lr_pick_col(bool col_used[LR_COLS], int near_col, int range_lo, int range_hi)
+{
+  int cand[LR_COLS];
+  int ncand = 0;
+
+  for (int c = 1; c < LR_COLS - 1; c++) {
+    if (col_used[c]) continue;
+    if (near_col >= 0) {
+      int dist = abs(c - near_col);
+      if (dist < range_lo || dist > range_hi) continue;
+    }
+    cand[ncand++] = c;
+  }
+
+  // If proximity constraint produced nothing, fall back to any free column
+  if (ncand == 0 && near_col >= 0) {
+    for (int c = 1; c < LR_COLS - 1; c++) {
+      if (!col_used[c]) cand[ncand++] = c;
+    }
+  }
+
+  if (ncand == 0) return -1;
+  return cand[random(ncand)];
+}
+
+// Spawn the letter wave at row 1:
+//   - target letter (guaranteed, column within 5–15 of previous target)
+//   - (lr_max_entities - 1) decoy letters on different columns, same row
+// All letters spawn simultaneously at row 1.
+static void lr_spawn_letter_wave()
+{
+  // Build used-column map from any still-active entities (modifiers may still be falling)
+  bool col_used[LR_COLS] = {};
+  bool ch_used[128]      = {};
+  for (int i = 0; i < LR_MAX_ENTITIES; i++) {
+    if (!lr_ent_active[i]) continue;
+    col_used[(int)lr_ent_col[i]] = true;
+    ch_used[(uint8_t)lr_ent_ch[i]] = true;
+  }
+
+  // ── Place target letter first ─────────────────────────────────────────────
+  int tslot = lr_free_slot();
+  if (tslot < 0) return;
+
+  int tcol = lr_pick_col(col_used,
+                         lr_last_target_col,
+                         5,    // min distance from previous target col
+                         15);  // max distance from previous target col
+  if (tcol < 0) return;
+
+  lr_ent_col[tslot]    = tcol;
+  lr_ent_row[tslot]    = 1;
+  lr_ent_ch[tslot]     = (char)('a' + lr_target_idx);
+  lr_ent_active[tslot] = true;
+  col_used[tcol]       = true;
+  lr_last_target_col   = tcol;
+  lr_target_on_screen  = true;
+
+  // ── Place decoy letters ───────────────────────────────────────────────────
+  int n_decoys = min(cfg.lr_max_entities, LR_MAX_ENTITIES) - 1;
+  for (int d = 0; d < n_decoys; d++) {
+    int dslot = lr_free_slot();
+    if (dslot < 0) break;
+
+    // Pick a decoy letter not already on screen and not the target
+    char pool[26];
+    int  npool = 0;
+    for (int l = 0; l < 26; l++) {
+      if (l == lr_target_idx) continue;
+      char lc = (char)('a' + l);
+      if (ch_used[(uint8_t)lc]) continue;
+      pool[npool++] = lc;
+    }
+    if (npool == 0) break;
+    char pick = pool[random(npool)];
+
+    // Column: any free column, no proximity constraint for decoys
+    int dcol = lr_pick_col(col_used, -1, 0, 0);
+    if (dcol < 0) break;
+
+    lr_ent_col[dslot]    = dcol;
+    lr_ent_row[dslot]    = 1;
+    lr_ent_ch[dslot]     = pick;
+    lr_ent_active[dslot] = true;
+    col_used[dcol]       = true;
+    ch_used[(uint8_t)pick] = true;
+  }
+
+  // Schedule modifier wave 3–5 rows behind (i.e. after that many fall ticks)
+  lr_mod_delay_ticks = 3 + random(3);  // 3, 4, or 5
+}
+
+// Spawn the modifier wave at row 1:
+//   +, -, and optionally * — each on its own column, same row as each other.
+// Called when lr_mod_delay_ticks reaches 0.
+static void lr_spawn_modifier_wave()
+{
+  bool col_used[LR_COLS] = {};
+  bool ch_used[128]      = {};
+  for (int i = 0; i < LR_MAX_ENTITIES; i++) {
+    if (!lr_ent_active[i]) continue;
+    col_used[(int)lr_ent_col[i]] = true;
+    ch_used[(uint8_t)lr_ent_ch[i]] = true;
+  }
+
+  // Always try to spawn + and -
+  const char mods[] = {'+', '-'};
+  for (int m = 0; m < 2; m++) {
+    if (ch_used[(uint8_t)mods[m]]) continue;  // already on screen
+    int slot = lr_free_slot();
+    if (slot < 0) break;
+    int col = lr_pick_col(col_used, -1, 0, 0);
+    if (col < 0) break;
+    lr_ent_col[slot]    = col;
+    lr_ent_row[slot]    = 1;
+    lr_ent_ch[slot]     = mods[m];
+    lr_ent_active[slot] = true;
+    col_used[col]       = true;
+    ch_used[(uint8_t)mods[m]] = true;
+  }
+
+  // Spawn * every ~20 letter-wave cycles (lr_since_star tracks waves, not entities)
+  lr_since_star++;
+  if (lr_since_star >= 20 && !ch_used[(uint8_t)'*']) {
+    int slot = lr_free_slot();
+    int col  = lr_pick_col(col_used, -1, 0, 0);
+    if (slot >= 0 && col >= 0) {
+      lr_ent_col[slot]    = col;
+      lr_ent_row[slot]    = 1;
+      lr_ent_ch[slot]     = '*';
+      lr_ent_active[slot] = true;
+      col_used[col]       = true;
+      lr_since_star       = 0;
+    }
+  }
+
+  lr_mod_delay_ticks = -1;  // modifier wave done, nothing more to spawn this cycle
+}
+
+// ── Beep helpers (reuse Tennis async engine: tl_tune_notes / tl_tune_tick_cb) ─
+static void lr_play_success()
+{
+  if (!cfg.menu_sounds) return;
+  tl_tune_notes = SUCCESS_TUNE;
+  tl_tune_total = 12;
+  tl_tune_step  = 0;
+  lv_timer_t *t = lv_timer_create(tl_tune_tick_cb, 1, nullptr);
+  lv_timer_set_repeat_count(t, -1);
+}
+
+static void lr_play_failure()
+{
+  if (!cfg.menu_sounds) return;
+  tl_tune_notes = FAILURE_TUNE;
+  tl_tune_total = 2;
+  tl_tune_step  = 0;
+  lv_timer_t *t = lv_timer_create(tl_tune_tick_cb, 1, nullptr);
+  lv_timer_set_repeat_count(t, -1);
+}
+
+static void lr_beep()
+{
+  if (!cfg.menu_sounds) return;
+  ledcChangeFrequency(BUZZER_PIN, 600, 8);
+  ledcWrite(BUZZER_PIN, 80);
+  lv_timer_t *off = lv_timer_create([](lv_timer_t *t){
+    ledcWrite(BUZZER_PIN, 0);
+    ledcChangeFrequency(BUZZER_PIN, 2000, 8);
+    lv_timer_del(t);
+  }, 40, nullptr);
+  lv_timer_set_repeat_count(off, 1);
+}
+
+// ── Speed ramp (called on every correct catch, same model as Tennis) ──────────
+static void lr_ramp_speed()
+{
+  if (cfg.lr_fall_speed_change_ms > 0) {
+    lr_fall_speed_ms = max(cfg.lr_fall_speed_min_ms,
+                           lr_fall_speed_ms - cfg.lr_fall_speed_change_ms);
+    if (lr_fall_timer) lv_timer_set_period(lr_fall_timer, lr_fall_speed_ms);
+  }
+  if (cfg.lr_paddle_speed_change_ms > 0) {
+    lr_paddle_speed_ms = max(cfg.lr_paddle_speed_min_ms,
+                             lr_paddle_speed_ms - cfg.lr_paddle_speed_change_ms);
+    if (lr_gyro_timer) lv_timer_set_period(lr_gyro_timer, lr_paddle_speed_ms);
+  }
+}
+
+// ── Fall tick: move all entities down one row ─────────────────────────────────
+static void lr_fall_tick_cb(lv_timer_t * /*t*/)
+{
+  if (!lr_running || !apps_cont) return;
+
+  // ── Modifier wave delay countdown ─────────────────────────────────────────
+  if (lr_mod_delay_ticks > 0) {
+    lr_mod_delay_ticks--;
+    if (lr_mod_delay_ticks == 0) lr_spawn_modifier_wave();
+  }
+
+  // ── Move every active entity down one row ─────────────────────────────────
+  for (int i = 0; i < LR_MAX_ENTITIES; i++) {
+    if (!lr_ent_active[i]) continue;
+
+    lr_ent_row[i]++;
+
+    if (lr_ent_row[i] < LR_ROWS - 1) continue;  // still falling
+
+    // ── Entity reached paddle row ─────────────────────────────────────────
+    int  col     = lr_ent_col[i];
+    char ch      = lr_ent_ch[i];
+    bool caught  = (col >= lr_paddle_x && col < lr_paddle_x + lr_paddle_cur_size);
+    bool is_letter = (ch >= 'a' && ch <= 'z');
+    bool is_target = (ch == (char)('a' + lr_target_idx));
+
+    lr_ent_active[i] = false;  // despawn regardless
+
+    if (caught) {
+      if (is_target) {
+        // ── Correct letter caught ──────────────────────────────────────────
+        lr_target_on_screen = false;
+        lr_score++;
+        lv_label_set_text_fmt(lr_score_lbl, "Score: %d", lr_score);
+        lr_ramp_speed();
+        lr_beep();
+
+        if (lr_score >= 26) {
+          // ── Win ────────────────────────────────────────────────────────
+          lr_running = false;
+          lr_won     = true;
+          lr_stop_timers();
+          cfg.lr_last_score = lr_score;
+          save_config();
+          lr_render();
+          lv_timer_t *end_t = lv_timer_create([](lv_timer_t *t2){
+            lv_timer_del(t2);
+            lr_play_success();
+            lr_show_popup(true);
+          }, 500, nullptr);
+          lv_timer_set_repeat_count(end_t, 1);
+          return;
+        }
+
+        // Advance target, clear remaining letters, spawn new letter wave
+        lr_target_idx++;
+        if (lr_target_lbl) {
+          char tbuf[4];
+          tbuf[0] = (char)('A' + lr_target_idx);
+          tbuf[1] = '\0';
+          lv_label_set_text(lr_target_lbl, tbuf);
+        }
+        // Kill any remaining decoy letters (modifiers keep falling)
+        for (int j = 0; j < LR_MAX_ENTITIES; j++) {
+          if (lr_ent_active[j] && lr_ent_ch[j] >= 'a' && lr_ent_ch[j] <= 'z')
+            lr_ent_active[j] = false;
+        }
+        lr_spawn_letter_wave();
+
+      } else if (ch == '+') {
+        if (lr_paddle_cur_size < LR_PADDLE_MAX) lr_paddle_cur_size++;
+      } else if (ch == '-') {
+        if (lr_paddle_cur_size > LR_PADDLE_MIN) lr_paddle_cur_size--;
+      } else if (ch == '*') {
+        lr_paddle_cur_size = cfg.lr_paddle_size;
+      } else {
+        // Wrong letter caught → shrink paddle
+        if (lr_paddle_cur_size > LR_PADDLE_MIN) lr_paddle_cur_size--;
+      }
+
+    } else {
+      // ── Entity missed paddle ──────────────────────────────────────────────
+      if (is_target) {
+        // Target fell through → game over
+        lr_target_on_screen = false;
+        lr_running = false;
+        lr_stop_timers();
+        ledcWrite(BUZZER_PIN, 0);
+        cfg.lr_last_score = lr_score;
+        save_config();
+        lr_render();
+        lv_timer_t *end_t = lv_timer_create([](lv_timer_t *t2){
+          lv_timer_del(t2);
+          lr_play_failure();
+          lr_show_popup(false);
+        }, 500, nullptr);
+        lv_timer_set_repeat_count(end_t, 1);
+        return;
+      }
+      // Non-target exited silently — no respawn needed (wave model handles it)
+      if (is_letter) lr_target_on_screen = lr_target_on_screen;  // no-op, keep state
+    }
+  }
+
+  // ── Check if all letters have exited without the target being caught ──────
+  // If target was on screen but is no longer active and lr_target_on_screen
+  // is still true, it means it just fell through in this same tick (handled
+  // above). If letters wave is gone and target never appeared — shouldn't
+  // happen because lr_spawn_letter_wave() always places target. No action needed.
+
+  lr_render();
+}
+
+// ── Gyro paddle timer ─────────────────────────────────────────────────────────
+static void lr_gyro_tick_cb(lv_timer_t * /*t*/)
+{
+  if (!imuReady || !lr_running || !apps_cont) return;
+
+  imu.update();
+  imu.getAccel(&accelData);
+
+  float y = accelData.accelY;
+  if (y > LR_GYRO_THRESH) {
+    // Tilt right → paddle moves left
+    if (lr_paddle_x > 1)
+      lr_paddle_x--;
+  } else if (y < -LR_GYRO_THRESH) {
+    // Tilt left → paddle moves right
+    if (lr_paddle_x + lr_paddle_cur_size < LR_COLS - 1)
+      lr_paddle_x++;
+  }
+  lr_render();
+}
+
+// ── Popup ─────────────────────────────────────────────────────────────────────
+static void lr_show_popup(bool won)
+{
+  if (!apps_cont) return;
+
+  lv_obj_t *pop = lv_obj_create(apps_cont);
+  lv_obj_set_size(pop, 240, 110);
+  lv_obj_align(pop, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(pop, lv_color_make(10, 14, 34), 0);
+  lv_obj_set_style_bg_opa(pop, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(pop, lv_color_make(60, 120, 220), 0);
+  lv_obj_set_style_border_width(pop, 2, 0);
+  lv_obj_set_style_radius(pop, 8, 0);
+  lv_obj_set_style_pad_all(pop, 0, 0);
+  lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(pop, lr_popup_tap_cb,       LV_EVENT_CLICKED,      nullptr);
+  lv_obj_add_event_cb(pop, lr_popup_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+
+  lv_obj_t *title = lv_label_create(pop);
+  lv_label_set_text(title, won ? "You Win!" : "Game Over");
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(title,
+    won ? lv_color_make(255, 220, 60) : lv_color_make(200, 200, 220), 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
+
+  lv_obj_t *score_lbl = lv_label_create(pop);
+  char buf[32];
+  snprintf(buf, sizeof(buf), "%d letters", lr_score);
+  lv_label_set_text(score_lbl, buf);
+  lv_obj_set_style_text_font(score_lbl, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(score_lbl, lv_color_white(), 0);
+  lv_obj_align(score_lbl, LV_ALIGN_CENTER, 0, -8);
+
+  lv_obj_t *last_lbl2 = lv_label_create(pop);
+  snprintf(buf, sizeof(buf), "Last: %d", cfg.lr_last_score);
+  lv_label_set_text(last_lbl2, buf);
+  lv_obj_set_style_text_font(last_lbl2, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(last_lbl2, lv_color_make(160, 200, 255), 0);
+  lv_obj_align(last_lbl2, LV_ALIGN_CENTER, 0, 16);
+
+  lv_obj_t *hint = lv_label_create(pop);
+  lv_label_set_text(hint, "tap: play again  hold: exit");
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(hint, lv_color_make(80, 80, 120), 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
+}
+
+static void lr_popup_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  lr_game_start();
+}
+
+static void lr_popup_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  lv_indev_wait_release(lv_indev_get_act());
+  lr_running = false;
+  lr_stop_timers();
+  app_subphase = 0;
+  apps_carousel_build();
+}
+
+// ── Start / restart Letters Rain ──────────────────────────────────────────────
+static void lr_game_start()
+{
+  lr_stop_timers();
+  lr_running = false;
+
+  // Reset all entity slots
+  for (int i = 0; i < LR_MAX_ENTITIES; i++) lr_ent_active[i] = false;
+
+  // Reset game state
+  lr_score             = 0;
+  lr_target_idx        = 0;
+  lr_won               = false;
+  lr_paddle_cur_size   = cfg.lr_paddle_size;
+  lr_paddle_x          = (LR_COLS - lr_paddle_cur_size) / 2;
+  lr_target_on_screen  = false;
+  lr_mod_delay_ticks   = -1;
+  lr_last_target_col   = LR_COLS / 2;  // start near centre so first wave has room to spread
+  lr_since_star        = 0;
+
+  // Build game screen
+  lv_obj_clean(apps_cont);
+  app_subphase = 1;
+
+  // Field label — same font/metrics as Tennis Letters
+  lr_field_lbl = lv_label_create(apps_cont);
+  lv_obj_set_style_text_font(lr_field_lbl, &dejavu_mono_14, 0);
+  lv_obj_set_style_text_color(lr_field_lbl, lv_color_white(), 0);
+  lv_obj_set_style_text_align(lr_field_lbl, LV_TEXT_ALIGN_LEFT, 0);
+  lv_label_set_long_mode(lr_field_lbl, LV_LABEL_LONG_CLIP);
+  lv_obj_set_pos(lr_field_lbl, TL_FIELD_X, TL_FIELD_Y);
+  lv_obj_set_size(lr_field_lbl, 320, LR_ROWS * 16 + 4);
+
+  // Status bar: three labels — Score (left), Target letter (centre), Last (right)
+  int status_y = TL_FIELD_Y + LR_ROWS * 16 + 4;
+
+  lr_score_lbl = lv_label_create(apps_cont);
+  lv_obj_set_style_text_font(lr_score_lbl, &dejavu_mono_14, 0);
+  lv_obj_set_style_text_color(lr_score_lbl, lv_color_make(180, 180, 100), 0);
+  lv_obj_set_style_text_align(lr_score_lbl, LV_TEXT_ALIGN_LEFT, 0);
+  lv_obj_set_pos(lr_score_lbl, TL_FIELD_X + 2, status_y);
+  lv_obj_set_size(lr_score_lbl, 120, 16);
+
+  lr_target_lbl = lv_label_create(apps_cont);
+  lv_obj_set_style_text_font(lr_target_lbl, &dejavu_mono_14, 0);
+  lv_obj_set_style_text_color(lr_target_lbl, lv_color_make(100, 220, 255), 0);
+  lv_obj_set_style_text_align(lr_target_lbl, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_pos(lr_target_lbl, 120, status_y);
+  lv_obj_set_size(lr_target_lbl, 80, 16);
+
+  lr_last_lbl = lv_label_create(apps_cont);
+  lv_obj_set_style_text_font(lr_last_lbl, &dejavu_mono_14, 0);
+  lv_obj_set_style_text_color(lr_last_lbl, lv_color_make(180, 180, 100), 0);
+  lv_obj_set_style_text_align(lr_last_lbl, LV_TEXT_ALIGN_RIGHT, 0);
+  lv_obj_set_pos(lr_last_lbl, 200, status_y);
+  lv_obj_set_size(lr_last_lbl, 118, 16);
+
+  // Seed the first letter wave (target + decoys all on row 1)
+  // Modifier wave will follow automatically after lr_mod_delay_ticks fall ticks
+  lr_spawn_letter_wave();
+
+  lr_render();
+
+  // Start timers
+  lr_running         = true;
+  lr_fall_speed_ms   = cfg.lr_fall_speed_ms;
+  lr_paddle_speed_ms = cfg.lr_paddle_speed_ms;
+
+  lr_fall_timer = lv_timer_create(lr_fall_tick_cb, lr_fall_speed_ms, nullptr);
+  if (imuReady)
+    lr_gyro_timer = lv_timer_create(lr_gyro_tick_cb, lr_paddle_speed_ms, nullptr);
+}
+
+// ── Stop Letters Rain (called from apps_close / apps_longpress_cb) ────────────
+static void lr_stop()
+{
+  lr_running = false;
+  lr_stop_timers();
+  tl_tune_notes = nullptr;  // silence any shared tune playing
+  ledcWrite(BUZZER_PIN, 0);
+  ledcChangeFrequency(BUZZER_PIN, 2000, 8);
+  lr_field_lbl  = nullptr;
+  lr_score_lbl  = nullptr;
+  lr_target_lbl = nullptr;
+  lr_last_lbl   = nullptr;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  END LETTERS RAIN
+// ══════════════════════════════════════════════════════════════════════════════
+
 // ── App start tap: coin only (rps+dice use their own starters) ────────────────
 static void app_start_tap_cb(lv_event_t *e)
 {
@@ -4633,7 +5379,7 @@ static void app_start_tap_cb(lv_event_t *e)
 // ── Game start screen ─────────────────────────────────────────────────────────
 static void app_screen_start()
 {
-  if (apps_idx >= 6) return;
+  if (apps_idx >= 7) return;
   app_anim_stop();
 
   if (apps_idx == 3) {
@@ -4650,6 +5396,10 @@ static void app_screen_start()
   }
   if (apps_idx == 4) {
     tl_game_start();
+    return;
+  }
+  if (apps_idx == 5) {
+    lr_game_start();
     return;
   }
 
@@ -4677,7 +5427,7 @@ static void app_screen_start()
 static void apps_tap_enter_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-  if (apps_idx == 5) {
+  if (apps_idx == 6) {
     cfg.menu_sounds = !cfg.menu_sounds;
     save_config();
     if (cfg.menu_sounds) menu_tone_hi();  // confirm it's on
@@ -4694,13 +5444,14 @@ static void apps_carousel_build()
   lv_obj_clean(apps_cont);
   app_subphase = 0;
 
-  static const struct { const char *name; const char *desc; } items[6] = {
+  static const struct { const char *name; const char *desc; } items[7] = {
     {"Rock Paper Scissors", "An interactive ASCII Game"},
     {"Rolling Dice",        "An interactive ASCII Dice"},
     {"Flip a Coin",         "An interactive ASCII Coin"},
     {"Metronome",           "Tempo keeper for musicians"},
-    {nullptr,               nullptr},  // item 4 = Tennis Letters (rendered inline)
-    {nullptr,               nullptr},  // item 5 = Sounds toggle  (rendered inline)
+    {nullptr,               nullptr},  // item 4 = Tennis Letters  (rendered inline)
+    {nullptr,               nullptr},  // item 5 = Letters Rain    (rendered inline)
+    {nullptr,               nullptr},  // item 6 = Sounds toggle   (rendered inline)
   };
 
   // Left arrow + zone
@@ -4731,7 +5482,7 @@ static void apps_carousel_build()
     lv_obj_add_event_cb(z,apps_right_cb,LV_EVENT_PRESSED,nullptr);
     lv_obj_add_event_cb(z,apps_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr); }
 
-  if (apps_idx == 5) {
+  if (apps_idx == 6) {
     // ── Sounds toggle (inline, mirrors WiFi toggle in settings) ──────────
     lv_obj_t *sicon = lv_label_create(apps_cont);
     lv_label_set_text(sicon, cfg.menu_sounds ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE);
@@ -4745,6 +5496,32 @@ static void apps_carousel_build()
     lv_obj_set_style_text_color(sdesc,
       cfg.menu_sounds ? lv_color_make(80,200,120) : lv_color_make(180,60,60), 0);
     lv_obj_align(sdesc, LV_ALIGN_CENTER, 0, 28);
+  } else if (apps_idx == 5) {
+    // ── Letters Rain ──────────────────────────────────────────────────────
+    lv_obj_t *name_lbl = lv_label_create(apps_cont);
+    lv_label_set_text(name_lbl, "Letters Rain");
+    lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(name_lbl, lv_color_white(), 0);
+    lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(name_lbl, 180);
+    lv_obj_set_style_text_align(name_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(name_lbl, LV_ALIGN_CENTER, 0, -14);
+
+    lv_obj_t *desc_lbl = lv_label_create(apps_cont);
+    lv_label_set_text(desc_lbl, "Dodge wrong letters!");
+    lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
+    lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
+
+    if (cfg.lr_last_score > 0) {
+      lv_obj_t *ls_lbl = lv_label_create(apps_cont);
+      char ls_buf[32];
+      snprintf(ls_buf, sizeof(ls_buf), "Last: %d letters", cfg.lr_last_score);
+      lv_label_set_text(ls_lbl, ls_buf);
+      lv_obj_set_style_text_font(ls_lbl, &lv_font_montserrat_14, 0);
+      lv_obj_set_style_text_color(ls_lbl, lv_color_make(255, 210, 60), 0);
+      lv_obj_align(ls_lbl, LV_ALIGN_CENTER, 0, 44);
+    }
   } else if (apps_idx == 4) {
     // ── Tennis Letters ────────────────────────────────────────────────────
     lv_obj_t *name_lbl = lv_label_create(apps_cont);
@@ -4800,20 +5577,20 @@ static void apps_carousel_build()
 
   // Hint above dots
   lv_obj_t *hint = lv_label_create(apps_cont);
-  lv_label_set_text(hint, apps_idx == 5 ? "tap to toggle  .  hold to exit"
+  lv_label_set_text(hint, apps_idx == 6 ? "tap to toggle  .  hold to exit"
                                         : "tap to play  .  hold to exit");
   lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(hint, lv_color_make(70, 70, 95), 0);
   lv_obj_set_style_text_opa(hint, LV_OPA_60, 0);
   lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -18);
 
-  // 6 position dots
-  for (int i = 0; i < 6; i++) {
+  // 7 position dots
+  for (int i = 0; i < 7; i++) {
     lv_obj_t *dot = lv_label_create(apps_cont);
     lv_obj_set_style_text_font(dot, &dejavu_mono_14, 0);
     lv_label_set_text(dot, i==apps_idx ? "\xe2\x97\x8f" : "\xe2\x97\x8b");
     lv_obj_set_style_text_color(dot, i==apps_idx ? lv_color_white() : lv_color_make(80,80,100), 0);
-    lv_obj_set_pos(dot, 123 + i * 14, 156);
+    lv_obj_set_pos(dot, 116 + i * 14, 156);
   }
 }
 
@@ -5231,6 +6008,7 @@ void setup()
     // ── Load config.ini ──────────────────────────────────────────────────
     load_config();
     seed_tennis_config();  // append [tennis] section if not yet present
+    seed_letter_rain_config();  // append [letter_rain] section if not yet present
 
     // BUG FIX: Only restore time from log if NOT waking from a scheduled alarm
     if (!boot_from_sleep) {

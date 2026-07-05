@@ -89,6 +89,8 @@ struct AppConfig {
   int  sn_speed_change_ms          = 5;         // [snake] snake_speed_change_ms
   bool sn_vertical_walls           = true;      // [snake] vertical_walls
   bool sn_horizontal_walls         = true;      // [snake] horizontal_walls
+  int  sn_distractions             = 4;         // [snake] distractions (letters that kill on touch)
+  int  sn_next_level_score         = 26;        // [snake] next_level_score (score at which distractions appear)
   // [birthdays] dates — up to 8 entries in DD-MM-YYYY format.
   // Only day & month are compared; the year is kept as reference in the file.
   // Default: empty (no birthday greetings).
@@ -759,6 +761,14 @@ static void load_config()
         cfg.sn_horizontal_walls = (strcmp(val,"true")==0 || strcmp(val,"1")==0);
         Serial.printf("[CFG]   snake.horizontal_walls    = %s\n", cfg.sn_horizontal_walls?"true":"false");
       }
+      else if (strcmp(key, "distractions") == 0) {
+        cfg.sn_distractions = max(0, min(10, atoi(val)));
+        Serial.printf("[CFG]   snake.distractions        = %d\n", cfg.sn_distractions);
+      }
+      else if (strcmp(key, "next_level_score") == 0) {
+        cfg.sn_next_level_score = max(1, atoi(val));
+        Serial.printf("[CFG]   snake.next_level_score    = %d\n", cfg.sn_next_level_score);
+      }
     }
 
     // ── [birthdays] ──────────────────────────────────────────────────────────
@@ -995,6 +1005,8 @@ static void save_config()
   fw.printf("snake_speed_change_ms = %d\n",cfg.sn_speed_change_ms);
   fw.printf("vertical_walls = %s\n",       cfg.sn_vertical_walls   ? "true" : "false");
   fw.printf("horizontal_walls = %s\n",     cfg.sn_horizontal_walls ? "true" : "false");
+  fw.printf("distractions = %d\n",         cfg.sn_distractions);
+  fw.printf("next_level_score = %d\n",     cfg.sn_next_level_score);
 
   fw.close();
 
@@ -1148,6 +1160,8 @@ static void seed_snake_config()
   fa.printf("snake_speed_change_ms = %d\n",cfg.sn_speed_change_ms);
   fa.printf("vertical_walls = %s\n",       cfg.sn_vertical_walls   ? "true" : "false");
   fa.printf("horizontal_walls = %s\n",     cfg.sn_horizontal_walls ? "true" : "false");
+  fa.printf("distractions = %d\n",         cfg.sn_distractions);
+  fa.printf("next_level_score = %d\n",     cfg.sn_next_level_score);
   fa.close();
   Serial.println("[CFG] [snake] section seeded into config.ini.");
 }
@@ -5477,10 +5491,15 @@ static void lr_stop()
 //  Classic snake on a 40×9 ASCII grid.  The snake is a chain of '*' chars
 //  steered by tilting the device (gyro, 150 ms poll).
 //
-//  Sequence of target objects (one at a time):
-//    Phase 1 : 'a' → 'z'  (seq_idx 0-25)
-//    Phase 2 : 'A' → 'Z'  (seq_idx 26-51)
-//    Phase 3 : random non-letter symbols, forever (seq_idx ≥ 52)
+//  Sequence of target objects (one at a time, cycling forever):
+//    'a' → 'z' → 'a' → 'z' → ...  (sn_seq_idx % 26 gives the current letter)
+//
+//  Distraction letters (active once sn_score ≥ next_level_score):
+//    N randomly chosen lowercase letters (≠ target) placed each round.
+//    Touching any distraction ends the game immediately.
+//    All letters (target + distractions) are cleared and re-spawned fresh
+//    whenever the target is eaten.  No letter is placed within 4 cells
+//    directly ahead of the snake's current direction.
 //
 //  Snake grows by 1 each time it eats the target.
 //
@@ -5495,10 +5514,9 @@ static void lr_stop()
 //    horizontal_walls=true → '-' at row 0 / row 8;  hitting them = game over
 //    walls=false           → snake wraps to the opposite edge
 //
-//  Win conditions (async tune, game continues):
-//    · ate 'z' (seq_idx crosses 25→26)
-//    · ate 'Z' (seq_idx crosses 51→52)
-//    · score exceeds stored high score
+//  Win conditions (async tune plays, game continues):
+//    · ate 'z'  (sn_seq_idx % 26 == 0 after increment — fires every cycle)
+//    · score exceeds stored high score (fires once per game via sn_beat_high)
 //  End-game popup honours the win flag for win/lose styling.
 //
 //  Screen layout identical to Tennis Letters / Letters Rain:
@@ -5517,9 +5535,8 @@ static void lr_stop()
 #define SN_LEFT  2
 #define SN_RIGHT 3
 
-// Phase-3 target chars: not letters, not '-' or '/' (modifiers), not '|' (walls)
-static const char SN_PHASE3_CHARS[] = "0123456789!@#$%^&()+={};<>?";
-#define SN_PHASE3_LEN (int)(sizeof(SN_PHASE3_CHARS) - 1)
+// Phase-3 (uppercase + symbols) removed — sequence now cycles a→z forever
+#define SN_MAX_DISTRACTS 10   // hard cap on simultaneous distraction letters
 
 // ── Snake body ─────────────────────────────────────────────────────────────────
 static int   sn_body_col[SN_MAX_LEN];
@@ -5527,10 +5544,18 @@ static int   sn_body_row[SN_MAX_LEN];
 static int   sn_len          = 0;
 static int   sn_dir          = SN_RIGHT;
 static int   sn_score        = 0;
-static int   sn_seq_idx      = 0;   // 0-25='a'-'z'  26-51='A'-'Z'  52+=phase3
+static int   sn_seq_idx      = 0;   // increments forever; sn_seq_idx % 26 → 'a'-'z'
 static bool  sn_running      = false;
 static bool  sn_won          = false;
 static bool  sn_beat_high    = false;
+
+// ── Distraction letters ────────────────────────────────────────────────────────
+// Active only when sn_score >= cfg.sn_next_level_score.
+// Touching any distraction ends the game immediately.
+static int   sn_distract_col[SN_MAX_DISTRACTS];
+static int   sn_distract_row[SN_MAX_DISTRACTS];
+static char  sn_distract_ch [SN_MAX_DISTRACTS];
+static int   sn_distract_n   = 0;   // count currently on screen (0 = no distractions yet)
 
 // ── Current target ─────────────────────────────────────────────────────────────
 static int   sn_target_col   = 0;
@@ -5572,30 +5597,98 @@ static bool sn_cell_on_body(int col, int row)
   return false;
 }
 
-// ── Advance target character from the sequence ────────────────────────────────
+// ── Target always cycles a→z→a→z... forever ──────────────────────────────────
 static void sn_next_target_ch()
 {
-  if (sn_seq_idx < 26)       sn_target_ch = (char)('a' + sn_seq_idx);
-  else if (sn_seq_idx < 52)  sn_target_ch = (char)('A' + (sn_seq_idx - 26));
-  else                        sn_target_ch = SN_PHASE3_CHARS[random(SN_PHASE3_LEN)];
+  sn_target_ch = (char)('a' + (sn_seq_idx % 26));
 }
 
-// ── Spawn target at a random free cell ────────────────────────────────────────
-static void sn_spawn_target()
+// ── True if (col,row) lies within min_gap steps directly ahead of the snake head
+// Used during spawning to enforce the 4-cell clearance zone so the player can
+// always react before hitting a freshly-placed letter.
+static bool sn_is_blocked_ahead(int col, int row, int min_gap)
+{
+  int hc = sn_body_col[0], hr = sn_body_row[0];
+  switch (sn_dir) {
+    case SN_RIGHT: return (row == hr) && (col >  hc) && (col - hc <= min_gap);
+    case SN_LEFT:  return (row == hr) && (col <  hc) && (hc - col <= min_gap);
+    case SN_DOWN:  return (col == hc) && (row >  hr) && (row - hr <= min_gap);
+    case SN_UP:    return (col == hc) && (row <  hr) && (hr - row <= min_gap);
+    default:       return false;
+  }
+}
+
+// ── Spawn target + distractions in one call ───────────────────────────────────
+// Called at game-start and every time the target is eaten.
+// Distractions appear only once sn_score >= cfg.sn_next_level_score.
+// All positions respect a 4-cell clearance directly ahead of the snake head.
+static void sn_spawn_all_letters()
 {
   sn_next_target_ch();
-  int cmin = sn_col_min(), cw = sn_col_max() - cmin + 1;
-  int rmin = sn_row_min(), rh = sn_row_max() - rmin + 1;
-  int attempts = 0;
+
+  int cmin = sn_col_min(), cmax = sn_col_max(), cw = cmax - cmin + 1;
+  int rmin = sn_row_min(), rmax = sn_row_max(), rh = rmax - rmin + 1;
+  int attempts;
+
+  // ── Target ────────────────────────────────────────────────────────────────
+  attempts = 0;
   do {
     sn_target_col = cmin + random(cw);
     sn_target_row = rmin + random(rh);
     attempts++;
   } while (attempts < 300 &&
            (sn_cell_on_body(sn_target_col, sn_target_row) ||
+            sn_is_blocked_ahead(sn_target_col, sn_target_row, 4) ||
             (sn_mod_active &&
              sn_target_col == sn_mod_col &&
              sn_target_row == sn_mod_row)));
+
+  // ── Distractions ──────────────────────────────────────────────────────────
+  int n_want = (sn_score >= cfg.sn_next_level_score)
+               ? min(cfg.sn_distractions, SN_MAX_DISTRACTS)
+               : 0;
+  sn_distract_n = 0;
+
+  if (n_want > 0) {
+    // Pool: all lowercase letters except the current target — 25 candidates
+    char pool[25];
+    int  pool_sz = 0;
+    for (char c = 'a'; c <= 'z'; c++)
+      if (c != sn_target_ch) pool[pool_sz++] = c;
+
+    // Fisher-Yates shuffle — pick the first n_want entries at random
+    for (int i = pool_sz - 1; i > 0; i--) {
+      int j = random(i + 1);
+      char tmp = pool[i]; pool[i] = pool[j]; pool[j] = tmp;
+    }
+
+    for (int d = 0; d < n_want; d++) {
+      attempts = 0;
+      int dc_col, dc_row;
+      do {
+        dc_col = cmin + random(cw);
+        dc_row = rmin + random(rh);
+        attempts++;
+        if (attempts >= 300) break;   // give up gracefully on crowded boards
+        if (sn_cell_on_body(dc_col, dc_row))                   continue;
+        if (sn_is_blocked_ahead(dc_col, dc_row, 4))             continue;
+        if (dc_col == sn_target_col && dc_row == sn_target_row) continue;
+        if (sn_mod_active && dc_col == sn_mod_col &&
+                             dc_row == sn_mod_row)              continue;
+        // Must not overlap already-placed distractions
+        bool clash = false;
+        for (int k = 0; k < sn_distract_n; k++)
+          if (sn_distract_col[k] == dc_col && sn_distract_row[k] == dc_row)
+            { clash = true; break; }
+        if (!clash) break;
+      } while (true);
+
+      sn_distract_col[sn_distract_n] = dc_col;
+      sn_distract_row[sn_distract_n] = dc_row;
+      sn_distract_ch [sn_distract_n] = pool[d];
+      sn_distract_n++;
+    }
+  }
 }
 
 // ── Spawn modifier at a random free cell ──────────────────────────────────────
@@ -5603,14 +5696,17 @@ static void sn_spawn_modifier()
 {
   int cmin = sn_col_min(), cw = sn_col_max() - cmin + 1;
   int rmin = sn_row_min(), rh = sn_row_max() - rmin + 1;
-  int attempts = 0;
-  do {
+  for (int attempts = 0; attempts < 300; attempts++) {
     sn_mod_col = cmin + random(cw);
     sn_mod_row = rmin + random(rh);
-    attempts++;
-  } while (attempts < 300 &&
-           (sn_cell_on_body(sn_mod_col, sn_mod_row) ||
-            (sn_mod_col == sn_target_col && sn_mod_row == sn_target_row)));
+    if (sn_cell_on_body(sn_mod_col, sn_mod_row))                     continue;
+    if (sn_mod_col == sn_target_col && sn_mod_row == sn_target_row)  continue;
+    bool clash = false;
+    for (int d = 0; d < sn_distract_n; d++)
+      if (sn_mod_col == sn_distract_col[d] && sn_mod_row == sn_distract_row[d])
+        { clash = true; break; }
+    if (!clash) break;
+  }
   sn_mod_ch     = (random(2) == 0) ? '-' : '/';
   sn_mod_active = true;
 }
@@ -5651,6 +5747,13 @@ static void sn_render()
           } else if (sn_mod_active &&
                      col == sn_mod_col && row == sn_mod_row) {
             ch = sn_mod_ch;
+          } else {
+            // Distraction letters (deadly on contact)
+            for (int d = 0; d < sn_distract_n; d++) {
+              if (sn_distract_col[d] == col && sn_distract_row[d] == row) {
+                ch = sn_distract_ch[d]; break;
+              }
+            }
           }
         }
       }
@@ -5824,6 +5927,7 @@ static void sn_game_start()
   sn_won        = false;
   sn_beat_high  = false;
   sn_mod_active = false;
+  sn_distract_n = 0;
   sn_speed_ms   = cfg.sn_speed_ms;
 
   // Place initial snake horizontally in the centre of the play area
@@ -5879,8 +5983,8 @@ static void sn_game_start()
   lv_obj_set_pos(sn_hi_lbl, 200, status_y);
   lv_obj_set_size(sn_hi_lbl, 118, 16);
 
-  // Spawn first target and paint
-  sn_spawn_target();
+  // Spawn first target (no distractions yet — score starts at 0)
+  sn_spawn_all_letters();
   sn_render();
 
   // Start move and gyro timers
@@ -5976,10 +6080,10 @@ static void sn_end_game()
   // Capture flags for the deferred lambda (statics outlive this stack frame)
   static bool s_sn_won;
   static bool s_sn_beat_high;
-  static bool s_sn_completed_alpha;   // true once 'z' or 'Z' has been eaten
+  static bool s_sn_completed_alpha;   // true once 'z' has been eaten (seq_idx ≥ 26)
   s_sn_won             = sn_won;
   s_sn_beat_high       = sn_beat_high;
-  s_sn_completed_alpha = (sn_seq_idx >= 26);  // seq crosses 26 on eating 'z'
+  s_sn_completed_alpha = (sn_seq_idx >= 26);  // grows monotonically → correct across cycles
 
   lv_timer_t *et = lv_timer_create([](lv_timer_t *t) {
     lv_timer_del(t);
@@ -6031,6 +6135,15 @@ static void sn_move_tick_cb(lv_timer_t * /*t*/)
     if (sn_body_col[i] == nx && sn_body_row[i] == ny) { sn_end_game(); return; }
   }
 
+  // ── 3b. Distraction letter collision → instant game over ──────────────────
+  // Checked here, before body moves, so the head cell (nx,ny) is still the
+  // incoming position — consistent with the wall and self-collision checks.
+  for (int d = 0; d < sn_distract_n; d++) {
+    if (sn_distract_col[d] == nx && sn_distract_row[d] == ny) {
+      sn_end_game(); return;
+    }
+  }
+
   // ── 4. Detect what the new head lands on ──────────────────────────────────
   bool ate_target   = (nx == sn_target_col && ny == sn_target_row);
   bool ate_modifier = (sn_mod_active && nx == sn_mod_col && ny == sn_mod_row);
@@ -6079,17 +6192,17 @@ static void sn_move_tick_cb(lv_timer_t * /*t*/)
       if (sn_move_timer) lv_timer_set_period(sn_move_timer, sn_speed_ms);
     }
 
-    // Win condition — fires at most once per game:
-    //   sn_seq_idx == 26  →  just ate 'z' (was index 25)
-    //   sn_seq_idx == 52  →  just ate 'Z' (was index 51)
-    //   score now exceeds stored high score
-    bool just_won = !sn_won &&
-                    (sn_seq_idx == 26 ||
-                     sn_seq_idx == 52 ||
-                     sn_score > cfg.sn_high_score);
-    if (just_won) {
+    // Win tune fires on two independent conditions:
+    //   · completed_cycle — every time 'z' is eaten (sn_seq_idx % 26 == 0 after
+    //     incrementing, i.e. seq just crossed a multiple of 26)
+    //   · new_high — first time this game the stored high score is surpassed
+    //     (!sn_beat_high guard prevents re-firing on every subsequent letter
+    //     after the record is broken)
+    bool completed_cycle = (sn_seq_idx % 26 == 0);
+    bool new_high        = (!sn_beat_high && sn_score > cfg.sn_high_score);
+    if (completed_cycle || new_high) {
       sn_won = true;
-      if (sn_score > cfg.sn_high_score) {
+      if (new_high) {
         sn_beat_high      = true;
         cfg.sn_high_score = sn_score;
         save_config();
@@ -6099,8 +6212,8 @@ static void sn_move_tick_cb(lv_timer_t * /*t*/)
       sn_beep();             // normal catch beep
     }
 
-    // Spawn the next target object
-    sn_spawn_target();
+    // Spawn next target + distractions (full refresh of all letter positions)
+    sn_spawn_all_letters();
   }
 
   // ── 8. Repaint ────────────────────────────────────────────────────────────

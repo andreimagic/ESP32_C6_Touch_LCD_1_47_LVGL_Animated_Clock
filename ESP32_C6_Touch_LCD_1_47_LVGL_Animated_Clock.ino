@@ -5546,6 +5546,7 @@ static int   sn_dir          = SN_RIGHT;
 static int   sn_score        = 0;
 static int   sn_seq_idx      = 0;   // increments forever; sn_seq_idx % 26 → 'a'-'z'
 static bool  sn_running      = false;
+static bool  sn_paused       = false;
 static bool  sn_won          = false;
 static bool  sn_beat_high    = false;
 
@@ -5582,6 +5583,7 @@ static lv_obj_t   *sn_field_lbl     = nullptr;
 static lv_obj_t   *sn_score_lbl     = nullptr;
 static lv_obj_t   *sn_target_lbl    = nullptr;
 static lv_obj_t   *sn_hi_lbl        = nullptr;
+static lv_obj_t   *sn_pause_pop     = nullptr;
 
 // ── Play-area bounds (walls shrink the usable grid) ───────────────────────────
 static inline int sn_col_min() { return cfg.sn_vertical_walls   ? 1 : 0; }
@@ -5827,6 +5829,8 @@ static void sn_stop()
   sn_score_lbl  = nullptr;
   sn_target_lbl = nullptr;
   sn_hi_lbl     = nullptr;
+  sn_paused     = false;
+  sn_pause_pop  = nullptr;
 }
 
 // ── Forward declarations for Step-3 timer callbacks ───────────────────────────
@@ -5840,6 +5844,14 @@ static void sn_mod_death_cb(lv_timer_t *t);
 static void sn_popup_tap_cb(lv_event_t *e);
 static void sn_popup_longpress_cb(lv_event_t *e);
 static void sn_game_start();
+
+// ── Pause popup ────────────────────────────────────────────────────────────────
+// tap = resume,  long-press = back to carousel
+static void sn_field_tap_cb(lv_event_t *e);
+static void sn_pause_tap_cb(lv_event_t *e);
+static void sn_pause_longpress_cb(lv_event_t *e);
+static void sn_show_pause_popup();
+static void sn_resume_game();
 
 static void sn_show_popup(bool won)
 {
@@ -5915,6 +5927,103 @@ static void sn_popup_longpress_cb(lv_event_t *e)
   apps_carousel_build();
 }
 
+// ── Pause: triggered by tapping the field during active play ─────────────────
+static void sn_field_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (!sn_running || sn_paused) return;   // no-op once paused or after game-over
+
+  sn_paused = true;
+  sn_stop_timers();   // halts movement, gyro polling, and modifier scheduling
+  sn_show_pause_popup();
+}
+
+// Same footprint/style as the game-over popup, just a neutral "Paused" message.
+static void sn_show_pause_popup()
+{
+  if (!apps_cont) return;
+
+  lv_obj_t *pop = lv_obj_create(apps_cont);
+  sn_pause_pop = pop;
+  lv_obj_set_size(pop, 240, 110);
+  lv_obj_align(pop, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(pop, lv_color_make(10, 14, 34), 0);
+  lv_obj_set_style_bg_opa(pop, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(pop, lv_color_make(120, 160, 220), 0);
+  lv_obj_set_style_border_width(pop, 2, 0);
+  lv_obj_set_style_radius(pop, 8, 0);
+  lv_obj_set_style_pad_all(pop, 0, 0);
+  lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(pop, sn_pause_tap_cb,       LV_EVENT_CLICKED,      nullptr);
+  lv_obj_add_event_cb(pop, sn_pause_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+
+  // Title
+  lv_obj_t *title = lv_label_create(pop);
+  lv_label_set_text(title, "Paused");
+  lv_obj_set_style_text_color(title, lv_color_make(160, 200, 255), 0);
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
+
+  // Score line
+  lv_obj_t *score_lbl = lv_label_create(pop);
+  char buf[40];
+  snprintf(buf, sizeof(buf), "Score: %d", sn_score);
+  lv_label_set_text(score_lbl, buf);
+  lv_obj_set_style_text_font(score_lbl, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(score_lbl, lv_color_white(), 0);
+  lv_obj_align(score_lbl, LV_ALIGN_CENTER, 0, 4);
+
+  // Hint
+  lv_obj_t *hint = lv_label_create(pop);
+  lv_label_set_text(hint, "tap: continue  hold: exit");
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(hint, lv_color_make(80, 80, 120), 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
+}
+
+static void sn_pause_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  sn_resume_game();
+}
+
+static void sn_pause_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  lv_indev_wait_release(lv_indev_get_act());
+  sn_running   = false;
+  sn_paused    = false;
+  sn_pause_pop = nullptr;   // apps_carousel_build() cleans apps_cont below
+  sn_stop_timers();
+  app_subphase = 0;
+  apps_carousel_build();
+}
+
+// ── Resume: tear down the pause popup and restart timers where they left off ──
+static void sn_resume_game()
+{
+  if (!sn_running || !sn_paused) return;
+
+  if (sn_pause_pop) { lv_obj_del(sn_pause_pop); sn_pause_pop = nullptr; }
+  sn_paused = false;
+
+  sn_move_timer = lv_timer_create(sn_move_tick_cb, sn_speed_ms, nullptr);
+  if (imuReady)
+    sn_gyro_timer = lv_timer_create(sn_gyro_tick_cb, 150, nullptr);
+
+  // Modifier timers were cleared on pause — pick up on a fresh random window
+  // rather than tracking exact remaining time (matches spawn-scheduling style
+  // used elsewhere in this game).
+  uint32_t ms = (uint32_t)(10 + random(21)) * 1000;
+  if (sn_mod_active) {
+    sn_mod_death_tmr = lv_timer_create(sn_mod_death_cb, ms, nullptr);
+    lv_timer_set_repeat_count(sn_mod_death_tmr, 1);
+  } else {
+    sn_mod_spawn_tmr = lv_timer_create(sn_mod_spawn_cb, ms, nullptr);
+    lv_timer_set_repeat_count(sn_mod_spawn_tmr, 1);
+  }
+}
+
 // ── Start / restart Snake Letters ─────────────────────────────────────────────
 static void sn_game_start()
 {
@@ -5983,12 +6092,17 @@ static void sn_game_start()
   lv_obj_set_pos(sn_hi_lbl, 200, status_y);
   lv_obj_set_size(sn_hi_lbl, 118, 16);
 
+  // Transparent full-screen tap zone — tap pauses the game; long-press exits
+  // (added last so it sits on top, above the field/status labels)
+  app_tapzone(apps_cont, sn_field_tap_cb);
+
   // Spawn first target (no distractions yet — score starts at 0)
   sn_spawn_all_letters();
   sn_render();
 
   // Start move and gyro timers
   sn_running    = true;
+  sn_paused     = false;
   sn_move_timer = lv_timer_create(sn_move_tick_cb, sn_speed_ms, nullptr);
   if (imuReady)
     sn_gyro_timer = lv_timer_create(sn_gyro_tick_cb, 150, nullptr);

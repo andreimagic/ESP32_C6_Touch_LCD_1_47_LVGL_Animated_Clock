@@ -5766,7 +5766,7 @@ static void sn_render()
 
   // Status bar
   lv_label_set_text_fmt(sn_score_lbl, "Score: %d", sn_score);
-  char tbuf[4]; snprintf(tbuf, sizeof(tbuf), "%c", sn_target_ch);
+  char tbuf[4]; snprintf(tbuf, sizeof(tbuf), "%c", (char)(sn_target_ch - 'a' + 'A'));
   lv_label_set_text(sn_target_lbl, tbuf);
   lv_label_set_text_fmt(sn_hi_lbl, "Best: %d", cfg.sn_high_score);
 }

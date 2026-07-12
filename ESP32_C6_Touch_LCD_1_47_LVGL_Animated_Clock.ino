@@ -4909,6 +4909,7 @@ static int   lr_paddle_cur_size   = 0;   // current paddle width
 static int   lr_score             = 0;   // letters caught (0–26)
 static int   lr_target_idx        = 0;   // 0='a'..25='z'
 static bool  lr_running           = false;
+static bool  lr_paused            = false;
 static bool  lr_won               = false; // true after catching Z — lr_render shows ✓
 static bool  lr_target_on_screen  = false; // target letter currently active
 
@@ -4926,6 +4927,7 @@ static lv_obj_t   *lr_field_lbl   = nullptr;  // main ASCII art label
 static lv_obj_t   *lr_score_lbl   = nullptr;  // status bar left  "Score: X"
 static lv_obj_t   *lr_target_lbl  = nullptr;  // status bar centre target letter / ✓
 static lv_obj_t   *lr_last_lbl    = nullptr;  // status bar right "Last: Y"
+static lv_obj_t   *lr_pause_pop   = nullptr;
 
 static int   lr_fall_speed_ms     = 0;   // current fall timer period
 static int   lr_paddle_speed_ms   = 0;   // current gyro timer period
@@ -4934,6 +4936,14 @@ static int   lr_paddle_speed_ms   = 0;   // current gyro timer period
 static void lr_show_popup(bool won);
 static void lr_popup_tap_cb(lv_event_t *e);
 static void lr_popup_longpress_cb(lv_event_t *e);
+
+// ── Pause popup ────────────────────────────────────────────────────────────────
+// tap = resume,  long-press = back to carousel
+static void lr_field_tap_cb(lv_event_t *e);
+static void lr_pause_tap_cb(lv_event_t *e);
+static void lr_pause_longpress_cb(lv_event_t *e);
+static void lr_show_pause_popup();
+static void lr_resume_game();
 
 // ── Stop all Letters Rain timers ─────────────────────────────────────────────
 static void lr_stop_timers()
@@ -5394,6 +5404,91 @@ static void lr_popup_longpress_cb(lv_event_t *e)
   apps_carousel_build();
 }
 
+// ── Pause: triggered by tapping the field during active play ─────────────────
+static void lr_field_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (!lr_running || lr_paused) return;   // no-op once paused or after game-over
+
+  lr_paused = true;
+  lr_stop_timers();   // halts fall and paddle (gyro) ticking
+  lr_show_pause_popup();
+}
+
+// Same footprint/style as the game-over popup, just a neutral "Paused" message.
+static void lr_show_pause_popup()
+{
+  if (!apps_cont) return;
+
+  lv_obj_t *pop = lv_obj_create(apps_cont);
+  lr_pause_pop = pop;
+  lv_obj_set_size(pop, 240, 110);
+  lv_obj_align(pop, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(pop, lv_color_make(10, 14, 34), 0);
+  lv_obj_set_style_bg_opa(pop, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(pop, lv_color_make(120, 160, 220), 0);
+  lv_obj_set_style_border_width(pop, 2, 0);
+  lv_obj_set_style_radius(pop, 8, 0);
+  lv_obj_set_style_pad_all(pop, 0, 0);
+  lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(pop, lr_pause_tap_cb,       LV_EVENT_CLICKED,      nullptr);
+  lv_obj_add_event_cb(pop, lr_pause_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+
+  // Title
+  lv_obj_t *title = lv_label_create(pop);
+  lv_label_set_text(title, "Paused");
+  lv_obj_set_style_text_color(title, lv_color_make(160, 200, 255), 0);
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
+
+  // Score line
+  lv_obj_t *score_lbl = lv_label_create(pop);
+  char buf[32];
+  snprintf(buf, sizeof(buf), "Score: %d", lr_score);
+  lv_label_set_text(score_lbl, buf);
+  lv_obj_set_style_text_font(score_lbl, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(score_lbl, lv_color_white(), 0);
+  lv_obj_align(score_lbl, LV_ALIGN_CENTER, 0, 4);
+
+  // Hint
+  lv_obj_t *hint = lv_label_create(pop);
+  lv_label_set_text(hint, "tap: continue  hold: exit");
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(hint, lv_color_make(80, 80, 120), 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
+}
+
+static void lr_pause_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  lr_resume_game();
+}
+
+static void lr_pause_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  lv_indev_wait_release(lv_indev_get_act());
+  lr_running   = false;
+  lr_paused    = false;
+  lr_pause_pop = nullptr;   // apps_carousel_build() cleans apps_cont below
+  lr_stop_timers();
+  app_subphase = 0;
+  apps_carousel_build();
+}
+
+// ── Resume: tear down the pause popup and restart timers where they left off ──
+static void lr_resume_game()
+{
+  if (!lr_running || !lr_paused) return;
+
+  if (lr_pause_pop) { lv_obj_del(lr_pause_pop); lr_pause_pop = nullptr; }
+  lr_paused = false;
+
+  lr_fall_timer = lv_timer_create(lr_fall_tick_cb, lr_fall_speed_ms, nullptr);
+  if (imuReady)
+    lr_gyro_timer = lv_timer_create(lr_gyro_tick_cb, lr_paddle_speed_ms, nullptr);
+}
+
 // ── Start / restart Letters Rain ──────────────────────────────────────────────
 static void lr_game_start()
 {
@@ -5457,8 +5552,13 @@ static void lr_game_start()
 
   lr_render();
 
+  // Transparent full-screen tap zone — tap pauses the game; long-press exits
+  // (added last so it sits on top, above the field/status labels)
+  app_tapzone(apps_cont, lr_field_tap_cb);
+
   // Start timers
   lr_running         = true;
+  lr_paused          = false;
   lr_fall_speed_ms   = cfg.lr_fall_speed_ms;
   lr_paddle_speed_ms = cfg.lr_paddle_speed_ms;
 
@@ -5479,6 +5579,8 @@ static void lr_stop()
   lr_score_lbl  = nullptr;
   lr_target_lbl = nullptr;
   lr_last_lbl   = nullptr;
+  lr_paused     = false;
+  lr_pause_pop  = nullptr;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

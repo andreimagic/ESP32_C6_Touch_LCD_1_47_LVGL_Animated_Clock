@@ -4386,6 +4386,7 @@ static int   tl_score       = 0;   // letters caught this game
 static int   tl_alphabets   = 0;   // complete alphabets (score / 26)
 static int   tl_letter_idx  = 0;   // 0='a' .. 25='z'
 static bool  tl_running     = false;
+static bool  tl_paused      = false;
 static bool  tl_beat_high   = false; // did we beat high score this game?
 
 static lv_timer_t *tl_ball_timer  = nullptr;
@@ -4393,6 +4394,7 @@ static lv_timer_t *tl_gyro_timer  = nullptr;
 static lv_obj_t   *tl_field_lbl   = nullptr;   // main ASCII art label
 static lv_obj_t   *tl_score_lbl   = nullptr;   // score bar — left
 static lv_obj_t   *tl_hi_lbl      = nullptr;   // score bar — right
+static lv_obj_t   *tl_pause_pop   = nullptr;
 
 // ── Tune player types — defined here so the Arduino IDE auto-prototype
 //    injector sees TlNote before it generates prototypes for tl_play_success
@@ -4570,6 +4572,17 @@ static void tl_stop_timers()
 static void tl_popup_longpress_cb(lv_event_t *e);
 static void tl_popup_tap_cb(lv_event_t *e);
 
+// ── Pause popup ────────────────────────────────────────────────────────────────
+// tap = resume,  long-press = back to carousel
+static void tl_field_tap_cb(lv_event_t *e);
+static void tl_pause_tap_cb(lv_event_t *e);
+static void tl_pause_longpress_cb(lv_event_t *e);
+static void tl_show_pause_popup();
+static void tl_resume_game();
+// tl_resume_game() (defined below, before these callbacks) needs to see them:
+static void tl_ball_tick_cb(lv_timer_t *t);
+static void tl_gyro_tick_cb(lv_timer_t *t);
+
 static void tl_show_popup(bool new_high)
 {
   if (!apps_cont) return;
@@ -4643,6 +4656,91 @@ static void tl_popup_longpress_cb(lv_event_t *e)
   // Return to apps carousel
   app_subphase = 0;
   apps_carousel_build();
+}
+
+// ── Pause: triggered by tapping the field during active play ─────────────────
+static void tl_field_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (!tl_running || tl_paused) return;   // no-op once paused or after game-over
+
+  tl_paused = true;
+  tl_stop_timers();   // halts ball movement and paddle (gyro) ticking
+  tl_show_pause_popup();
+}
+
+// Same footprint/style as the game-over popup, just a neutral "Paused" message.
+static void tl_show_pause_popup()
+{
+  if (!apps_cont) return;
+
+  lv_obj_t *pop = lv_obj_create(apps_cont);
+  tl_pause_pop = pop;
+  lv_obj_set_size(pop, 240, 110);
+  lv_obj_align(pop, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(pop, lv_color_make(10, 14, 34), 0);
+  lv_obj_set_style_bg_opa(pop, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(pop, lv_color_make(120, 160, 220), 0);
+  lv_obj_set_style_border_width(pop, 2, 0);
+  lv_obj_set_style_radius(pop, 8, 0);
+  lv_obj_set_style_pad_all(pop, 0, 0);
+  lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(pop, tl_pause_tap_cb,       LV_EVENT_CLICKED,      nullptr);
+  lv_obj_add_event_cb(pop, tl_pause_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+
+  // Title
+  lv_obj_t *title = lv_label_create(pop);
+  lv_label_set_text(title, "Paused");
+  lv_obj_set_style_text_color(title, lv_color_make(160, 200, 255), 0);
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
+
+  // Score line
+  lv_obj_t *score_lbl = lv_label_create(pop);
+  char buf[32];
+  snprintf(buf, sizeof(buf), "Score: %d", tl_score);
+  lv_label_set_text(score_lbl, buf);
+  lv_obj_set_style_text_font(score_lbl, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(score_lbl, lv_color_white(), 0);
+  lv_obj_align(score_lbl, LV_ALIGN_CENTER, 0, 4);
+
+  // Hint
+  lv_obj_t *hint = lv_label_create(pop);
+  lv_label_set_text(hint, "tap: continue  hold: exit");
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(hint, lv_color_make(80, 80, 120), 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
+}
+
+static void tl_pause_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  tl_resume_game();
+}
+
+static void tl_pause_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  lv_indev_wait_release(lv_indev_get_act());
+  tl_running   = false;
+  tl_paused    = false;
+  tl_pause_pop = nullptr;   // apps_carousel_build() cleans apps_cont below
+  tl_stop_timers();
+  app_subphase = 0;
+  apps_carousel_build();
+}
+
+// ── Resume: tear down the pause popup and restart timers where they left off ──
+static void tl_resume_game()
+{
+  if (!tl_running || !tl_paused) return;
+
+  if (tl_pause_pop) { lv_obj_del(tl_pause_pop); tl_pause_pop = nullptr; }
+  tl_paused = false;
+
+  tl_ball_timer = lv_timer_create(tl_ball_tick_cb, tl_ball_speed_current_ms, nullptr);
+  if (imuReady)
+    tl_gyro_timer = lv_timer_create(tl_gyro_tick_cb, tl_paddle_speed_current_ms, nullptr);
 }
 
 // ── Ball step timer ───────────────────────────────────────────────────────────
@@ -4833,7 +4931,12 @@ static void tl_game_start()
 
   tl_render();
 
+  // Transparent full-screen tap zone — tap pauses the game; long-press exits
+  // (added last so it sits on top, above the field/status labels)
+  app_tapzone(apps_cont, tl_field_tap_cb);
+
   tl_running = true;
+  tl_paused  = false;
   tl_ball_speed_current_ms = cfg.tennis_ball_speed_ms;
   tl_paddle_speed_current_ms = cfg.tennis_paddle_speed_ms;
 
@@ -4854,6 +4957,8 @@ static void tl_stop()
   tl_field_lbl  = nullptr;
   tl_score_lbl  = nullptr;
   tl_hi_lbl     = nullptr;
+  tl_paused     = false;
+  tl_pause_pop  = nullptr;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

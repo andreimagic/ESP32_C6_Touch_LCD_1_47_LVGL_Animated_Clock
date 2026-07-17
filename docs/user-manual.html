@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Manual — ESP32-C6 Animated Clock</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Fira+Code&display=swap" rel="stylesheet">
+</head>
+<body>
+
+    <nav class="navbar">
+        <div class="nav-container">
+            <a href="index.html" class="logo">⌚ ESP32-C6 Clock</a>
+            <div class="menu-toggle" id="mobile-menu">
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+            </div>
+            <ul class="nav-menu">
+                <li><a href="index.html#gallery" class="nav-links">Gallery</a></li>
+                <li><a href="index.html#features" class="nav-links">Features</a></li>
+                <li><a href="index.html#hardware" class="nav-links">Hardware</a></li>
+                <li><a href="index.html#software" class="nav-links">Software</a></li>
+                <li><a href="index.html#webconfig" class="nav-links">Web Config</a></li>
+                <li><a href="index.html#usage" class="nav-links">Quick Usage</a></li>
+                <li><button id="theme-toggle" class="theme-btn">🌙 Dark</button></li>
+            </ul>
+        </div>
+    </nav>
+
+    <header class="hero">
+        <h1>User <span style="color: var(--primary-color)">Manual</span></h1>
+        <p>A comprehensive guide to using and navigating your ESP32-C6 Animated Clock.</p>
+        <div class="action-buttons">
+            <a href="index.html" class="btn secondary">← Back to Home</a>
+        </div>
+    </header>
+
+    <main class="content-container">
+
+        <section id="home-screen">
+            <h2>📱 The Home Screen</h2>
+            <p>The clock uses a minimalist, gesture-based interface. There are no visible buttons on the main face; instead, the screen is divided into <strong>four invisible touch zones</strong>.</p>
+            
+            <pre class="ascii-box">
+┌─────────────────────────────────────────┐
+│                   │                     │
+│   Emotion Mode    │    Analog Clock     │
+│   (Upper-Left)    │    (Upper-Right)    │
+│                   │                     │
+├───────────────────┼─────────────────────┤
+│                   │                     │
+│   Status Screen   │    Battery Screen   │
+│   (Lower-Left)    │    (Lower-Right)    │
+│                   │                     │
+└─────────────────────────────────────────┘
+          LONG-PRESS anywhere → Settings Carousel
+            </pre>
+
+            <h3>1. Emotion Mode (Upper-Left)</h3>
+            <p>Tapping the upper-left area opens a full-screen GIF animation (usually a smile). While this screen is open, <strong>Emotion Tilt</strong> is active. You can change the emotion by tilting the device:</p>
+            <ul>
+                <li><strong>Upright:</strong> Smile GIF</li>
+                <li><strong>Tilt Backwards:</strong> Sleep GIF</li>
+                <li><strong>Tilt Forwards:</strong> Sad GIF</li>
+                <li><strong>Tilt Left/Right:</strong> Joy GIF</li>
+            </ul>
+            <p><em>Note: Long-pressing the Smile GIF is the secret entrance to the Apps Menu.</em></p>
+
+            <h3>2. Analog Clock (Upper-Right)</h3>
+            <p>Tapping the upper-right area opens a live analog clock. It features a dynamic "pie-sector" sweep that fills as the hour progresses, providing a visual representation of the time elapsed in the current hour.</p>
+
+            <h3>3. Status Screen (Lower-Left)</h3>
+            <p>Displays the current date, WiFi connection status (SSID), and NTP sync state. While this screen is open, you can <strong>tilt the device left or right</strong> to adjust the screen brightness in 10% increments. <strong>Long-pressing</strong> on this screen opens a popup showing the Web Configuration PIN and access address.</p>
+
+            <h3>4. Battery Screen (Lower-Right)</h3>
+            <p>Shows real-time battery percentage, voltage, and raw ADC values. To power off the device, <strong>long-press</strong> on this screen to trigger a 5-second shutdown countdown.</p>
+        </section>
+
+        <section id="carousel">
+            <h2>⚙️ System Settings (The Carousel)</h2>
+            <p>To enter the system settings, <strong>long-press anywhere</strong> on the home screen. This opens the Carousel menu.</p>
+            <p>Use the <strong>◀ and ▶ arrows</strong> on the edges of the screen to swipe through the settings. Tap the center to enter a specific editor, or long-press to exit back to the clock.</p>
+
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr><th>Setting</th><th>Function</th><th>How to use</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><strong>Clock</strong></td><td>Date & Time</td><td>Adjust HH:MM and DD/MM/YYYY using ▲/▼. Long-press to save.</td></tr>
+                        <tr><td><strong>Timer</strong></td><td>Countdown</td><td>Set duration. Toggle to <strong>"Ready!"</strong> and long-press to start.</td></tr>
+                        <tr><td><strong>Alarm</strong></td><td>Wake-up Call</td><td>Set time and toggle <strong>ON/OFF</strong>. Long-press to save.</td></tr>
+                        <tr><td><strong>WiFi</strong></td><td>Connectivity</td><td>Tap to toggle WiFi on/off. Access the AP PIN and IP via the detail popup.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="apps-menu">
+            <h2>🎮 Apps Menu & Games</h2>
+            <p>The Apps Menu is hidden behind a "Math Gate" to keep kids entertained and challenged.</p>
+            
+            <h3>How to Enter:</h3>
+            <ol>
+                <li>Tap <strong>Upper-Left</strong> (Emotion Mode).</li>
+                <li><strong>Long-press</strong> the GIF.</li>
+                <li>Solve the random arithmetic problem by tapping the correct answer.</li>
+            </ol>
+
+            <h3>Available Apps:</h3>
+            <ul>
+                <li><strong>Rock Paper Scissors:</strong> An interactive game against the CPU. <strong>Shake</strong> or <strong>hard-tilt</strong> the device to play again instantly.</li>
+                <li><strong>Rolling Dice:</strong> An animated dice roller. <strong>Shake</strong> the device to re-roll.</li>
+                <li><strong>Flip a Coin:</strong> A quick ASCII coin toss. Tap to flip.</li>
+                <li><strong>Metronome:</strong> A professional-grade tool. Use the slider for BPM (60-240), select time signatures (2/4, 3/4, 4/4), and follow the 🔴/🟢 beat dots.</li>
+                <li><strong>Tennis Letters:</strong> A Breakout-style game. Tilt the device to move the paddle and catch cycling letters from a to z.</li>
+                <li><strong>Letters Rain:</strong> A challenging game where letters fall in waves. Catch the target letter while dodging decoys and using modifiers (+ / - / *) to resize your paddle.</li>
+                <li><strong>Snake Letters:</strong> A classic snake game. Use tilt to eat letters in alphabetical order (a-z). Be careful: after reaching a certain score, "distraction" letters appear—touching them ends the game! Look out for modifiers: <code style="background-color: var(--code-bg); color: var(--code-text); padding: 0.1rem 0.3rem; border-radius: 4px;">-</code> shrinks your snake, and <code style="background-color: var(--code-bg); color: var(--code-text); padding: 0.1rem 0.3rem; border-radius: 4px;">/</code> halves its length. Tap the screen to pause, and long-press the pause menu to exit.</li>
+            </ul>
+        </section>
+
+        <section id="automation">
+            <h2>🌙 Automation & Power</h2>
+            
+            <h3>Daily Brightness & Animation Schedule</h3>
+            <p>The clock automatically adjusts its behavior based on the time of day:</p>
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr><th>Time</th><th>Action</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>06:00 — 07:00</td><td>Brightness gradually increases from 10% to 50%.</td></tr>
+                        <tr><td>07:00 — 19:59</td><td>Scheduled animations use the <strong>Smile GIF</strong>.</td></tr>
+                        <tr><td>19:00 — 20:00</td><td>Brightness gradually decreases from 25% to 1%.</td></tr>
+                        <tr><td>20:00 — 06:59</td><td>Scheduled animations use the <strong>Sleep GIF</strong>.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h3>Deep Sleep & Waking</h3>
+            <p>When the device is powered off via the Battery screen, it enters a low-power deep sleep. To wake the device, press the physical <strong>RESET</strong> button on the board.</p>
+            <p><strong>Alarm Auto-Wake:</strong> If an alarm is set, the device will automatically wake up 5 minutes early to sync time via NTP, ensuring your alarm fires at the exact second.</p>
+        </section>
+
+        <section id="web-config">
+            <h2>🌐 Web Configuration</h2>
+            <p>You can manage your clock from any web browser without needing a cable.</p>
+            
+            <h3>Connecting:</h3>
+            <ul>
+                <li><strong>Home Network (STA):</strong> Go to <code style="background-color: var(--code-bg); color: var(--code-text); padding: 0.2rem 0.4rem; border-radius: 4px;">http://esp32clock.local</code>.</li>
+                <li><strong>Direct Connection (AP):</strong> Connect to the WiFi hotspot <code style="background-color: var(--code-bg); color: var(--code-text); padding: 0.2rem 0.4rem; border-radius: 4px;">ESP32-Clock</code>. The password is the 6-digit PIN shown on the device screen (Carousel → WiFi). Then go to <code style="background-color: var(--code-bg); color: var(--code-text); padding: 0.2rem 0.4rem; border-radius: 4px;">http://192.168.4.1</code>.</li>
+            </ul>
+
+            <h3>The Web Interface:</h3>
+            <p>Once connected, enter the <strong>6-digit PIN</strong> to unlock the following features:</p>
+            <ul>
+                <li><strong>Config Editor:</strong> Edit <code style="background-color: var(--code-bg); color: var(--code-text); padding: 0.2rem 0.4rem; border-radius: 4px;">config.ini</code> directly (WiFi, Timezone, Alarm settings).</li>
+                <li><strong>Quick Time Set:</strong> Use the date/time picker to set the clock instantly.</li>
+                <li><strong>Remote Reboot:</strong> Restart the device from your browser.</li>
+            </ul>
+        </section>
+
+    </main>
+
+    <footer>
+        <p>ESP32-C6 Animated Clock User Manual</p>
+        <p><a href="index.html">Return to Landing Page</a></p>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>

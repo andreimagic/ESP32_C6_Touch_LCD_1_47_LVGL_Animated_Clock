@@ -84,13 +84,13 @@ struct AppConfig {
   int  lr_paddle_speed_change_ms   = 5;         // [letter_rain] paddle_speed_change_ms
   int  sn_high_score               = 0;        // [snake] high_score
   int  sn_snake_size               = 3;         // [snake] snake_size (min body length)
-  int  sn_speed_ms                 = 800;       // [snake] snake_speed_ms
-  int  sn_speed_min_ms             = 300;       // [snake] snake_speed_min_ms
+  int  sn_speed_ms                 = 600;       // [snake] snake_speed_ms
+  int  sn_speed_min_ms             = 200;       // [snake] snake_speed_min_ms
   int  sn_speed_change_ms          = 5;         // [snake] snake_speed_change_ms
   bool sn_vertical_walls           = true;      // [snake] vertical_walls
-  bool sn_horizontal_walls         = true;      // [snake] horizontal_walls
-  int  sn_distractions             = 4;         // [snake] distractions (letters that kill on touch)
-  int  sn_next_level_score         = 26;        // [snake] next_level_score (score at which distractions appear)
+  bool sn_horizontal_walls         = false;      // [snake] horizontal_walls
+  int  sn_distractions             = 3;         // [snake] distractions (letters that kill on touch)
+  int  sn_next_level_score         = 10;        // [snake] next_level_score (score at which distractions appear)
   // [birthdays] dates — up to 8 entries in DD-MM-YYYY format.
   // Only day & month are compared; the year is kept as reference in the file.
   // Default: empty (no birthday greetings).

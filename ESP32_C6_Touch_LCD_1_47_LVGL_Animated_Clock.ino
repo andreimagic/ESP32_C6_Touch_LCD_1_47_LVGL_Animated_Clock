@@ -6344,8 +6344,8 @@ static void sn_gyro_tick_cb(lv_timer_t * /*t*/)
     if      (ay >  SN_GYRO_THRESH && sn_dir != SN_RIGHT)  sn_dir = SN_LEFT;
     else if (ay < -SN_GYRO_THRESH && sn_dir != SN_LEFT) sn_dir = SN_RIGHT;
   } else {
-    if      (ax >  SN_GYRO_THRESH && sn_dir != SN_UP)  sn_dir = SN_DOWN;
-    else if (ax < -SN_GYRO_THRESH && sn_dir != SN_UP)    sn_dir = SN_UP;
+    if      (ax >  SN_GYRO_THRESH && sn_dir != SN_UP)    sn_dir = SN_DOWN;
+    else if (ax < -SN_GYRO_THRESH && sn_dir != SN_DOWN)  sn_dir = SN_UP;
   }
 }
 

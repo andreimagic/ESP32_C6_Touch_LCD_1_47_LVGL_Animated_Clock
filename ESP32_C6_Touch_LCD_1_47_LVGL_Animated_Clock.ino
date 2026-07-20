@@ -1297,11 +1297,11 @@ static void start_web_server()
         "<h2>&#x23F0; ESP32 Clock</h2>"
         "<div class='info'><b>IP:</b> ");
     html += ip;
-    html += F(" &nbsp; <b>URL:</b> ");
-    html += url;
-    html += F(" &nbsp; <b>Manual:</b> "
+    // html += F(" &nbsp; <b>URL:</b> ");
+    // html += url;
+    html += F(" &nbsp; <b>User Guide:</b> "
         "<a href='https://andreimagic.github.io/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/index.html'"
-           " target='_blank' rel='noopener' style='color:#79c0ff'>User Guide</a>"
+           " target='_blank' rel='noopener' style='color:#79c0ff'>View on GitHub</a>"
         "</div>"
 
         // ── PIN field (shared across all actions) ─────────────────────────

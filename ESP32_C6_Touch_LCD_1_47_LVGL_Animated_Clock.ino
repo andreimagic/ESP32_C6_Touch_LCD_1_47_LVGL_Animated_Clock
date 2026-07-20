@@ -45,6 +45,10 @@
 
 
 
+// ─── Firmware version ─────────────────────────────────────────────────────
+// Bump this on every release. Shown on the battery screen.
+#define FW_VERSION      "v2.6.0"
+
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
 // These hardcoded values are the fallback when the card or file is absent.
@@ -1300,7 +1304,7 @@ static void start_web_server()
     // html += F(" &nbsp; <b>URL:</b> ");
     // html += url;
     html += F(" &nbsp; <b>User Guide:</b> "
-        "<a href='https://andreimagic.github.io/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/index.html'"
+        "<a href='https://andreimagic.github.io/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock'"
            " target='_blank' rel='noopener' style='color:#79c0ff'>View on GitHub</a>"
         "</div>"
 
@@ -2591,12 +2595,26 @@ static void show_battery_screen(void)
   lv_obj_align(label_adc_raw, LV_ALIGN_RIGHT_MID, -24, 4);
   lv_obj_add_flag(label_adc_raw, LV_OBJ_FLAG_IGNORE_LAYOUT);
 
-  // ── Row 3: Power-off hint ─────────────────────────────────────────────────
+  // ── Row 3: Firmware version ──────────────────────────────────────────────
+  lv_obj_t *fw_key = lv_label_create(overlay_cont);
+  lv_label_set_text(fw_key, "Firmware");
+  lv_obj_set_style_text_color(fw_key, lv_color_make(140, 140, 180), 0);
+  lv_obj_align(fw_key, LV_ALIGN_LEFT_MID, 24, 30);
+  lv_obj_add_flag(fw_key, LV_OBJ_FLAG_IGNORE_LAYOUT);
+
+  lv_obj_t *fw_val = lv_label_create(overlay_cont);
+  lv_label_set_text(fw_val, FW_VERSION);
+  lv_obj_set_style_text_font(fw_val, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(fw_val, lv_color_white(), 0);
+  lv_obj_align(fw_val, LV_ALIGN_RIGHT_MID, -24, 30);
+  lv_obj_add_flag(fw_val, LV_OBJ_FLAG_IGNORE_LAYOUT);
+
+  // ── Row 4: Power-off hint ─────────────────────────────────────────────────
   lv_obj_t *pwr_hint = lv_label_create(overlay_cont);
   lv_label_set_text(pwr_hint, LV_SYMBOL_POWER "  hold to power off");
   lv_obj_set_style_text_color(pwr_hint, lv_color_make(160, 100, 100), 0);
   lv_obj_set_style_text_opa(pwr_hint, LV_OPA_70, 0);
-  lv_obj_align(pwr_hint, LV_ALIGN_LEFT_MID, 24, 30);
+  lv_obj_align(pwr_hint, LV_ALIGN_LEFT_MID, 24, 56);
   lv_obj_add_flag(pwr_hint, LV_OBJ_FLAG_IGNORE_LAYOUT);
 
   // Long-press triggers the 5-second shutdown countdown popup

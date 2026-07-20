@@ -46,6 +46,7 @@ A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47
 | **Flip a Coin** | Instant flip with ASCII coin art (heads/tails) |
 | **Tennis Letters** | Breakout-style ASCII game. Catch cycling letters (a-z) with a tilt-controlled paddle. Score points and complete alphabets |
 | **Letters Rain** | Falling-letters ASCII game. Letters and modifiers rain in waves; catch the target letter (A→Z) with a gyro-controlled paddle. Wrong catches shrink the paddle; `+` / `-` modify its size; `*` restores the default. Miss the target letter and the game ends. Last score saved to `config.ini` |
+| **Snake Letters** | Classic snake ASCII game. Steer using tilt to eat the alphabet (a-z). Avoid distraction letters and manage length with modifiers. High scores persisted to `config.ini` |
 | **Gyro shake/tilt trigger** | While playing RPS or Dice, physically shaking the device (ΔaccelZ > 1.8 g) or tilting it hard sideways (accelY > 1.0 g) restarts the game — no tap needed |
 | **Metronome** | Full-screen BPM metronome (60–240 BPM) with hardware-timer accuracy, visual beat dots, time-signature selector (2/4, 3/4, 4/4), and distinct hi/lo tones for downbeat vs weak beats |
 | **Apps sounds** | Melody on correct math answer, failure tune on wrong; beeps during animations; toggleable. Metronome always sounds regardless of this toggle |
@@ -266,6 +267,38 @@ sounds = true
 # happybirthday.gif and play the Happy Birthday melody instead of the usual beeps.
 # Remove this section (or leave it empty) to disable the Easter egg entirely.
 dates = 01-01-1970,06-08-2017
+
+[tennis]
+high_score = 0
+paddle_size = 6
+ball_speed_ms = 500
+ball_speed_min_ms = 200
+ball_speed_change_ms = 10
+paddle_speed_ms = 250
+paddle_speed_min_ms = 100
+paddle_speed_change_ms = 5
+
+[letter_rain]
+last_score = 0
+paddle_size = 6
+max_entities = 5
+fall_speed_ms = 850
+fall_speed_min_ms = 200
+fall_speed_change_ms = 10
+paddle_speed_ms = 200
+paddle_speed_min_ms = 50
+paddle_speed_change_ms = 5
+
+[snake]
+high_score = 0
+snake_size = 3
+snake_speed_ms = 600
+snake_speed_min_ms = 200
+snake_speed_change_ms = 5
+vertical_walls = true
+horizontal_walls = false
+distractions = 3
+next_level_score = 10
 ```
 
 | Section | Key | Default | Description |
@@ -319,12 +352,12 @@ Long-press anywhere on the clock face opens the carousel. Use the **◀ ▶** ar
 ```
 ┌─────────────────────────────────────────┐
 │                                         │
-│  ◀         [ ICON ]           ▶         │
-│             NAME                        │
-│           description                  │
+│    ◀         [ ICON ]           ▶      │
+│                NAME                     │
+│             description                 │
 │                                         │
-│        tap  ·  hold to exit             │
-│              ● ○ ○ ○                    │
+│         tap in or hold to exit          │
+│                ● ○ ○ ○                  │
 └─────────────────────────────────────────┘
 ```
 
@@ -338,14 +371,14 @@ Opens a two-row editor pre-loaded with the current RTC values:
 
 ```
 ┌─────────────────────────────────────────┐
-│    ▲              ▲                     │
-│  [ HH ]  :  [ MM ]                      │  montserrat_48
-│    ▼              ▼                     │
+│          ▲              ▲               │
+│        [ HH ]  :  [ MM ]                │  montserrat_48
+│          ▼              ▼               │
 │  ─────────────────────────────────────  │
-│   ▲      ▲        ▲                     │
-│  [22]  /[Mar]/ [2026]                   │  montserrat_16
-│   ▼      ▼        ▼                     │
-│        hold to save & exit              │
+│         ▲      ▲        ▲               │
+│        [22]  /[Mar]/ [2026]             │  montserrat_16
+│         ▼      ▼        ▼               │
+│           hold to save & exit           │
 └─────────────────────────────────────────┘
 ```
 
@@ -387,7 +420,7 @@ When WiFi is active the device serves a browser-based configuration UI on port 8
 │  IP  192.168.4.1                  │
 │  🔑  PIN: 483921                  │
 │  http://192.168.4.1               │
-│                          tap to close │
+│                      tap to close │
 └───────────────────────────────────┘
 ```
 
@@ -482,8 +515,8 @@ Four games plus a sounds toggle, navigated with **◀ ▶**. **Tap** to enter, *
 ```
 ┌─────────────────────────────────────────┐
 │                                         │
-│  ◀     Rock Paper Scissors    ▶         │
-│         An interactive ASCII Game       │
+│    ◀     Rock Paper Scissors    ▶      │
+│        An interactive ASCII Game        │
 │                                         │
 │      tap to play  .  hold to exit       │
 │              ● ○ ○ ○ ○                  │
@@ -528,7 +561,7 @@ A full-screen BPM metronome driven by **hardware ESP32 timer** for sample-accura
 │  ──────────●──────────  120  BPM        │  ← slider + value
 │  [ -1 ]   [ +1 ]   [    START    ]      │  ← buttons
 │     ●  ○  ○  ○                          │  ← beat dots
-│   [ 2/4 ]  [ 3/4 ]  [ 4/4 ]            │  ← time signature
+│    [ 2/4 ]  [ 3/4 ]  [ 4/4 ]            │  ← time signature
 └─────────────────────────────────────────┘
 ```
 
@@ -568,6 +601,8 @@ An ASCII falling-letters game. Letters and modifiers descend in separate waves �
 
 Each successive target spawns within 5–15 columns of the previous one, keeping the action in a natural zone. Speed increases with every correct catch. Last score is persisted to `config.ini`.
 
+#### Snake Letters
+Classic snake ASCII game. Steer using tilt to eat the alphabet (a-z) in order. Avoid "distraction" letters that end the game instantly. Look out for modifiers: `-` shrinks the snake, and `/` halves its length. High scores are persisted to `config.ini`.
 
 #### Sounds toggle
 
@@ -873,7 +908,8 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v2.2.0 | ✅ released | Birthday Easter egg: `[birthdays]` in config.ini, Happy Birthday melody, `happybirthday.gif` for alarm & timer. Fixed Read/Write config.ini |
 | v2.3.0 | ✅ released | PIN-protected web configuration UI — edit config, set RTC, reboot; WPA2 AP with boot-generated PIN |
 | v2.4.0 | ✅ released | Tennis Letters game: Breakout-style ASCII game with tilt-controlled paddle and alphabet cycling |
-| v2.5.0 | 🚀 new | Letters Rain game: letters and modifiers fall in waves; catch the target letter (A→Z) with a gyro paddle while dodging wrong letters |
+| v2.5.0 | ✅ released | Letters Rain game: letters and modifiers fall in waves; catch the target letter (A→Z) with a gyro paddle while dodging wrong letters |
+| v2.6.0 | 🚀 new | Snake Letters game: classic snake with alphabet targets, distraction letters, and length modifiers |
 
 ## License
 

@@ -18,6 +18,7 @@
                 <span class="bar"></span>
             </div>
             <ul class="nav-menu">
+                <li><a href="user-manual.html" class="nav-links">User Manual</a></li>
                 <li><a href="#gallery" class="nav-links">Gallery</a></li>
                 <li><a href="#features" class="nav-links">Features</a></li>
                 <li><a href="#hardware" class="nav-links">Hardware</a></li>
@@ -95,7 +96,7 @@
                         <tr><td><strong>AP hotspot</strong></td><td>WPA2 fallback AP (<code>ESP32-Clock</code>) with boot-generated PIN shown on the device screen — physical access required</td></tr>
                         <tr><td><strong>Battery monitor</strong></td><td>Live percentage, voltage, ADC raw — with LiPo discharge curve</td></tr>
                         <tr><td><strong>Low-power gate</strong></td><td>Refuses to boot if battery ≤ 10%, shows empty battery icon and deep sleeps.</td></tr>
-                        <tr><td><strong>Apps menu</strong></td><td>Math challenge gate, Rock Paper Scissors, Rolling Dice, Coin Flip, Metronome, Tennis Letters, Letters Rain</td></tr>
+                        <tr><td><strong>Apps menu</strong></td><td>Math challenge gate, Rock Paper Scissors, Rolling Dice, Coin Flip, Metronome, Tennis Letters, Letters Rain, Snake Letters</td></tr>
                         <tr><td><strong>Metronome</strong></td><td>60–240 BPM with hardware-timer accuracy, beat dot indicators, 2/4 3/4 4/4 time signatures, distinct hi/lo tones</td></tr>
                         <tr><td><strong>Gyro shake/tilt</strong></td><td>Physically shaking or hard-tilting the device restarts RPS or Dice — no tap needed</td></tr>
                         <tr><td><strong>SD card config</strong></td><td>All settings in <code>/config.ini</code> — no recompile needed</td></tr>
@@ -189,7 +190,7 @@
                 <li><strong>Status (LL):</strong> Shows WiFi, NTP, and Brightness. Tilt left/right to adjust brightness.</li>
                 <li><strong>Battery (LR):</strong> Live %, voltage. Long-press for software power-off.</li>
                 <li><strong>Emotion Tilt:</strong> Tap UL (Smile). While playing, tilt the device to change emotions (sad, joy, sleep) in real-time via IMU.</li>
-                <li><strong>Apps Menu:</strong> Long-press the smile GIF → pass Math Gate → access Rock Paper Scissors, Dice, Coin Flip, Metronome.</li>
+                <li><strong>Apps Menu:</strong> Long-press the smile GIF → pass Math Gate → access Rock Paper Scissors, Dice, Coin Flip, Metronome, Tennis Letters, Letters Rain, and Snake Letters.</li>
                 <li><strong>Gyro shake/tilt:</strong> While playing RPS or Dice, physically shake the device or tilt it hard sideways to restart the game — no tap needed.</li>
             </ul>
 
@@ -218,6 +219,9 @@
                 <li>Catch all 26 letters to win. The status bar shows <strong>✓</strong> on completion.</li>
             </ul>
             <p>Each successive target spawns within 5–15 columns of the previous one, keeping the action in a natural zone. Speed increases with every correct catch. Last score is persisted to <code class="code-inline">config.ini</code>.</p>
+
+            <h3>🐍 Snake Letters</h3>
+            <p>A classic snake ASCII game. Steer the snake using the device's <strong>tilt</strong> to eat letters of the alphabet in order (a-z). Be careful: after reaching a certain score, "distraction" letters appear—touching any of them ends the game immediately! Look out for modifiers: <code class="code-inline">-</code> shrinks your snake, and <code class="code-inline">/</code> halves its length. High scores are persisted to <code class="code-inline">config.ini</code>.</p>
 
             <h3>Config.ini Reference</h3>
 <pre><code>[wifi]
@@ -329,7 +333,8 @@ duration = 10
                         <tr><td>v2.2.0</td><td>✅ released</td><td>Birthday Easter egg: <code>[birthdays]</code> in config.ini, Happy Birthday melody, happybirthday.gif for alarm &amp; timer.</td></tr>
                         <tr><td>v2.3.0</td><td>✅ released</td><td>PIN-protected web configuration UI — edit config, set RTC, reboot; WPA2 AP with boot-generated PIN.</td></tr>
                         <tr><td>v2.4.0</td><td>✅ released</td><td>Tennis Letters game: Breakout-style ASCII game with tilt-controlled paddle and alphabet cycling.</td></tr>
-                        <tr><td>v2.5.0</td><td>🚀 new</td><td>Letters Rain game: letters and modifiers fall in waves; catch the target letter (A→Z) with a gyro paddle while dodging wrong letters.</td></tr>
+                        <tr><td>v2.5.0</td><td>✅ released</td><td>Letters Rain game: letters and modifiers fall in waves; catch the target letter (A→Z) with a gyro paddle while dodging wrong letters.</td></tr>
+                        <tr><td>v2.6.0</td><td>🚀 new</td><td>Snake Letters game: classic snake with alphabet targets, distraction letters, and length modifiers.</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -381,7 +386,6 @@ duration = 10
             <h2>⚠️ Disclaimer — ASCII Art</h2>
             <p>Some coin flip ASCII art displayed in the Apps Menu was sourced from <a href="https://www.asciiart.eu/video-games/pokemon" target="_blank">asciiart.eu</a>. All Pokémon characters and names are trademarks of <strong>The Pokémon Company International</strong>. This project is not affiliated with, sponsored by, or endorsed by The Pokémon Company. The art is used here solely for non-commercial, personal, educational purposes.</p>
         </section>
-
     </main>
 
     <footer>

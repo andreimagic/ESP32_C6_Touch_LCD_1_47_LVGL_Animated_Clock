@@ -45,6 +45,10 @@
 
 
 
+// ─── Firmware version ─────────────────────────────────────────────────────
+// Bump this on every release. Shown on the battery screen.
+#define FW_VERSION      "v2.6.0"
+
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
 // These hardcoded values are the fallback when the card or file is absent.
@@ -80,8 +84,17 @@ struct AppConfig {
   int  lr_fall_speed_min_ms        = 600;       // [letter_rain] fall_speed_min_ms
   int  lr_fall_speed_change_ms     = 10;        // [letter_rain] fall_speed_change_ms
   int  lr_paddle_speed_ms          = 150;       // [letter_rain] paddle_speed_ms
-  int  lr_paddle_speed_min_ms      = 50;        // [letter_rain] paddle_speed_min_ms
+  int  lr_paddle_speed_min_ms      = 50;       // [letter_rain] paddle_speed_min_ms
   int  lr_paddle_speed_change_ms   = 5;         // [letter_rain] paddle_speed_change_ms
+  int  sn_high_score               = 0;        // [snake] high_score
+  int  sn_snake_size               = 3;         // [snake] snake_size (min body length)
+  int  sn_speed_ms                 = 600;       // [snake] snake_speed_ms
+  int  sn_speed_min_ms             = 200;       // [snake] snake_speed_min_ms
+  int  sn_speed_change_ms          = 5;         // [snake] snake_speed_change_ms
+  bool sn_vertical_walls           = true;      // [snake] vertical_walls
+  bool sn_horizontal_walls         = false;      // [snake] horizontal_walls
+  int  sn_distractions             = 3;         // [snake] distractions (letters that kill on touch)
+  int  sn_next_level_score         = 10;        // [snake] next_level_score (score at which distractions appear)
   // [birthdays] dates — up to 8 entries in DD-MM-YYYY format.
   // Only day & month are compared; the year is kept as reference in the file.
   // Default: empty (no birthday greetings).
@@ -719,6 +732,49 @@ static void load_config()
       }
     }
 
+    // ── [snake] ──────────────────────────────────────────────────────────────
+    else if (strcmp(section, "snake") == 0) {
+      if (strcmp(key, "high_score") == 0) {
+        cfg.sn_high_score = atoi(val);
+        Serial.printf("[CFG]   snake.high_score          = %d\n", cfg.sn_high_score);
+      }
+      else if (strcmp(key, "snake_size") == 0) {
+        cfg.sn_snake_size = atoi(val);
+        if (cfg.sn_snake_size < 1)  cfg.sn_snake_size = 1;
+        if (cfg.sn_snake_size > 20) cfg.sn_snake_size = 20;
+        Serial.printf("[CFG]   snake.snake_size          = %d\n", cfg.sn_snake_size);
+      }
+      else if (strcmp(key, "snake_speed_ms") == 0) {
+        cfg.sn_speed_ms = atoi(val);
+        if (cfg.sn_speed_ms < 50)   cfg.sn_speed_ms = 50;
+        if (cfg.sn_speed_ms > 2000) cfg.sn_speed_ms = 2000;
+        Serial.printf("[CFG]   snake.snake_speed_ms      = %d\n", cfg.sn_speed_ms);
+      }
+      else if (strcmp(key, "snake_speed_min_ms") == 0) {
+        cfg.sn_speed_min_ms = max(50, atoi(val));
+        cfg.sn_speed_min_ms = min(cfg.sn_speed_min_ms, cfg.sn_speed_ms);
+      }
+      else if (strcmp(key, "snake_speed_change_ms") == 0) {
+        cfg.sn_speed_change_ms = max(0, atoi(val));
+      }
+      else if (strcmp(key, "vertical_walls") == 0) {
+        cfg.sn_vertical_walls = (strcmp(val,"true")==0 || strcmp(val,"1")==0);
+        Serial.printf("[CFG]   snake.vertical_walls      = %s\n", cfg.sn_vertical_walls?"true":"false");
+      }
+      else if (strcmp(key, "horizontal_walls") == 0) {
+        cfg.sn_horizontal_walls = (strcmp(val,"true")==0 || strcmp(val,"1")==0);
+        Serial.printf("[CFG]   snake.horizontal_walls    = %s\n", cfg.sn_horizontal_walls?"true":"false");
+      }
+      else if (strcmp(key, "distractions") == 0) {
+        cfg.sn_distractions = max(0, min(10, atoi(val)));
+        Serial.printf("[CFG]   snake.distractions        = %d\n", cfg.sn_distractions);
+      }
+      else if (strcmp(key, "next_level_score") == 0) {
+        cfg.sn_next_level_score = max(1, atoi(val));
+        Serial.printf("[CFG]   snake.next_level_score    = %d\n", cfg.sn_next_level_score);
+      }
+    }
+
     // ── [birthdays] ──────────────────────────────────────────────────────────
     // dates = DD-MM-YYYY,DD-MM-YYYY,...   (up to 8 entries)
     // Only the day and month are used for comparison; the year is stored for
@@ -881,7 +937,8 @@ static void save_config()
           strncmp(trimmed,"[timer]",       7)==0 ||
           strncmp(trimmed,"[menu]",        6)==0 ||
           strncmp(trimmed,"[tennis]",      8)==0 ||
-          strncmp(trimmed,"[letter_rain]",13)==0) { inManaged=true;  continue; }
+          strncmp(trimmed,"[letter_rain]",13)==0 ||
+          strncmp(trimmed,"[snake]",       7)==0) { inManaged=true;  continue; }
       if (*trimmed == '[')                    { inManaged=false; }
       if (inManaged)                            continue;
 
@@ -944,9 +1001,20 @@ static void save_config()
   fw.printf("paddle_speed_min_ms = %d\n",   cfg.lr_paddle_speed_min_ms);
   fw.printf("paddle_speed_change_ms = %d\n",cfg.lr_paddle_speed_change_ms);
 
+  fw.print("\n[snake]\n");
+  fw.printf("high_score = %d\n",           cfg.sn_high_score);
+  fw.printf("snake_size = %d\n",           cfg.sn_snake_size);
+  fw.printf("snake_speed_ms = %d\n",       cfg.sn_speed_ms);
+  fw.printf("snake_speed_min_ms = %d\n",   cfg.sn_speed_min_ms);
+  fw.printf("snake_speed_change_ms = %d\n",cfg.sn_speed_change_ms);
+  fw.printf("vertical_walls = %s\n",       cfg.sn_vertical_walls   ? "true" : "false");
+  fw.printf("horizontal_walls = %s\n",     cfg.sn_horizontal_walls ? "true" : "false");
+  fw.printf("distractions = %d\n",         cfg.sn_distractions);
+  fw.printf("next_level_score = %d\n",     cfg.sn_next_level_score);
+
   fw.close();
 
-  Serial.println("[CFG] Saved wifi/alarm/timer/menu/tennis/letter_rain.");
+  Serial.println("[CFG] Saved wifi/alarm/timer/menu/tennis/letter_rain/snake.");
   
   // Save the current timestamp to the log file as well
   log_last_seen();
@@ -1050,6 +1118,56 @@ static void seed_letter_rain_config()
   fa.printf("paddle_speed_change_ms = %d\n",cfg.lr_paddle_speed_change_ms);
   fa.close();
   Serial.println("[CFG] [letter_rain] section seeded into config.ini.");
+}
+
+// ── Ensure [snake] section exists in config.ini ───────────────────────────────
+// Called once at boot after load_config(). If the section is absent (fresh SD
+// card or first flash), it appends the block with current cfg defaults so the
+// web UI always shows all snake settings from the very first power-on.
+static void seed_snake_config()
+{
+  if (!sdCardAvailable) return;
+
+  File fr = SD.open("/config.ini", FILE_READ);
+  if (!fr) return;  // no file at all — save_config() will create it later
+  bool found = false;
+  char line[64];
+  while (fr.available() && !found) {
+    int len = 0;
+    while (fr.available() && len < (int)sizeof(line) - 1) {
+      char ch = fr.read();
+      if (ch == '\n') break;
+      if (ch == '\r') continue;  // strip CR
+      line[len++] = ch;
+    }
+    line[len] = '\0';
+    char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, "[snake]", 7) == 0) { found = true; }
+  }
+  fr.close();
+
+  if (found) {
+    Serial.println("[CFG] [snake] section already present.");
+    return;
+  }
+
+  // Append the section with current (default) values
+  File fa = SD.open("/config.ini", FILE_APPEND);
+  if (!fa) { Serial.println("[CFG] seed_snake_config: cannot open for append"); return; }
+  fa.println();
+  fa.println("[snake]");
+  fa.printf("high_score = %d\n",           cfg.sn_high_score);
+  fa.printf("snake_size = %d\n",           cfg.sn_snake_size);
+  fa.printf("snake_speed_ms = %d\n",       cfg.sn_speed_ms);
+  fa.printf("snake_speed_min_ms = %d\n",   cfg.sn_speed_min_ms);
+  fa.printf("snake_speed_change_ms = %d\n",cfg.sn_speed_change_ms);
+  fa.printf("vertical_walls = %s\n",       cfg.sn_vertical_walls   ? "true" : "false");
+  fa.printf("horizontal_walls = %s\n",     cfg.sn_horizontal_walls ? "true" : "false");
+  fa.printf("distractions = %d\n",         cfg.sn_distractions);
+  fa.printf("next_level_score = %d\n",     cfg.sn_next_level_score);
+  fa.close();
+  Serial.println("[CFG] [snake] section seeded into config.ini.");
 }
 
 // ── Generate a random 6-digit PIN at boot ─────────────────────────────────────
@@ -1183,9 +1301,12 @@ static void start_web_server()
         "<h2>&#x23F0; ESP32 Clock</h2>"
         "<div class='info'><b>IP:</b> ");
     html += ip;
-    html += F(" &nbsp; <b>URL:</b> ");
-    html += url;
-    html += F("</div>"
+    // html += F(" &nbsp; <b>URL:</b> ");
+    // html += url;
+    html += F(" &nbsp; <b>User Manual:</b> "
+        "<a href='https://andreimagic.github.io/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/user-manual.html'"
+           " target='_blank' rel='noopener' style='color:#79c0ff'>View on GitHub</a>"
+        "</div>"
 
         // ── PIN field (shared across all actions) ─────────────────────────
         "<div class='card'>"
@@ -2474,12 +2595,26 @@ static void show_battery_screen(void)
   lv_obj_align(label_adc_raw, LV_ALIGN_RIGHT_MID, -24, 4);
   lv_obj_add_flag(label_adc_raw, LV_OBJ_FLAG_IGNORE_LAYOUT);
 
-  // ── Row 3: Power-off hint ─────────────────────────────────────────────────
+  // ── Row 3: Firmware version ──────────────────────────────────────────────
+  lv_obj_t *fw_key = lv_label_create(overlay_cont);
+  lv_label_set_text(fw_key, "Firmware");
+  lv_obj_set_style_text_color(fw_key, lv_color_make(140, 140, 180), 0);
+  lv_obj_align(fw_key, LV_ALIGN_LEFT_MID, 24, 30);
+  lv_obj_add_flag(fw_key, LV_OBJ_FLAG_IGNORE_LAYOUT);
+
+  lv_obj_t *fw_val = lv_label_create(overlay_cont);
+  lv_label_set_text(fw_val, FW_VERSION);
+  lv_obj_set_style_text_font(fw_val, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(fw_val, lv_color_white(), 0);
+  lv_obj_align(fw_val, LV_ALIGN_RIGHT_MID, -24, 30);
+  lv_obj_add_flag(fw_val, LV_OBJ_FLAG_IGNORE_LAYOUT);
+
+  // ── Row 4: Power-off hint ─────────────────────────────────────────────────
   lv_obj_t *pwr_hint = lv_label_create(overlay_cont);
   lv_label_set_text(pwr_hint, LV_SYMBOL_POWER "  hold to power off");
   lv_obj_set_style_text_color(pwr_hint, lv_color_make(160, 100, 100), 0);
   lv_obj_set_style_text_opa(pwr_hint, LV_OPA_70, 0);
-  lv_obj_align(pwr_hint, LV_ALIGN_LEFT_MID, 24, 30);
+  lv_obj_align(pwr_hint, LV_ALIGN_LEFT_MID, 24, 56);
   lv_obj_add_flag(pwr_hint, LV_OBJ_FLAG_IGNORE_LAYOUT);
 
   // Long-press triggers the 5-second shutdown countdown popup
@@ -3426,6 +3561,7 @@ static void apps_close()
   metro_stop();
   tl_stop();
   lr_stop();
+  sn_stop();
   if (apps_cont) { lv_obj_del(apps_cont); apps_cont = nullptr; }
   app_subphase = 0;
 }
@@ -3440,6 +3576,7 @@ static void apps_longpress_cb(lv_event_t *e)
     app_gyro_stop();
     tl_stop();
     lr_stop();
+    sn_stop();
     app_subphase = 0;
     apps_carousel_build();
   } else {
@@ -3448,9 +3585,9 @@ static void apps_longpress_cb(lv_event_t *e)
 }
 
 static void apps_left_cb(lv_event_t *e)
-{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+6)%7;apps_carousel_build();} }
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+7)%8;apps_carousel_build();} }
 static void apps_right_cb(lv_event_t *e)
-{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+1)%7;apps_carousel_build();} }
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+1)%8;apps_carousel_build();} }
 
 // Transparent full-screen tap zone helper for game screens
 static lv_obj_t *app_tapzone(lv_obj_t *p, lv_event_cb_t cb)
@@ -4270,6 +4407,7 @@ static int   tl_score       = 0;   // letters caught this game
 static int   tl_alphabets   = 0;   // complete alphabets (score / 26)
 static int   tl_letter_idx  = 0;   // 0='a' .. 25='z'
 static bool  tl_running     = false;
+static bool  tl_paused      = false;
 static bool  tl_beat_high   = false; // did we beat high score this game?
 
 static lv_timer_t *tl_ball_timer  = nullptr;
@@ -4277,6 +4415,7 @@ static lv_timer_t *tl_gyro_timer  = nullptr;
 static lv_obj_t   *tl_field_lbl   = nullptr;   // main ASCII art label
 static lv_obj_t   *tl_score_lbl   = nullptr;   // score bar — left
 static lv_obj_t   *tl_hi_lbl      = nullptr;   // score bar — right
+static lv_obj_t   *tl_pause_pop   = nullptr;
 
 // ── Tune player types — defined here so the Arduino IDE auto-prototype
 //    injector sees TlNote before it generates prototypes for tl_play_success
@@ -4454,6 +4593,17 @@ static void tl_stop_timers()
 static void tl_popup_longpress_cb(lv_event_t *e);
 static void tl_popup_tap_cb(lv_event_t *e);
 
+// ── Pause popup ────────────────────────────────────────────────────────────────
+// tap = resume,  long-press = back to carousel
+static void tl_field_tap_cb(lv_event_t *e);
+static void tl_pause_tap_cb(lv_event_t *e);
+static void tl_pause_longpress_cb(lv_event_t *e);
+static void tl_show_pause_popup();
+static void tl_resume_game();
+// tl_resume_game() (defined below, before these callbacks) needs to see them:
+static void tl_ball_tick_cb(lv_timer_t *t);
+static void tl_gyro_tick_cb(lv_timer_t *t);
+
 static void tl_show_popup(bool new_high)
 {
   if (!apps_cont) return;
@@ -4527,6 +4677,91 @@ static void tl_popup_longpress_cb(lv_event_t *e)
   // Return to apps carousel
   app_subphase = 0;
   apps_carousel_build();
+}
+
+// ── Pause: triggered by tapping the field during active play ─────────────────
+static void tl_field_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (!tl_running || tl_paused) return;   // no-op once paused or after game-over
+
+  tl_paused = true;
+  tl_stop_timers();   // halts ball movement and paddle (gyro) ticking
+  tl_show_pause_popup();
+}
+
+// Same footprint/style as the game-over popup, just a neutral "Paused" message.
+static void tl_show_pause_popup()
+{
+  if (!apps_cont) return;
+
+  lv_obj_t *pop = lv_obj_create(apps_cont);
+  tl_pause_pop = pop;
+  lv_obj_set_size(pop, 240, 110);
+  lv_obj_align(pop, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(pop, lv_color_make(10, 14, 34), 0);
+  lv_obj_set_style_bg_opa(pop, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(pop, lv_color_make(120, 160, 220), 0);
+  lv_obj_set_style_border_width(pop, 2, 0);
+  lv_obj_set_style_radius(pop, 8, 0);
+  lv_obj_set_style_pad_all(pop, 0, 0);
+  lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(pop, tl_pause_tap_cb,       LV_EVENT_CLICKED,      nullptr);
+  lv_obj_add_event_cb(pop, tl_pause_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+
+  // Title
+  lv_obj_t *title = lv_label_create(pop);
+  lv_label_set_text(title, "Paused");
+  lv_obj_set_style_text_color(title, lv_color_make(160, 200, 255), 0);
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
+
+  // Score line
+  lv_obj_t *score_lbl = lv_label_create(pop);
+  char buf[32];
+  snprintf(buf, sizeof(buf), "Score: %d", tl_score);
+  lv_label_set_text(score_lbl, buf);
+  lv_obj_set_style_text_font(score_lbl, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(score_lbl, lv_color_white(), 0);
+  lv_obj_align(score_lbl, LV_ALIGN_CENTER, 0, 4);
+
+  // Hint
+  lv_obj_t *hint = lv_label_create(pop);
+  lv_label_set_text(hint, "tap: continue  hold: exit");
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(hint, lv_color_make(80, 80, 120), 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
+}
+
+static void tl_pause_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  tl_resume_game();
+}
+
+static void tl_pause_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  lv_indev_wait_release(lv_indev_get_act());
+  tl_running   = false;
+  tl_paused    = false;
+  tl_pause_pop = nullptr;   // apps_carousel_build() cleans apps_cont below
+  tl_stop_timers();
+  app_subphase = 0;
+  apps_carousel_build();
+}
+
+// ── Resume: tear down the pause popup and restart timers where they left off ──
+static void tl_resume_game()
+{
+  if (!tl_running || !tl_paused) return;
+
+  if (tl_pause_pop) { lv_obj_del(tl_pause_pop); tl_pause_pop = nullptr; }
+  tl_paused = false;
+
+  tl_ball_timer = lv_timer_create(tl_ball_tick_cb, tl_ball_speed_current_ms, nullptr);
+  if (imuReady)
+    tl_gyro_timer = lv_timer_create(tl_gyro_tick_cb, tl_paddle_speed_current_ms, nullptr);
 }
 
 // ── Ball step timer ───────────────────────────────────────────────────────────
@@ -4717,7 +4952,12 @@ static void tl_game_start()
 
   tl_render();
 
+  // Transparent full-screen tap zone — tap pauses the game; long-press exits
+  // (added last so it sits on top, above the field/status labels)
+  app_tapzone(apps_cont, tl_field_tap_cb);
+
   tl_running = true;
+  tl_paused  = false;
   tl_ball_speed_current_ms = cfg.tennis_ball_speed_ms;
   tl_paddle_speed_current_ms = cfg.tennis_paddle_speed_ms;
 
@@ -4738,6 +4978,8 @@ static void tl_stop()
   tl_field_lbl  = nullptr;
   tl_score_lbl  = nullptr;
   tl_hi_lbl     = nullptr;
+  tl_paused     = false;
+  tl_pause_pop  = nullptr;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -4793,6 +5035,7 @@ static int   lr_paddle_cur_size   = 0;   // current paddle width
 static int   lr_score             = 0;   // letters caught (0–26)
 static int   lr_target_idx        = 0;   // 0='a'..25='z'
 static bool  lr_running           = false;
+static bool  lr_paused            = false;
 static bool  lr_won               = false; // true after catching Z — lr_render shows ✓
 static bool  lr_target_on_screen  = false; // target letter currently active
 
@@ -4810,6 +5053,7 @@ static lv_obj_t   *lr_field_lbl   = nullptr;  // main ASCII art label
 static lv_obj_t   *lr_score_lbl   = nullptr;  // status bar left  "Score: X"
 static lv_obj_t   *lr_target_lbl  = nullptr;  // status bar centre target letter / ✓
 static lv_obj_t   *lr_last_lbl    = nullptr;  // status bar right "Last: Y"
+static lv_obj_t   *lr_pause_pop   = nullptr;
 
 static int   lr_fall_speed_ms     = 0;   // current fall timer period
 static int   lr_paddle_speed_ms   = 0;   // current gyro timer period
@@ -4818,6 +5062,14 @@ static int   lr_paddle_speed_ms   = 0;   // current gyro timer period
 static void lr_show_popup(bool won);
 static void lr_popup_tap_cb(lv_event_t *e);
 static void lr_popup_longpress_cb(lv_event_t *e);
+
+// ── Pause popup ────────────────────────────────────────────────────────────────
+// tap = resume,  long-press = back to carousel
+static void lr_field_tap_cb(lv_event_t *e);
+static void lr_pause_tap_cb(lv_event_t *e);
+static void lr_pause_longpress_cb(lv_event_t *e);
+static void lr_show_pause_popup();
+static void lr_resume_game();
 
 // ── Stop all Letters Rain timers ─────────────────────────────────────────────
 static void lr_stop_timers()
@@ -4869,7 +5121,7 @@ static void lr_render()
   // Status bar
   lv_label_set_text_fmt(lr_score_lbl, "Score: %d", lr_score);
   lv_label_set_text_fmt(lr_last_lbl,  "Last: %d",  cfg.lr_last_score);
-  // Centre label: ✓ on win, capital target letter otherwise
+  // Centre label: ✓ ("\xe2\x9c\x93") on win, capital target letter otherwise
   if (lr_won) {
     lv_label_set_text(lr_target_lbl, "OK!");
   } else {
@@ -5278,6 +5530,91 @@ static void lr_popup_longpress_cb(lv_event_t *e)
   apps_carousel_build();
 }
 
+// ── Pause: triggered by tapping the field during active play ─────────────────
+static void lr_field_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (!lr_running || lr_paused) return;   // no-op once paused or after game-over
+
+  lr_paused = true;
+  lr_stop_timers();   // halts fall and paddle (gyro) ticking
+  lr_show_pause_popup();
+}
+
+// Same footprint/style as the game-over popup, just a neutral "Paused" message.
+static void lr_show_pause_popup()
+{
+  if (!apps_cont) return;
+
+  lv_obj_t *pop = lv_obj_create(apps_cont);
+  lr_pause_pop = pop;
+  lv_obj_set_size(pop, 240, 110);
+  lv_obj_align(pop, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(pop, lv_color_make(10, 14, 34), 0);
+  lv_obj_set_style_bg_opa(pop, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(pop, lv_color_make(120, 160, 220), 0);
+  lv_obj_set_style_border_width(pop, 2, 0);
+  lv_obj_set_style_radius(pop, 8, 0);
+  lv_obj_set_style_pad_all(pop, 0, 0);
+  lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(pop, lr_pause_tap_cb,       LV_EVENT_CLICKED,      nullptr);
+  lv_obj_add_event_cb(pop, lr_pause_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+
+  // Title
+  lv_obj_t *title = lv_label_create(pop);
+  lv_label_set_text(title, "Paused");
+  lv_obj_set_style_text_color(title, lv_color_make(160, 200, 255), 0);
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
+
+  // Score line
+  lv_obj_t *score_lbl = lv_label_create(pop);
+  char buf[32];
+  snprintf(buf, sizeof(buf), "Score: %d", lr_score);
+  lv_label_set_text(score_lbl, buf);
+  lv_obj_set_style_text_font(score_lbl, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(score_lbl, lv_color_white(), 0);
+  lv_obj_align(score_lbl, LV_ALIGN_CENTER, 0, 4);
+
+  // Hint
+  lv_obj_t *hint = lv_label_create(pop);
+  lv_label_set_text(hint, "tap: continue  hold: exit");
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(hint, lv_color_make(80, 80, 120), 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
+}
+
+static void lr_pause_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  lr_resume_game();
+}
+
+static void lr_pause_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  lv_indev_wait_release(lv_indev_get_act());
+  lr_running   = false;
+  lr_paused    = false;
+  lr_pause_pop = nullptr;   // apps_carousel_build() cleans apps_cont below
+  lr_stop_timers();
+  app_subphase = 0;
+  apps_carousel_build();
+}
+
+// ── Resume: tear down the pause popup and restart timers where they left off ──
+static void lr_resume_game()
+{
+  if (!lr_running || !lr_paused) return;
+
+  if (lr_pause_pop) { lv_obj_del(lr_pause_pop); lr_pause_pop = nullptr; }
+  lr_paused = false;
+
+  lr_fall_timer = lv_timer_create(lr_fall_tick_cb, lr_fall_speed_ms, nullptr);
+  if (imuReady)
+    lr_gyro_timer = lv_timer_create(lr_gyro_tick_cb, lr_paddle_speed_ms, nullptr);
+}
+
 // ── Start / restart Letters Rain ──────────────────────────────────────────────
 static void lr_game_start()
 {
@@ -5341,8 +5678,13 @@ static void lr_game_start()
 
   lr_render();
 
+  // Transparent full-screen tap zone — tap pauses the game; long-press exits
+  // (added last so it sits on top, above the field/status labels)
+  app_tapzone(apps_cont, lr_field_tap_cb);
+
   // Start timers
   lr_running         = true;
+  lr_paused          = false;
   lr_fall_speed_ms   = cfg.lr_fall_speed_ms;
   lr_paddle_speed_ms = cfg.lr_paddle_speed_ms;
 
@@ -5363,10 +5705,865 @@ static void lr_stop()
   lr_score_lbl  = nullptr;
   lr_target_lbl = nullptr;
   lr_last_lbl   = nullptr;
+  lr_paused     = false;
+  lr_pause_pop  = nullptr;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  END LETTERS RAIN
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  SNAKE LETTERS  (apps_idx == 6)
+//
+//  Classic snake on a 40×9 ASCII grid.  The snake is a chain of '*' chars
+//  steered by tilting the device (gyro, 150 ms poll).
+//
+//  Sequence of target objects (one at a time, cycling forever):
+//    'a' → 'z' → 'a' → 'z' → ...  (sn_seq_idx % 26 gives the current letter)
+//
+//  Distraction letters (active once sn_score ≥ next_level_score):
+//    N randomly chosen lowercase letters (≠ target) placed each round.
+//    Touching any distraction ends the game immediately.
+//    All letters (target + distractions) are cleared and re-spawned fresh
+//    whenever the target is eaten.  No letter is placed within 4 cells
+//    directly ahead of the snake's current direction.
+//
+//  Snake grows by 1 each time it eats the target.
+//
+//  Special modifiers (coexist with the target, random 10-30 s intervals):
+//    '-'  → shrink by 1  (floor = snake_size)
+//    '/'  → half length  (floor = snake_size)
+//  Each modifier lives on screen for a random 10-30 s then despawns;
+//  a new one is scheduled immediately after.
+//
+//  Wall modes (from config):
+//    vertical_walls=true   → '|' at col 0 / col 39; hitting them = game over
+//    horizontal_walls=true → '-' at row 0 / row 8;  hitting them = game over
+//    walls=false           → snake wraps to the opposite edge
+//
+//  Win conditions (async tune plays, game continues):
+//    · ate 'z'  (sn_seq_idx % 26 == 0 after increment — fires every cycle)
+//    · score exceeds stored high score (fires once per game via sn_beat_high)
+//  End-game popup honours the win flag for win/lose styling.
+//
+//  Screen layout identical to Tennis Letters / Letters Rain:
+//    Field  : 40 cols × 9 rows  (dejavu_mono_14, 8×16 px per cell = 320×144 px)
+//    Status : "Score: X  [target]  Best: Y"  one line below the field
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+#define SN_COLS         40
+#define SN_ROWS          9
+#define SN_MAX_LEN     200     // practical max (≤ 266 playable cells with walls on)
+#define SN_GYRO_THRESH  0.30f  // slightly higher than TL to avoid jitter
+
+#define SN_UP    0
+#define SN_DOWN  1
+#define SN_LEFT  2
+#define SN_RIGHT 3
+
+// Phase-3 (uppercase + symbols) removed — sequence now cycles a→z forever
+#define SN_MAX_DISTRACTS 10   // hard cap on simultaneous distraction letters
+
+// ── Snake body ─────────────────────────────────────────────────────────────────
+static int   sn_body_col[SN_MAX_LEN];
+static int   sn_body_row[SN_MAX_LEN];
+static int   sn_len          = 0;
+static int   sn_dir          = SN_RIGHT;
+static int   sn_score        = 0;
+static int   sn_seq_idx      = 0;   // increments forever; sn_seq_idx % 26 → 'a'-'z'
+static bool  sn_running      = false;
+static bool  sn_paused       = false;
+static bool  sn_won          = false;
+static bool  sn_beat_high    = false;
+
+// ── Distraction letters ────────────────────────────────────────────────────────
+// Active only when sn_score >= cfg.sn_next_level_score.
+// Touching any distraction ends the game immediately.
+static int   sn_distract_col[SN_MAX_DISTRACTS];
+static int   sn_distract_row[SN_MAX_DISTRACTS];
+static char  sn_distract_ch [SN_MAX_DISTRACTS];
+static int   sn_distract_n   = 0;   // count currently on screen (0 = no distractions yet)
+
+// ── Current target ─────────────────────────────────────────────────────────────
+static int   sn_target_col   = 0;
+static int   sn_target_row   = 0;
+static char  sn_target_ch    = 'a';
+
+// ── Active modifier ────────────────────────────────────────────────────────────
+static bool  sn_mod_active   = false;
+static char  sn_mod_ch       = '-';
+static int   sn_mod_col      = 0;
+static int   sn_mod_row      = 0;
+
+// ── Current move speed (decreases as score rises) ──────────────────────────────
+static int   sn_speed_ms     = 0;
+
+// ── Timers ─────────────────────────────────────────────────────────────────────
+static lv_timer_t *sn_move_timer    = nullptr;
+static lv_timer_t *sn_gyro_timer    = nullptr;
+static lv_timer_t *sn_mod_spawn_tmr = nullptr;
+static lv_timer_t *sn_mod_death_tmr = nullptr;
+
+// ── LVGL labels ────────────────────────────────────────────────────────────────
+static lv_obj_t   *sn_field_lbl     = nullptr;
+static lv_obj_t   *sn_score_lbl     = nullptr;
+static lv_obj_t   *sn_target_lbl    = nullptr;
+static lv_obj_t   *sn_hi_lbl        = nullptr;
+static lv_obj_t   *sn_pause_pop     = nullptr;
+
+// ── Play-area bounds (walls shrink the usable grid) ───────────────────────────
+static inline int sn_col_min() { return cfg.sn_vertical_walls   ? 1 : 0; }
+static inline int sn_col_max() { return cfg.sn_vertical_walls   ? SN_COLS - 2 : SN_COLS - 1; }
+static inline int sn_row_min() { return cfg.sn_horizontal_walls ? 1 : 0; }
+static inline int sn_row_max() { return cfg.sn_horizontal_walls ? SN_ROWS - 2 : SN_ROWS - 1; }
+
+// ── Collision helper ───────────────────────────────────────────────────────────
+static bool sn_cell_on_body(int col, int row)
+{
+  for (int i = 0; i < sn_len; i++)
+    if (sn_body_col[i] == col && sn_body_row[i] == row) return true;
+  return false;
+}
+
+// ── Target always cycles a→z→a→z... forever ──────────────────────────────────
+static void sn_next_target_ch()
+{
+  sn_target_ch = (char)('a' + (sn_seq_idx % 26));
+}
+
+// ── True if (col,row) lies within min_gap steps directly ahead of the snake head
+// Used during spawning to enforce the 4-cell clearance zone so the player can
+// always react before hitting a freshly-placed letter.
+static bool sn_is_blocked_ahead(int col, int row, int min_gap)
+{
+  int hc = sn_body_col[0], hr = sn_body_row[0];
+  switch (sn_dir) {
+    case SN_RIGHT: return (row == hr) && (col >  hc) && (col - hc <= min_gap);
+    case SN_LEFT:  return (row == hr) && (col <  hc) && (hc - col <= min_gap);
+    case SN_DOWN:  return (col == hc) && (row >  hr) && (row - hr <= min_gap);
+    case SN_UP:    return (col == hc) && (row <  hr) && (hr - row <= min_gap);
+    default:       return false;
+  }
+}
+
+// ── Spawn target + distractions in one call ───────────────────────────────────
+// Called at game-start and every time the target is eaten.
+// Distractions appear only once sn_score >= cfg.sn_next_level_score.
+// All positions respect a 4-cell clearance directly ahead of the snake head.
+static void sn_spawn_all_letters()
+{
+  sn_next_target_ch();
+
+  int cmin = sn_col_min(), cmax = sn_col_max(), cw = cmax - cmin + 1;
+  int rmin = sn_row_min(), rmax = sn_row_max(), rh = rmax - rmin + 1;
+  int attempts;
+
+  // ── Target ────────────────────────────────────────────────────────────────
+  attempts = 0;
+  do {
+    sn_target_col = cmin + random(cw);
+    sn_target_row = rmin + random(rh);
+    attempts++;
+  } while (attempts < 300 &&
+           (sn_cell_on_body(sn_target_col, sn_target_row) ||
+            sn_is_blocked_ahead(sn_target_col, sn_target_row, 4) ||
+            (sn_mod_active &&
+             sn_target_col == sn_mod_col &&
+             sn_target_row == sn_mod_row)));
+
+  // ── Distractions ──────────────────────────────────────────────────────────
+  int n_want = (sn_score >= cfg.sn_next_level_score)
+               ? min(cfg.sn_distractions, SN_MAX_DISTRACTS)
+               : 0;
+  sn_distract_n = 0;
+
+  if (n_want > 0) {
+    // Pool: all lowercase letters except the current target — 25 candidates
+    char pool[25];
+    int  pool_sz = 0;
+    for (char c = 'a'; c <= 'z'; c++)
+      if (c != sn_target_ch) pool[pool_sz++] = c;
+
+    // Fisher-Yates shuffle — pick the first n_want entries at random
+    for (int i = pool_sz - 1; i > 0; i--) {
+      int j = random(i + 1);
+      char tmp = pool[i]; pool[i] = pool[j]; pool[j] = tmp;
+    }
+
+    for (int d = 0; d < n_want; d++) {
+      attempts = 0;
+      int dc_col, dc_row;
+      do {
+        dc_col = cmin + random(cw);
+        dc_row = rmin + random(rh);
+        attempts++;
+        if (attempts >= 300) break;   // give up gracefully on crowded boards
+        if (sn_cell_on_body(dc_col, dc_row))                   continue;
+        if (sn_is_blocked_ahead(dc_col, dc_row, 4))             continue;
+        if (dc_col == sn_target_col && dc_row == sn_target_row) continue;
+        if (sn_mod_active && dc_col == sn_mod_col &&
+                             dc_row == sn_mod_row)              continue;
+        // Must not overlap already-placed distractions
+        bool clash = false;
+        for (int k = 0; k < sn_distract_n; k++)
+          if (sn_distract_col[k] == dc_col && sn_distract_row[k] == dc_row)
+            { clash = true; break; }
+        if (!clash) break;
+      } while (true);
+
+      sn_distract_col[sn_distract_n] = dc_col;
+      sn_distract_row[sn_distract_n] = dc_row;
+      sn_distract_ch [sn_distract_n] = pool[d];
+      sn_distract_n++;
+    }
+  }
+}
+
+// ── Spawn modifier at a random free cell ──────────────────────────────────────
+static void sn_spawn_modifier()
+{
+  int cmin = sn_col_min(), cw = sn_col_max() - cmin + 1;
+  int rmin = sn_row_min(), rh = sn_row_max() - rmin + 1;
+  for (int attempts = 0; attempts < 300; attempts++) {
+    sn_mod_col = cmin + random(cw);
+    sn_mod_row = rmin + random(rh);
+    if (sn_cell_on_body(sn_mod_col, sn_mod_row))                     continue;
+    if (sn_mod_col == sn_target_col && sn_mod_row == sn_target_row)  continue;
+    bool clash = false;
+    for (int d = 0; d < sn_distract_n; d++)
+      if (sn_mod_col == sn_distract_col[d] && sn_mod_row == sn_distract_row[d])
+        { clash = true; break; }
+    if (!clash) break;
+  }
+  sn_mod_ch     = (random(2) == 0) ? '-' : '/';
+  sn_mod_active = true;
+}
+
+// ── Render the full field and status bar ──────────────────────────────────────
+static void sn_render()
+{
+  if (!sn_field_lbl || !sn_score_lbl || !sn_target_lbl || !sn_hi_lbl) return;
+
+  // Grid buffer: SN_ROWS rows, each SN_COLS chars + '\n', plus '\0'
+  static char grid[SN_ROWS * (SN_COLS + 1) + 2];
+  int pos = 0;
+
+  for (int row = 0; row < SN_ROWS; row++) {
+    for (int col = 0; col < SN_COLS; col++) {
+      char ch = ' ';
+
+      bool top_wall  = (cfg.sn_horizontal_walls && row == 0);
+      bool bot_wall  = (cfg.sn_horizontal_walls && row == SN_ROWS - 1);
+      bool left_wall = (cfg.sn_vertical_walls   && col == 0);
+      bool rght_wall = (cfg.sn_vertical_walls   && col == SN_COLS - 1);
+
+      if (top_wall || bot_wall) {
+        ch = '-';
+      } else if (left_wall || rght_wall) {
+        ch = '|';
+      } else {
+        // Snake body — head is index 0
+        bool on_snake = false;
+        for (int i = 0; i < sn_len; i++) {
+          if (sn_body_col[i] == col && sn_body_row[i] == row) {
+            ch = '*'; on_snake = true; break;
+          }
+        }
+        if (!on_snake) {
+          if (col == sn_target_col && row == sn_target_row) {
+            ch = sn_target_ch;
+          } else if (sn_mod_active &&
+                     col == sn_mod_col && row == sn_mod_row) {
+            ch = sn_mod_ch;
+          } else {
+            // Distraction letters (deadly on contact)
+            for (int d = 0; d < sn_distract_n; d++) {
+              if (sn_distract_col[d] == col && sn_distract_row[d] == row) {
+                ch = sn_distract_ch[d]; break;
+              }
+            }
+          }
+        }
+      }
+      grid[pos++] = ch;
+    }
+    if (row < SN_ROWS - 1) grid[pos++] = '\n';
+  }
+  grid[pos] = '\0';
+  lv_label_set_text(sn_field_lbl, grid);
+
+  // Status bar
+  lv_label_set_text_fmt(sn_score_lbl, "Score: %d", sn_score);
+  char tbuf[4]; snprintf(tbuf, sizeof(tbuf), "%c", (char)(sn_target_ch - 'a' + 'A'));
+  lv_label_set_text(sn_target_lbl, tbuf);
+  lv_label_set_text_fmt(sn_hi_lbl, "Best: %d", cfg.sn_high_score);
+}
+
+// ── Beep helper (non-blocking) ────────────────────────────────────────────────
+static void sn_beep()
+{
+  if (!cfg.menu_sounds) return;
+  ledcChangeFrequency(BUZZER_PIN, 600, 8);
+  ledcWrite(BUZZER_PIN, 80);
+  lv_timer_t *off = lv_timer_create([](lv_timer_t *t){
+    ledcWrite(BUZZER_PIN, 0);
+    ledcChangeFrequency(BUZZER_PIN, 2000, 8);
+    lv_timer_del(t);
+  }, 30, nullptr);
+  lv_timer_set_repeat_count(off, 1);
+}
+
+// ── Async tune helpers (reuse Tennis Letters engine) ──────────────────────────
+static void sn_play_success()
+{
+  if (!cfg.menu_sounds) return;
+  tl_tune_notes = SUCCESS_TUNE;
+  tl_tune_total = 12;
+  tl_tune_step  = 0;
+  lv_timer_t *t = lv_timer_create(tl_tune_tick_cb, 1, nullptr);
+  lv_timer_set_repeat_count(t, -1);
+}
+
+static void sn_play_failure()
+{
+  if (!cfg.menu_sounds) return;
+  tl_tune_notes = FAILURE_TUNE;
+  tl_tune_total = 2;
+  tl_tune_step  = 0;
+  lv_timer_t *t = lv_timer_create(tl_tune_tick_cb, 1, nullptr);
+  lv_timer_set_repeat_count(t, -1);
+}
+
+// ── Stop all timers ───────────────────────────────────────────────────────────
+static void sn_stop_timers()
+{
+  if (sn_move_timer)    { lv_timer_del(sn_move_timer);    sn_move_timer    = nullptr; }
+  if (sn_gyro_timer)    { lv_timer_del(sn_gyro_timer);    sn_gyro_timer    = nullptr; }
+  if (sn_mod_spawn_tmr) { lv_timer_del(sn_mod_spawn_tmr); sn_mod_spawn_tmr = nullptr; }
+  if (sn_mod_death_tmr) { lv_timer_del(sn_mod_death_tmr); sn_mod_death_tmr = nullptr; }
+}
+
+// ── Stop Snake (called from apps_close / apps_longpress_cb) ───────────────────
+static void sn_stop()
+{
+  sn_running = false;
+  sn_stop_timers();
+  tl_tune_notes = nullptr;
+  ledcWrite(BUZZER_PIN, 0);
+  ledcChangeFrequency(BUZZER_PIN, 2000, 8);
+  sn_field_lbl  = nullptr;
+  sn_score_lbl  = nullptr;
+  sn_target_lbl = nullptr;
+  sn_hi_lbl     = nullptr;
+  sn_paused     = false;
+  sn_pause_pop  = nullptr;
+}
+
+// ── Forward declarations for Step-3 timer callbacks ───────────────────────────
+static void sn_move_tick_cb(lv_timer_t *t);
+static void sn_gyro_tick_cb(lv_timer_t *t);
+static void sn_mod_spawn_cb(lv_timer_t *t);
+static void sn_mod_death_cb(lv_timer_t *t);
+
+// ── Game-over / win popup ─────────────────────────────────────────────────────
+// tap = restart,  long-press = back to carousel
+static void sn_popup_tap_cb(lv_event_t *e);
+static void sn_popup_longpress_cb(lv_event_t *e);
+static void sn_game_start();
+
+// ── Pause popup ────────────────────────────────────────────────────────────────
+// tap = resume,  long-press = back to carousel
+static void sn_field_tap_cb(lv_event_t *e);
+static void sn_pause_tap_cb(lv_event_t *e);
+static void sn_pause_longpress_cb(lv_event_t *e);
+static void sn_show_pause_popup();
+static void sn_resume_game();
+
+static void sn_show_popup(bool won)
+{
+  if (!apps_cont) return;
+
+  lv_obj_t *pop = lv_obj_create(apps_cont);
+  lv_obj_set_size(pop, 240, 110);
+  lv_obj_align(pop, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(pop, lv_color_make(10, 14, 34), 0);
+  lv_obj_set_style_bg_opa(pop, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(pop,
+    won ? lv_color_make(60, 200, 100) : lv_color_make(60, 120, 220), 0);
+  lv_obj_set_style_border_width(pop, 2, 0);
+  lv_obj_set_style_radius(pop, 8, 0);
+  lv_obj_set_style_pad_all(pop, 0, 0);
+  lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(pop, sn_popup_tap_cb,       LV_EVENT_CLICKED,      nullptr);
+  lv_obj_add_event_cb(pop, sn_popup_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+
+  // Title
+  lv_obj_t *title = lv_label_create(pop);
+  if (sn_beat_high) {
+    lv_label_set_text(title, "New High Score!");
+    lv_obj_set_style_text_color(title, lv_color_make(255, 220, 60), 0);
+  } else if (won) {
+    lv_label_set_text(title, "You Won!");
+    lv_obj_set_style_text_color(title, lv_color_make(80, 240, 120), 0);
+  } else {
+    lv_label_set_text(title, "Game Over");
+    lv_obj_set_style_text_color(title, lv_color_make(220, 80, 80), 0);
+  }
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
+
+  // Score line
+  lv_obj_t *score_lbl = lv_label_create(pop);
+  char buf[40];
+  snprintf(buf, sizeof(buf), "%d eaten", sn_score);
+  lv_label_set_text(score_lbl, buf);
+  lv_obj_set_style_text_font(score_lbl, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(score_lbl, lv_color_white(), 0);
+  lv_obj_align(score_lbl, LV_ALIGN_CENTER, 0, -8);
+
+  // Best score line
+  lv_obj_t *hi_lbl = lv_label_create(pop);
+  snprintf(buf, sizeof(buf), "Best: %d", cfg.sn_high_score);
+  lv_label_set_text(hi_lbl, buf);
+  lv_obj_set_style_text_font(hi_lbl, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(hi_lbl, lv_color_make(160, 200, 255), 0);
+  lv_obj_align(hi_lbl, LV_ALIGN_CENTER, 0, 16);
+
+  // Hint
+  lv_obj_t *hint = lv_label_create(pop);
+  lv_label_set_text(hint, "tap: play again  hold: exit");
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(hint, lv_color_make(80, 80, 120), 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
+}
+
+static void sn_popup_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  sn_game_start();
+}
+
+static void sn_popup_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  lv_indev_wait_release(lv_indev_get_act());
+  sn_running = false;
+  sn_stop_timers();
+  app_subphase = 0;
+  apps_carousel_build();
+}
+
+// ── Pause: triggered by tapping the field during active play ─────────────────
+static void sn_field_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (!sn_running || sn_paused) return;   // no-op once paused or after game-over
+
+  sn_paused = true;
+  sn_stop_timers();   // halts movement, gyro polling, and modifier scheduling
+  sn_show_pause_popup();
+}
+
+// Same footprint/style as the game-over popup, just a neutral "Paused" message.
+static void sn_show_pause_popup()
+{
+  if (!apps_cont) return;
+
+  lv_obj_t *pop = lv_obj_create(apps_cont);
+  sn_pause_pop = pop;
+  lv_obj_set_size(pop, 240, 110);
+  lv_obj_align(pop, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(pop, lv_color_make(10, 14, 34), 0);
+  lv_obj_set_style_bg_opa(pop, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(pop, lv_color_make(120, 160, 220), 0);
+  lv_obj_set_style_border_width(pop, 2, 0);
+  lv_obj_set_style_radius(pop, 8, 0);
+  lv_obj_set_style_pad_all(pop, 0, 0);
+  lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(pop, sn_pause_tap_cb,       LV_EVENT_CLICKED,      nullptr);
+  lv_obj_add_event_cb(pop, sn_pause_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+
+  // Title
+  lv_obj_t *title = lv_label_create(pop);
+  lv_label_set_text(title, "Paused");
+  lv_obj_set_style_text_color(title, lv_color_make(160, 200, 255), 0);
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
+
+  // Score line
+  lv_obj_t *score_lbl = lv_label_create(pop);
+  char buf[40];
+  snprintf(buf, sizeof(buf), "Score: %d", sn_score);
+  lv_label_set_text(score_lbl, buf);
+  lv_obj_set_style_text_font(score_lbl, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(score_lbl, lv_color_white(), 0);
+  lv_obj_align(score_lbl, LV_ALIGN_CENTER, 0, 4);
+
+  // Hint
+  lv_obj_t *hint = lv_label_create(pop);
+  lv_label_set_text(hint, "tap: continue  hold: exit");
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(hint, lv_color_make(80, 80, 120), 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
+}
+
+static void sn_pause_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  sn_resume_game();
+}
+
+static void sn_pause_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  lv_indev_wait_release(lv_indev_get_act());
+  sn_running   = false;
+  sn_paused    = false;
+  sn_pause_pop = nullptr;   // apps_carousel_build() cleans apps_cont below
+  sn_stop_timers();
+  app_subphase = 0;
+  apps_carousel_build();
+}
+
+// ── Resume: tear down the pause popup and restart timers where they left off ──
+static void sn_resume_game()
+{
+  if (!sn_running || !sn_paused) return;
+
+  if (sn_pause_pop) { lv_obj_del(sn_pause_pop); sn_pause_pop = nullptr; }
+  sn_paused = false;
+
+  sn_move_timer = lv_timer_create(sn_move_tick_cb, sn_speed_ms, nullptr);
+  if (imuReady)
+    sn_gyro_timer = lv_timer_create(sn_gyro_tick_cb, 150, nullptr);
+
+  // Modifier timers were cleared on pause — pick up on a fresh random window
+  // rather than tracking exact remaining time (matches spawn-scheduling style
+  // used elsewhere in this game).
+  uint32_t ms = (uint32_t)(10 + random(21)) * 1000;
+  if (sn_mod_active) {
+    sn_mod_death_tmr = lv_timer_create(sn_mod_death_cb, ms, nullptr);
+    lv_timer_set_repeat_count(sn_mod_death_tmr, 1);
+  } else {
+    sn_mod_spawn_tmr = lv_timer_create(sn_mod_spawn_cb, ms, nullptr);
+    lv_timer_set_repeat_count(sn_mod_spawn_tmr, 1);
+  }
+}
+
+// ── Start / restart Snake Letters ─────────────────────────────────────────────
+static void sn_game_start()
+{
+  sn_stop_timers();
+  sn_running    = false;
+
+  // Reset game state
+  sn_score      = 0;
+  sn_seq_idx    = 0;
+  sn_won        = false;
+  sn_beat_high  = false;
+  sn_mod_active = false;
+  sn_distract_n = 0;
+  sn_speed_ms   = cfg.sn_speed_ms;
+
+  // Place initial snake horizontally in the centre of the play area
+  int cmin = sn_col_min(), cmax = sn_col_max();
+  int rmin = sn_row_min(), rmax = sn_row_max();
+  int mid_col = (cmin + cmax) / 2;
+  int mid_row = (rmin + rmax) / 2;
+
+  sn_len = max(1, min(cfg.sn_snake_size, SN_MAX_LEN));
+  for (int i = 0; i < sn_len; i++) {
+    sn_body_col[i] = max(cmin, mid_col - i);  // head @ mid, tail left; clamp to play area
+    sn_body_row[i] = mid_row;
+  }
+  sn_dir = SN_RIGHT;
+
+  // Set first target character (seq_idx == 0 → 'a')
+  sn_target_ch = 'a';
+
+  // Build game screen
+  lv_obj_clean(apps_cont);
+  app_subphase = 1;
+
+  // Field label — same font/metrics as Tennis Letters / Letters Rain
+  sn_field_lbl = lv_label_create(apps_cont);
+  lv_obj_set_style_text_font(sn_field_lbl, &dejavu_mono_14, 0);
+  lv_obj_set_style_text_color(sn_field_lbl, lv_color_white(), 0);
+  lv_obj_set_style_text_align(sn_field_lbl, LV_TEXT_ALIGN_LEFT, 0);
+  lv_label_set_long_mode(sn_field_lbl, LV_LABEL_LONG_CLIP);
+  lv_obj_set_pos(sn_field_lbl, TL_FIELD_X, TL_FIELD_Y);
+  lv_obj_set_size(sn_field_lbl, 320, SN_ROWS * 16 + 4);
+
+  // Status bar: Score (left) | target char (centre) | Best (right)
+  int status_y = TL_FIELD_Y + SN_ROWS * 16 + 4;
+
+  sn_score_lbl = lv_label_create(apps_cont);
+  lv_obj_set_style_text_font(sn_score_lbl, &dejavu_mono_14, 0);
+  lv_obj_set_style_text_color(sn_score_lbl, lv_color_make(180, 180, 100), 0);
+  lv_obj_set_style_text_align(sn_score_lbl, LV_TEXT_ALIGN_LEFT, 0);
+  lv_obj_set_pos(sn_score_lbl, TL_FIELD_X + 2, status_y);
+  lv_obj_set_size(sn_score_lbl, 120, 16);
+
+  sn_target_lbl = lv_label_create(apps_cont);
+  lv_obj_set_style_text_font(sn_target_lbl, &dejavu_mono_14, 0);
+  lv_obj_set_style_text_color(sn_target_lbl, lv_color_make(100, 220, 255), 0);
+  lv_obj_set_style_text_align(sn_target_lbl, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_pos(sn_target_lbl, 120, status_y);
+  lv_obj_set_size(sn_target_lbl, 80, 16);
+
+  sn_hi_lbl = lv_label_create(apps_cont);
+  lv_obj_set_style_text_font(sn_hi_lbl, &dejavu_mono_14, 0);
+  lv_obj_set_style_text_color(sn_hi_lbl, lv_color_make(180, 180, 100), 0);
+  lv_obj_set_style_text_align(sn_hi_lbl, LV_TEXT_ALIGN_RIGHT, 0);
+  lv_obj_set_pos(sn_hi_lbl, 200, status_y);
+  lv_obj_set_size(sn_hi_lbl, 118, 16);
+
+  // Transparent full-screen tap zone — tap pauses the game; long-press exits
+  // (added last so it sits on top, above the field/status labels)
+  app_tapzone(apps_cont, sn_field_tap_cb);
+
+  // Spawn first target (no distractions yet — score starts at 0)
+  sn_spawn_all_letters();
+  sn_render();
+
+  // Start move and gyro timers
+  sn_running    = true;
+  sn_paused     = false;
+  sn_move_timer = lv_timer_create(sn_move_tick_cb, sn_speed_ms, nullptr);
+  if (imuReady)
+    sn_gyro_timer = lv_timer_create(sn_gyro_tick_cb, 150, nullptr);
+
+  // Schedule first modifier spawn (random 10-30 s)
+  uint32_t first_mod_ms = (uint32_t)(10 + random(21)) * 1000;
+  sn_mod_spawn_tmr = lv_timer_create(sn_mod_spawn_cb, first_mod_ms, nullptr);
+  lv_timer_set_repeat_count(sn_mod_spawn_tmr, 1);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  SNAKE LETTERS — Step 3: Timer callbacks and game logic
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Gyro direction poll (150 ms) ──────────────────────────────────────────────
+// Dominant-axis mapping — adjust sign if device orientation feels inverted:
+//   accelY >  thresh  (tilt right)    → RIGHT
+//   accelY < -thresh  (tilt left)     → LEFT
+//   accelX >  thresh  (tilt back)     → UP
+//   accelX < -thresh  (tilt forward)  → DOWN
+// 180° reversal is always blocked (can't go LEFT→RIGHT, UP→DOWN, etc.)
+static void sn_gyro_tick_cb(lv_timer_t * /*t*/)
+{
+  if (!imuReady || !sn_running || !apps_cont) return;
+  imu.update();
+  imu.getAccel(&accelData);
+  float ax = accelData.accelX;
+  float ay = accelData.accelY;
+
+  // Dominant axis wins; both must clear the threshold
+  if (fabsf(ay) >= fabsf(ax)) {
+    if      (ay >  SN_GYRO_THRESH && sn_dir != SN_RIGHT)  sn_dir = SN_LEFT;
+    else if (ay < -SN_GYRO_THRESH && sn_dir != SN_LEFT) sn_dir = SN_RIGHT;
+  } else {
+    if      (ax >  SN_GYRO_THRESH && sn_dir != SN_UP)    sn_dir = SN_DOWN;
+    else if (ax < -SN_GYRO_THRESH && sn_dir != SN_DOWN)  sn_dir = SN_UP;
+  }
+}
+
+// ── Modifier: despawn when on-screen time expires ─────────────────────────────
+static void sn_mod_death_cb(lv_timer_t * /*t*/)
+{
+  sn_mod_death_tmr = nullptr;       // one-shot: already fired
+  if (!sn_running) return;
+  sn_mod_active = false;
+  sn_render();
+  // Schedule next modifier spawn in 10-30 s
+  uint32_t next_ms = (uint32_t)(10 + random(21)) * 1000;
+  sn_mod_spawn_tmr = lv_timer_create(sn_mod_spawn_cb, next_ms, nullptr);
+  lv_timer_set_repeat_count(sn_mod_spawn_tmr, 1);
+}
+
+// ── Modifier: place one and arm its death timer ───────────────────────────────
+static void sn_mod_spawn_cb(lv_timer_t * /*t*/)
+{
+  sn_mod_spawn_tmr = nullptr;       // one-shot: already fired
+  if (!sn_running) return;
+  sn_spawn_modifier();
+  sn_render();
+  // Modifier lives 10-30 s then auto-despawns
+  uint32_t death_ms = (uint32_t)(10 + random(21)) * 1000;
+  sn_mod_death_tmr = lv_timer_create(sn_mod_death_cb, death_ms, nullptr);
+  lv_timer_set_repeat_count(sn_mod_death_tmr, 1);
+}
+
+// ── Game-over helper: stop everything, defer tune + popup 500 ms ──────────────
+static void sn_end_game()
+{
+  sn_running = false;
+  sn_stop_timers();
+  ledcWrite(BUZZER_PIN, 0);
+
+  // Final high-score check — handles scoring that continued after the
+  // initial win trigger; also ensures sn_won is set so the popup is correct
+  if (sn_score > cfg.sn_high_score) {
+    sn_beat_high      = true;
+    sn_won            = true;   // may not have been set if only beaten here
+    cfg.sn_high_score = sn_score;
+    save_config();
+  }
+
+  sn_render();  // paint final snake position before popup appears
+
+  // Stamp the status bar with "Excellent!" after the final render
+  // (must come after sn_render() which unconditionally writes the target char)
+  if (sn_won && sn_target_lbl)
+    lv_label_set_text(sn_target_lbl, "Excellent!");
+
+  // Capture flags for the deferred lambda (statics outlive this stack frame)
+  static bool s_sn_won;
+  static bool s_sn_beat_high;
+  static bool s_sn_completed_alpha;   // true once 'z' has been eaten (seq_idx ≥ 26)
+  s_sn_won             = sn_won;
+  s_sn_beat_high       = sn_beat_high;
+  s_sn_completed_alpha = (sn_seq_idx >= 26);  // grows monotonically → correct across cycles
+
+  lv_timer_t *et = lv_timer_create([](lv_timer_t *t) {
+    lv_timer_del(t);
+    if (s_sn_beat_high) {
+      sn_play_success();          // winning tune for new high score
+    } else if (s_sn_completed_alpha) {
+      sn_play_success();          // winning tune for completing alphabet
+    } else {
+      sn_play_failure();
+    }
+    sn_show_popup(s_sn_won);
+  }, 500, nullptr);
+  lv_timer_set_repeat_count(et, 1);
+}
+
+// ── Main game loop (fires every sn_speed_ms) ──────────────────────────────────
+static void sn_move_tick_cb(lv_timer_t * /*t*/)
+{
+  if (!sn_running || !apps_cont) return;
+
+  // ── 1. Compute next head position ─────────────────────────────────────────
+  int nx = sn_body_col[0];
+  int ny = sn_body_row[0];
+  switch (sn_dir) {
+    case SN_UP:   ny--; break;
+    case SN_DOWN: ny++; break;
+    case SN_LEFT: nx--; break;
+    default:      nx++; break;    // SN_RIGHT
+  }
+
+  // ── 2. Wall collision or edge wrap ────────────────────────────────────────
+  if (cfg.sn_horizontal_walls) {
+    // sn_row_min()/max() return 1/7 with walls on — hitting 0 or 8 = dead
+    if (ny < sn_row_min() || ny > sn_row_max()) { sn_end_game(); return; }
+  } else {
+    ny = (ny + SN_ROWS) % SN_ROWS;
+  }
+  if (cfg.sn_vertical_walls) {
+    if (nx < sn_col_min() || nx > sn_col_max()) { sn_end_game(); return; }
+  } else {
+    nx = (nx + SN_COLS) % SN_COLS;
+  }
+
+  // ── 3. Self-collision ─────────────────────────────────────────────────────
+  // Exclude the tail segment [sn_len-1]: it vacates this step for a normal
+  // move.  If the head also eats the target (tail stays due to growth) and
+  // the new head somehow equals the old tail that is an accepted edge-case.
+  for (int i = 0; i < sn_len - 1; i++) {
+    if (sn_body_col[i] == nx && sn_body_row[i] == ny) { sn_end_game(); return; }
+  }
+
+  // ── 3b. Distraction letter collision → instant game over ──────────────────
+  // Checked here, before body moves, so the head cell (nx,ny) is still the
+  // incoming position — consistent with the wall and self-collision checks.
+  for (int d = 0; d < sn_distract_n; d++) {
+    if (sn_distract_col[d] == nx && sn_distract_row[d] == ny) {
+      sn_end_game(); return;
+    }
+  }
+
+  // ── 4. Detect what the new head lands on ──────────────────────────────────
+  bool ate_target   = (nx == sn_target_col && ny == sn_target_row);
+  bool ate_modifier = (sn_mod_active && nx == sn_mod_col && ny == sn_mod_row);
+
+  // ── 5. Move snake body ────────────────────────────────────────────────────
+  // Grow before the memmove so the old tail slot is preserved in the array
+  // when ate_target is true (memmove then copies sn_len-1 old segments down,
+  // keeping the tail cell occupied).
+  if (ate_target && sn_len < SN_MAX_LEN) sn_len++;
+  memmove(&sn_body_col[1], &sn_body_col[0], (sn_len - 1) * sizeof(int));
+  memmove(&sn_body_row[1], &sn_body_row[0], (sn_len - 1) * sizeof(int));
+  sn_body_col[0] = nx;
+  sn_body_row[0] = ny;
+
+  // ── 6. Process modifier ────────────────────────────────────────────────────
+  if (ate_modifier) {
+    sn_mod_active = false;
+    if (sn_mod_death_tmr) {
+      lv_timer_del(sn_mod_death_tmr);
+      sn_mod_death_tmr = nullptr;
+    }
+    int min_len = max(1, cfg.sn_snake_size);
+    if (sn_mod_ch == '-') {
+      // Shrink by 1, floor at snake_size
+      if (sn_len > min_len) sn_len--;
+    } else {
+      // '/' → half length, floor at snake_size
+      sn_len = max(min_len, sn_len / 2);
+    }
+    sn_beep();
+    // Restart modifier cycle (10-30 s until next spawn)
+    uint32_t next_ms = (uint32_t)(10 + random(21)) * 1000;
+    sn_mod_spawn_tmr = lv_timer_create(sn_mod_spawn_cb, next_ms, nullptr);
+    lv_timer_set_repeat_count(sn_mod_spawn_tmr, 1);
+  }
+
+  // ── 7. Process target letter ──────────────────────────────────────────────
+  if (ate_target) {
+    sn_score++;
+    sn_seq_idx++;
+
+    // Speed ramp: each catch makes the snake a little faster
+    if (cfg.sn_speed_change_ms > 0) {
+      sn_speed_ms = max(cfg.sn_speed_min_ms,
+                        sn_speed_ms - cfg.sn_speed_change_ms);
+      if (sn_move_timer) lv_timer_set_period(sn_move_timer, sn_speed_ms);
+    }
+
+    // Win tune fires on two independent conditions:
+    //   · completed_cycle — every time 'z' is eaten (sn_seq_idx % 26 == 0 after
+    //     incrementing, i.e. seq just crossed a multiple of 26)
+    //   · new_high — first time this game the stored high score is surpassed
+    //     (!sn_beat_high guard prevents re-firing on every subsequent letter
+    //     after the record is broken)
+    bool completed_cycle = (sn_seq_idx % 26 == 0);
+    bool new_high        = (!sn_beat_high && sn_score > cfg.sn_high_score);
+    if (completed_cycle || new_high) {
+      sn_won = true;
+      if (new_high) {
+        sn_beat_high      = true;
+        cfg.sn_high_score = sn_score;
+        save_config();
+      }
+      sn_play_success();     // async win tune — no separate beep
+    } else {
+      sn_beep();             // normal catch beep
+    }
+
+    // Spawn next target + distractions (full refresh of all letter positions)
+    sn_spawn_all_letters();
+  }
+
+  // ── 8. Repaint ────────────────────────────────────────────────────────────
+  sn_render();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  END SNAKE LETTERS
 // ══════════════════════════════════════════════════════════════════════════════
 
 // ── App start tap: coin only (rps+dice use their own starters) ────────────────
@@ -5379,7 +6576,7 @@ static void app_start_tap_cb(lv_event_t *e)
 // ── Game start screen ─────────────────────────────────────────────────────────
 static void app_screen_start()
 {
-  if (apps_idx >= 7) return;
+  if (apps_idx >= 8) return;
   app_anim_stop();
 
   if (apps_idx == 3) {
@@ -5400,6 +6597,10 @@ static void app_screen_start()
   }
   if (apps_idx == 5) {
     lr_game_start();
+    return;
+  }
+  if (apps_idx == 6) {
+    sn_game_start();
     return;
   }
 
@@ -5427,7 +6628,7 @@ static void app_screen_start()
 static void apps_tap_enter_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-  if (apps_idx == 6) {
+  if (apps_idx == 7) {
     cfg.menu_sounds = !cfg.menu_sounds;
     save_config();
     if (cfg.menu_sounds) menu_tone_hi();  // confirm it's on
@@ -5444,14 +6645,15 @@ static void apps_carousel_build()
   lv_obj_clean(apps_cont);
   app_subphase = 0;
 
-  static const struct { const char *name; const char *desc; } items[7] = {
+  static const struct { const char *name; const char *desc; } items[8] = {
     {"Rock Paper Scissors", "An interactive ASCII Game"},
     {"Rolling Dice",        "An interactive ASCII Dice"},
     {"Flip a Coin",         "An interactive ASCII Coin"},
     {"Metronome",           "Tempo keeper for musicians"},
     {nullptr,               nullptr},  // item 4 = Tennis Letters  (rendered inline)
     {nullptr,               nullptr},  // item 5 = Letters Rain    (rendered inline)
-    {nullptr,               nullptr},  // item 6 = Sounds toggle   (rendered inline)
+    {nullptr,               nullptr},  // item 6 = Snake Letters   (rendered inline)
+    {nullptr,               nullptr},  // item 7 = Sounds toggle   (rendered inline)
   };
 
   // Left arrow + zone
@@ -5482,7 +6684,7 @@ static void apps_carousel_build()
     lv_obj_add_event_cb(z,apps_right_cb,LV_EVENT_PRESSED,nullptr);
     lv_obj_add_event_cb(z,apps_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr); }
 
-  if (apps_idx == 6) {
+  if (apps_idx == 7) {
     // ── Sounds toggle (inline, mirrors WiFi toggle in settings) ──────────
     lv_obj_t *sicon = lv_label_create(apps_cont);
     lv_label_set_text(sicon, cfg.menu_sounds ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE);
@@ -5496,6 +6698,32 @@ static void apps_carousel_build()
     lv_obj_set_style_text_color(sdesc,
       cfg.menu_sounds ? lv_color_make(80,200,120) : lv_color_make(180,60,60), 0);
     lv_obj_align(sdesc, LV_ALIGN_CENTER, 0, 28);
+  } else if (apps_idx == 6) {
+    // ── Snake Letters ─────────────────────────────────────────────────────
+    lv_obj_t *name_lbl = lv_label_create(apps_cont);
+    lv_label_set_text(name_lbl, "Snake Letters");
+    lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(name_lbl, lv_color_white(), 0);
+    lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(name_lbl, 180);
+    lv_obj_set_style_text_align(name_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(name_lbl, LV_ALIGN_CENTER, 0, -14);
+
+    lv_obj_t *desc_lbl = lv_label_create(apps_cont);
+    lv_label_set_text(desc_lbl, "Eat the alphabet!");
+    lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
+    lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
+
+    if (cfg.sn_high_score > 0) {
+      lv_obj_t *hs_lbl = lv_label_create(apps_cont);
+      char hs_buf[32];
+      snprintf(hs_buf, sizeof(hs_buf), "Best: %d", cfg.sn_high_score);
+      lv_label_set_text(hs_lbl, hs_buf);
+      lv_obj_set_style_text_font(hs_lbl, &lv_font_montserrat_14, 0);
+      lv_obj_set_style_text_color(hs_lbl, lv_color_make(255, 210, 60), 0);
+      lv_obj_align(hs_lbl, LV_ALIGN_CENTER, 0, 44);
+    }
   } else if (apps_idx == 5) {
     // ── Letters Rain ──────────────────────────────────────────────────────
     lv_obj_t *name_lbl = lv_label_create(apps_cont);
@@ -5577,20 +6805,20 @@ static void apps_carousel_build()
 
   // Hint above dots
   lv_obj_t *hint = lv_label_create(apps_cont);
-  lv_label_set_text(hint, apps_idx == 6 ? "tap to toggle  .  hold to exit"
+  lv_label_set_text(hint, apps_idx == 7 ? "tap to toggle  .  hold to exit"
                                         : "tap to play  .  hold to exit");
   lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(hint, lv_color_make(70, 70, 95), 0);
   lv_obj_set_style_text_opa(hint, LV_OPA_60, 0);
   lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -18);
 
-  // 7 position dots
-  for (int i = 0; i < 7; i++) {
+  // 8 position dots  (8 × 14 px = 112 px; start at x=104 to centre on 320 px screen)
+  for (int i = 0; i < 8; i++) {
     lv_obj_t *dot = lv_label_create(apps_cont);
     lv_obj_set_style_text_font(dot, &dejavu_mono_14, 0);
     lv_label_set_text(dot, i==apps_idx ? "\xe2\x97\x8f" : "\xe2\x97\x8b");
     lv_obj_set_style_text_color(dot, i==apps_idx ? lv_color_white() : lv_color_make(80,80,100), 0);
-    lv_obj_set_pos(dot, 116 + i * 14, 156);
+    lv_obj_set_pos(dot, 104 + i * 14, 156);
   }
 }
 
@@ -6009,6 +7237,7 @@ void setup()
     load_config();
     seed_tennis_config();  // append [tennis] section if not yet present
     seed_letter_rain_config();  // append [letter_rain] section if not yet present
+    seed_snake_config();        // append [snake] section if not yet present
 
     // BUG FIX: Only restore time from log if NOT waking from a scheduled alarm
     if (!boot_from_sleep) {

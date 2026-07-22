@@ -6604,7 +6604,7 @@ static void sn_move_tick_cb(lv_timer_t * /*t*/)
 #define BN_CIRCLE_SIZE  140    // px, diameter
 #define BN_CIRCLE_Y       4    // px, top offset within apps_cont
 #define BN_STATUS_Y     148    // px, matches the status-bar row used by Tennis/Rain/Snake
-#define BN_ANIM_STEP_MS 180    // ms per cycling/reveal frame
+#define BN_ANIM_STEP_MS 250    // ms per cycling/reveal frame — matches RPS's shake-then-reveal tempo
 #define BN_GYRO_HI      1.0f   // |accelY| to trigger a tilt reveal
 #define BN_GYRO_LO      0.4f   // must fall back under this to re-arm (avoids spam while held)
 
@@ -6645,9 +6645,9 @@ static void bn_status_refresh()
 }
 
 // ── Reveal animation tick: 3 cycling frames (amber) → final number (white) ───
-// Mirrors Dice's shake-then-reveal timer exactly: menu_tone_beep() on each
-// cycling frame, menu_tone_hi() on the final reveal — the same
-// "Bip-Bip-Bip-Bop" pattern RPS/Dice already use.
+// Mirrors RPS's shake-then-reveal timer: menu_tone_beep() on each cycling
+// frame, menu_tone_hi() on the final reveal — the same "Bip-Bip-Bip-Bop"
+// pattern and 250ms/step tempo RPS uses for its own countdown-then-reveal.
 static void bn_anim_tick_cb(lv_timer_t *t)
 {
   if (!bn_num_lbl) { lv_timer_del(t); bn_anim_timer = nullptr; bn_animating = false; return; }

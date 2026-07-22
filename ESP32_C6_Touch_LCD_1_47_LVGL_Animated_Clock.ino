@@ -3389,7 +3389,7 @@ static void menu_tone_hi()   { menu_tone(NOTE_HI, 80); }
 
 // ── Apps state ────────────────────────────────────────────────────────────────
 // apps_cont declared globally above wifi_poll_cb
-static int         apps_idx       = 0;   // 0=RPS  1=Dice  2=Coin
+static int         apps_idx       = 0;   // 0=RPS 1=Dice 2=Coin 3=Metro 4=Tennis 5=Rain 6=Snake 7=Bingo 8=Sound
 static int         app_subphase   = 0;   // 0=carousel  1=game
 static lv_timer_t *app_anim_timer = nullptr;
 static lv_timer_t *app_gyro_timer = nullptr;  // shake/tilt watcher for RPS & Dice
@@ -3410,6 +3410,8 @@ static void app_screen_result(int data);
 static void app_anim_stop(void);
 static void lr_game_start(void);
 static void lr_stop(void);
+static void bn_game_start(void);
+static void bn_stop(void);
 
 // ── Math problem generator ────────────────────────────────────────────────────
 static void math_generate(char *buf, int blen, int opts[4])
@@ -3562,6 +3564,7 @@ static void apps_close()
   tl_stop();
   lr_stop();
   sn_stop();
+  bn_stop();
   if (apps_cont) { lv_obj_del(apps_cont); apps_cont = nullptr; }
   app_subphase = 0;
 }
@@ -3577,6 +3580,7 @@ static void apps_longpress_cb(lv_event_t *e)
     tl_stop();
     lr_stop();
     sn_stop();
+    bn_stop();
     app_subphase = 0;
     apps_carousel_build();
   } else {
@@ -3585,9 +3589,9 @@ static void apps_longpress_cb(lv_event_t *e)
 }
 
 static void apps_left_cb(lv_event_t *e)
-{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+7)%8;apps_carousel_build();} }
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+8)%9;apps_carousel_build();} }
 static void apps_right_cb(lv_event_t *e)
-{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+1)%8;apps_carousel_build();} }
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+1)%9;apps_carousel_build();} }
 
 // Transparent full-screen tap zone helper for game screens
 static lv_obj_t *app_tapzone(lv_obj_t *p, lv_event_cb_t cb)
@@ -6566,6 +6570,313 @@ static void sn_move_tick_cb(lv_timer_t * /*t*/)
 //  END SNAKE LETTERS
 // ══════════════════════════════════════════════════════════════════════════════
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  BINGO!  (apps_idx == 7)
+//
+//  A number caller. 1-90 are shuffled once per game (Fisher-Yates) into
+//  bn_order[]; each reveal just serves bn_order[bn_count++]. This guarantees
+//  no repeats ever, without needing an "already drawn?" check anywhere.
+//
+//  Screen layout (320×172):
+//    A large circle, centred, shows the current number in a very large font.
+//    Status bar below: "Previous: X" (left)   "Numbers left: Y" (right)
+//
+//  Input:
+//    Tap anywhere (circle or elsewhere), or tilt left/right → next number
+//    Long-press INSIDE the circle  → history popup (all numbers called)
+//    Long-press anywhere ELSE      → exit to carousel
+//
+//  All three build stages are complete:
+//    Stage 1 — data model, carousel wiring, static screen
+//    Stage 2 — cycle-and-reveal animation (3 amber frames from the remaining
+//              pool, then the real number in white), the Bip-Bip-Bip-Bop
+//              buzzer (menu_tone_beep ×3 + menu_tone_hi — same tones RPS/Dice
+//              use for their own shake-then-reveal), and tilt-left/right
+//              input via Bingo's own gyro timer
+//    Stage 3 — history popup: long-press inside the circle shows every
+//              number called so far in call order. Tap dismisses back to
+//              the game exactly where it was (no reveal is triggered);
+//              long-press on the popup exits to the carousel — the same
+//              tap/long-press convention every other popup here already uses.
+// ══════════════════════════════════════════════════════════════════════════════
+
+#define BN_TOTAL        90     // numbers 1..90
+#define BN_CIRCLE_SIZE  140    // px, diameter
+#define BN_CIRCLE_Y       4    // px, top offset within apps_cont
+#define BN_STATUS_Y     148    // px, matches the status-bar row used by Tennis/Rain/Snake
+#define BN_ANIM_STEP_MS 180    // ms per cycling/reveal frame
+#define BN_GYRO_HI      1.0f   // |accelY| to trigger a tilt reveal
+#define BN_GYRO_LO      0.4f   // must fall back under this to re-arm (avoids spam while held)
+
+static int  bn_order[BN_TOTAL];   // shuffled 1..90, filled fresh each game
+static int  bn_count      = 0;    // how many numbers have been called so far
+static bool bn_running    = false;
+static bool bn_animating  = false;  // true while the cycle-and-reveal timer is running
+static int  bn_anim_step  = 0;      // 0-2 = cycling frames, 3 = final reveal
+static bool bn_gyro_armed = true;   // hysteresis latch for tilt-to-reveal
+
+static lv_obj_t   *bn_circle     = nullptr;   // circular number display
+static lv_obj_t   *bn_num_lbl    = nullptr;   // number label inside the circle
+static lv_obj_t   *bn_prev_lbl   = nullptr;   // status bar — left  ("Previous: X")
+static lv_obj_t   *bn_left_lbl   = nullptr;   // status bar — right ("Numbers left: Y")
+static lv_obj_t   *bn_pop        = nullptr;   // history popup (long-press inside the circle)
+static lv_timer_t *bn_anim_timer = nullptr;
+static lv_timer_t *bn_gyro_timer = nullptr;
+
+// ── Shuffle 1..90 into bn_order[] (Fisher-Yates, O(n)) ────────────────────────
+static void bn_shuffle()
+{
+  for (int i = 0; i < BN_TOTAL; i++) bn_order[i] = i + 1;
+  for (int i = BN_TOTAL - 1; i > 0; i--) {
+    int j = random(i + 1);
+    int t = bn_order[i]; bn_order[i] = bn_order[j]; bn_order[j] = t;
+  }
+}
+
+// ── Refresh the status bar from bn_count ──────────────────────────────────────
+static void bn_status_refresh()
+{
+  if (!bn_prev_lbl || !bn_left_lbl) return;
+  if (bn_count >= 2)
+    lv_label_set_text_fmt(bn_prev_lbl, "Previous: %d", bn_order[bn_count - 2]);
+  else
+    lv_label_set_text(bn_prev_lbl, "Previous: -");
+  lv_label_set_text_fmt(bn_left_lbl, "Numbers left: %d", BN_TOTAL - bn_count);
+}
+
+// ── Reveal animation tick: 3 cycling frames (amber) → final number (white) ───
+// Mirrors Dice's shake-then-reveal timer exactly: menu_tone_beep() on each
+// cycling frame, menu_tone_hi() on the final reveal — the same
+// "Bip-Bip-Bip-Bop" pattern RPS/Dice already use.
+static void bn_anim_tick_cb(lv_timer_t *t)
+{
+  if (!bn_num_lbl) { lv_timer_del(t); bn_anim_timer = nullptr; bn_animating = false; return; }
+
+  if (bn_anim_step < 3) {
+    // Peek a random number from the still-remaining pool (cosmetic only —
+    // doesn't consume it; the real draw is fixed by bn_shuffle() up front).
+    int remaining = BN_TOTAL - bn_count;               // always >= 1 while animating
+    int peek = bn_order[bn_count + random(remaining)];
+    lv_obj_set_style_text_color(bn_num_lbl, lv_color_make(255, 210, 60), 0);
+    lv_label_set_text_fmt(bn_num_lbl, "%d", peek);
+    menu_tone_beep();                                    // Bip
+    bn_anim_step++;
+  } else {
+    lv_obj_set_style_text_color(bn_num_lbl, lv_color_white(), 0);
+    lv_label_set_text_fmt(bn_num_lbl, "%d", bn_order[bn_count]);
+    bn_count++;
+    bn_status_refresh();
+    menu_tone_hi();                                      // Bop
+    lv_timer_del(t);
+    bn_anim_timer = nullptr;
+    bn_animating  = false;
+    if (bn_count >= BN_TOTAL) tl_play_success();          // full house — reuse Tennis's tune engine
+  }
+}
+
+// ── Trigger a reveal — tap, circle tap, and tilt all funnel through here ─────
+static void bn_start_reveal()
+{
+  if (!bn_running || bn_animating || bn_pop || bn_count >= BN_TOTAL) return;
+  bn_animating  = true;
+  bn_anim_step  = 0;
+  bn_anim_timer = lv_timer_create(bn_anim_tick_cb, BN_ANIM_STEP_MS, nullptr);
+}
+
+// ── Tap handler shared by the full-screen zone AND the circle itself ─────────
+static void bn_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  bn_start_reveal();
+}
+
+// ── History popup: shows every number called so far, in call order ──────────
+// Same visual chrome as the other games' pause popups, just sized bigger to
+// fit a grid of up to 90 numbers in a small font. Tap dismisses and returns
+// to the game exactly where it was — no reveal is triggered. Long-press
+// exits to the carousel (mirrors sn_pause_longpress_cb / tl_pause_longpress_cb).
+static void bn_pop_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (bn_pop) { lv_obj_del(bn_pop); bn_pop = nullptr; }
+}
+
+static void bn_pop_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  lv_indev_wait_release(lv_indev_get_act());
+  bn_stop();                 // bn_pop = nullptr; apps_carousel_build() reaps the popup below
+  app_subphase = 0;
+  apps_carousel_build();
+}
+
+static void bn_show_history_popup()
+{
+  if (!apps_cont || bn_pop) return;
+
+  lv_obj_t *pop = lv_obj_create(apps_cont);
+  bn_pop = pop;
+  lv_obj_set_size(pop, 296, 156);
+  lv_obj_align(pop, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(pop, lv_color_make(10, 14, 34), 0);
+  lv_obj_set_style_bg_opa(pop, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(pop, lv_color_make(120, 160, 220), 0);
+  lv_obj_set_style_border_width(pop, 2, 0);
+  lv_obj_set_style_radius(pop, 8, 0);
+  lv_obj_set_style_pad_all(pop, 4, 0);
+  lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(pop, bn_pop_tap_cb,       LV_EVENT_CLICKED,      nullptr);
+  lv_obj_add_event_cb(pop, bn_pop_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+
+  // Title
+  lv_obj_t *title = lv_label_create(pop);
+  lv_label_set_text_fmt(title, "Called: %d / %d", bn_count, BN_TOTAL);
+  lv_obj_set_style_text_color(title, lv_color_make(160, 200, 255), 0);
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 4);
+
+  // Grid of called numbers, in the order they were drawn
+  lv_obj_t *grid = lv_label_create(pop);
+  lv_obj_set_style_text_font(grid, &dejavu_mono_8, 0);
+  lv_obj_set_style_text_color(grid, lv_color_white(), 0);
+  lv_obj_set_style_text_align(grid, LV_TEXT_ALIGN_LEFT, 0);
+  lv_label_set_long_mode(grid, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(grid, 280);
+  lv_obj_align(grid, LV_ALIGN_TOP_LEFT, 8, 26);
+
+  if (bn_count == 0) {
+    lv_label_set_text(grid, "(none yet)");
+  } else {
+    // "NN " per number, zero-padded for a clean grid — worst case 90 * 3 + 1
+    static char buf[BN_TOTAL * 3 + 1];
+    int pos = 0;
+    for (int i = 0; i < bn_count; i++)
+      pos += snprintf(buf + pos, sizeof(buf) - pos, "%02d ", bn_order[i]);
+    if (pos > 0) buf[pos - 1] = '\0';   // trim the trailing space
+    lv_label_set_text(grid, buf);
+  }
+
+  // Hint
+  lv_obj_t *hint = lv_label_create(pop);
+  lv_label_set_text(hint, "tap: back  .  hold: exit");
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(hint, lv_color_make(80, 80, 120), 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -4);
+}
+
+// ── Circle long-press: opens the history popup above ──────────────────────────
+static void bn_circle_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  if (bn_animating || bn_pop) return;   // ignore mid-animation or if already open
+  lv_indev_wait_release(lv_indev_get_act());
+  bn_show_history_popup();
+}
+
+// ── Tilt left/right → trigger a reveal (own 150ms gyro timer) ────────────────
+// Hysteresis: must cross BN_GYRO_HI to fire, then fall back under BN_GYRO_LO
+// before it can fire again, so holding the device tilted doesn't spam-generate.
+static void bn_gyro_tick_cb(lv_timer_t * /*t*/)
+{
+  if (!imuReady || !bn_running || !apps_cont) return;
+
+  imu.update();
+  imu.getAccel(&accelData);
+  float y = accelData.accelY;
+
+  if (bn_gyro_armed && fabsf(y) > BN_GYRO_HI) {
+    bn_gyro_armed = false;
+    bn_start_reveal();
+  } else if (!bn_gyro_armed && fabsf(y) < BN_GYRO_LO) {
+    bn_gyro_armed = true;
+  }
+}
+
+// ── Stop all Bingo timers ─────────────────────────────────────────────────────
+static void bn_stop_timers()
+{
+  if (bn_anim_timer) { lv_timer_del(bn_anim_timer); bn_anim_timer = nullptr; }
+  if (bn_gyro_timer) { lv_timer_del(bn_gyro_timer); bn_gyro_timer = nullptr; }
+}
+
+// ── Stop Bingo (called from apps_close / apps_longpress_cb) ───────────────────
+static void bn_stop()
+{
+  bn_running    = false;
+  bn_animating  = false;
+  bn_gyro_armed = true;
+  bn_stop_timers();
+  bn_circle    = nullptr;
+  bn_num_lbl   = nullptr;
+  bn_prev_lbl  = nullptr;
+  bn_left_lbl  = nullptr;
+  bn_pop       = nullptr;
+}
+
+// ── Start / restart Bingo ──────────────────────────────────────────────────────
+static void bn_game_start()
+{
+  bn_stop_timers();             // clear any leftover timer from a prior game
+  bn_shuffle();
+  bn_count      = 0;
+  bn_animating  = false;
+  bn_anim_step  = 0;
+  bn_gyro_armed = true;
+
+  lv_obj_clean(apps_cont);
+  app_subphase = 1;
+
+  // Full-screen tap zone FIRST (bottom of the z-order) so the circle, added
+  // right after it, sits on top and can intercept its own tap/long-press —
+  // same "layer a smaller zone on top of app_tapzone" trick, just inverted
+  // from how the pause popups sit on top of the field in the other games.
+  app_tapzone(apps_cont, bn_tap_cb);
+
+  // Circle — very large font, centred above the status bar
+  bn_circle = lv_obj_create(apps_cont);
+  lv_obj_set_size(bn_circle, BN_CIRCLE_SIZE, BN_CIRCLE_SIZE);
+  lv_obj_align(bn_circle, LV_ALIGN_TOP_MID, 0, BN_CIRCLE_Y);
+  lv_obj_set_style_radius(bn_circle, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(bn_circle, lv_color_make(20, 25, 45), 0);
+  lv_obj_set_style_bg_opa(bn_circle, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(bn_circle, 3, 0);
+  lv_obj_set_style_border_color(bn_circle, lv_color_make(80, 100, 180), 0);
+  lv_obj_set_style_pad_all(bn_circle, 0, 0);
+  lv_obj_clear_flag(bn_circle, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(bn_circle, bn_tap_cb, LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(bn_circle, bn_circle_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+
+  bn_num_lbl = lv_label_create(bn_circle);
+  lv_obj_set_style_text_font(bn_num_lbl, &montserrat_96, 0);
+  lv_obj_set_style_text_color(bn_num_lbl, lv_color_white(), 0);
+  lv_label_set_text(bn_num_lbl, "0");   // neutral placeholder — not a real ball
+  lv_obj_align(bn_num_lbl, LV_ALIGN_CENTER, 0, 0);
+
+  // Status bar: Previous (left)  /  Numbers left (right)
+  bn_prev_lbl = lv_label_create(apps_cont);
+  lv_obj_set_style_text_font(bn_prev_lbl, &dejavu_mono_14, 0);
+  lv_obj_set_style_text_color(bn_prev_lbl, lv_color_make(180, 180, 100), 0);
+  lv_obj_set_style_text_align(bn_prev_lbl, LV_TEXT_ALIGN_LEFT, 0);
+  lv_obj_set_pos(bn_prev_lbl, 4, BN_STATUS_Y);
+  lv_obj_set_size(bn_prev_lbl, 160, 16);
+
+  bn_left_lbl = lv_label_create(apps_cont);
+  lv_obj_set_style_text_font(bn_left_lbl, &dejavu_mono_14, 0);
+  lv_obj_set_style_text_color(bn_left_lbl, lv_color_make(180, 180, 100), 0);
+  lv_obj_set_style_text_align(bn_left_lbl, LV_TEXT_ALIGN_RIGHT, 0);
+  lv_obj_set_pos(bn_left_lbl, 156, BN_STATUS_Y);
+  lv_obj_set_size(bn_left_lbl, 160, 16);
+
+  bn_status_refresh();
+  bn_running = true;
+  if (imuReady)
+    bn_gyro_timer = lv_timer_create(bn_gyro_tick_cb, 150, nullptr);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  END BINGO!
+// ══════════════════════════════════════════════════════════════════════════════
+
 // ── App start tap: coin only (rps+dice use their own starters) ────────────────
 static void app_start_tap_cb(lv_event_t *e)
 {
@@ -6576,7 +6887,7 @@ static void app_start_tap_cb(lv_event_t *e)
 // ── Game start screen ─────────────────────────────────────────────────────────
 static void app_screen_start()
 {
-  if (apps_idx >= 8) return;
+  if (apps_idx >= 9) return;
   app_anim_stop();
 
   if (apps_idx == 3) {
@@ -6601,6 +6912,10 @@ static void app_screen_start()
   }
   if (apps_idx == 6) {
     sn_game_start();
+    return;
+  }
+  if (apps_idx == 7) {
+    bn_game_start();
     return;
   }
 
@@ -6628,7 +6943,7 @@ static void app_screen_start()
 static void apps_tap_enter_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-  if (apps_idx == 7) {
+  if (apps_idx == 8) {
     cfg.menu_sounds = !cfg.menu_sounds;
     save_config();
     if (cfg.menu_sounds) menu_tone_hi();  // confirm it's on
@@ -6645,7 +6960,7 @@ static void apps_carousel_build()
   lv_obj_clean(apps_cont);
   app_subphase = 0;
 
-  static const struct { const char *name; const char *desc; } items[8] = {
+  static const struct { const char *name; const char *desc; } items[9] = {
     {"Rock Paper Scissors", "An interactive ASCII Game"},
     {"Rolling Dice",        "An interactive ASCII Dice"},
     {"Flip a Coin",         "An interactive ASCII Coin"},
@@ -6653,7 +6968,8 @@ static void apps_carousel_build()
     {nullptr,               nullptr},  // item 4 = Tennis Letters  (rendered inline)
     {nullptr,               nullptr},  // item 5 = Letters Rain    (rendered inline)
     {nullptr,               nullptr},  // item 6 = Snake Letters   (rendered inline)
-    {nullptr,               nullptr},  // item 7 = Sounds toggle   (rendered inline)
+    {nullptr,               nullptr},  // item 7 = Bingo!          (rendered inline)
+    {nullptr,               nullptr},  // item 8 = Sounds toggle   (rendered inline)
   };
 
   // Left arrow + zone
@@ -6684,7 +7000,7 @@ static void apps_carousel_build()
     lv_obj_add_event_cb(z,apps_right_cb,LV_EVENT_PRESSED,nullptr);
     lv_obj_add_event_cb(z,apps_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr); }
 
-  if (apps_idx == 7) {
+  if (apps_idx == 8) {
     // ── Sounds toggle (inline, mirrors WiFi toggle in settings) ──────────
     lv_obj_t *sicon = lv_label_create(apps_cont);
     lv_label_set_text(sicon, cfg.menu_sounds ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE);
@@ -6698,6 +7014,22 @@ static void apps_carousel_build()
     lv_obj_set_style_text_color(sdesc,
       cfg.menu_sounds ? lv_color_make(80,200,120) : lv_color_make(180,60,60), 0);
     lv_obj_align(sdesc, LV_ALIGN_CENTER, 0, 28);
+  } else if (apps_idx == 7) {
+    // ── Bingo! ────────────────────────────────────────────────────────────
+    lv_obj_t *name_lbl = lv_label_create(apps_cont);
+    lv_label_set_text(name_lbl, "Bingo!");
+    lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(name_lbl, lv_color_white(), 0);
+    lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(name_lbl, 180);
+    lv_obj_set_style_text_align(name_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(name_lbl, LV_ALIGN_CENTER, 0, -14);
+
+    lv_obj_t *desc_lbl = lv_label_create(apps_cont);
+    lv_label_set_text(desc_lbl, "Call the numbers!");
+    lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
+    lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
   } else if (apps_idx == 6) {
     // ── Snake Letters ─────────────────────────────────────────────────────
     lv_obj_t *name_lbl = lv_label_create(apps_cont);
@@ -6805,20 +7137,20 @@ static void apps_carousel_build()
 
   // Hint above dots
   lv_obj_t *hint = lv_label_create(apps_cont);
-  lv_label_set_text(hint, apps_idx == 7 ? "tap to toggle  .  hold to exit"
+  lv_label_set_text(hint, apps_idx == 8 ? "tap to toggle  .  hold to exit"
                                         : "tap to play  .  hold to exit");
   lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(hint, lv_color_make(70, 70, 95), 0);
   lv_obj_set_style_text_opa(hint, LV_OPA_60, 0);
   lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -18);
 
-  // 8 position dots  (8 × 14 px = 112 px; start at x=104 to centre on 320 px screen)
-  for (int i = 0; i < 8; i++) {
+  // 9 position dots  (9 × 14 px = 126 px; start at x=97 to centre on 320 px screen)
+  for (int i = 0; i < 9; i++) {
     lv_obj_t *dot = lv_label_create(apps_cont);
     lv_obj_set_style_text_font(dot, &dejavu_mono_14, 0);
     lv_label_set_text(dot, i==apps_idx ? "\xe2\x97\x8f" : "\xe2\x97\x8b");
     lv_obj_set_style_text_color(dot, i==apps_idx ? lv_color_white() : lv_color_make(80,80,100), 0);
-    lv_obj_set_pos(dot, 104 + i * 14, 156);
+    lv_obj_set_pos(dot, 97 + i * 14, 156);
   }
 }
 

@@ -6692,7 +6692,7 @@ static void bn_tap_cb(lv_event_t *e)
 
 // ── History popup: shows every number called so far, in call order ──────────
 // Same visual chrome as the other games' pause popups, just sized bigger to
-// fit a grid of up to 90 numbers in a small font. Tap dismisses and returns
+// fit a grid of up to 90 numbers at a comfortably readable size. Tap dismisses and returns
 // to the game exactly where it was — no reveal is triggered. Long-press
 // exits to the carousel (mirrors sn_pause_longpress_cb / tl_pause_longpress_cb).
 static void bn_pop_tap_cb(lv_event_t *e)
@@ -6716,14 +6716,14 @@ static void bn_show_history_popup()
 
   lv_obj_t *pop = lv_obj_create(apps_cont);
   bn_pop = pop;
-  lv_obj_set_size(pop, 296, 156);
+  lv_obj_set_size(pop, 308, 168);
   lv_obj_align(pop, LV_ALIGN_CENTER, 0, 0);
   lv_obj_set_style_bg_color(pop, lv_color_make(10, 14, 34), 0);
   lv_obj_set_style_bg_opa(pop, LV_OPA_COVER, 0);
   lv_obj_set_style_border_color(pop, lv_color_make(120, 160, 220), 0);
   lv_obj_set_style_border_width(pop, 2, 0);
   lv_obj_set_style_radius(pop, 8, 0);
-  lv_obj_set_style_pad_all(pop, 4, 0);
+  lv_obj_set_style_pad_all(pop, 3, 0);
   lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_event_cb(pop, bn_pop_tap_cb,       LV_EVENT_CLICKED,      nullptr);
   lv_obj_add_event_cb(pop, bn_pop_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
@@ -6733,16 +6733,19 @@ static void bn_show_history_popup()
   lv_label_set_text_fmt(title, "Called: %d / %d", bn_count, BN_TOTAL);
   lv_obj_set_style_text_color(title, lv_color_make(160, 200, 255), 0);
   lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 4);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 2);
 
-  // Grid of called numbers, in the order they were drawn
+  // Grid of called numbers, in the order they were drawn. dejavu_mono_14 is
+  // an 8×16px cell (same font Tennis/Rain/Snake use for their game fields),
+  // so at "NN " per number (24px) it packs 12 per row — 8 rows covers the
+  // full 90-number worst case with room to spare in the enlarged popup.
   lv_obj_t *grid = lv_label_create(pop);
-  lv_obj_set_style_text_font(grid, &dejavu_mono_8, 0);
+  lv_obj_set_style_text_font(grid, &dejavu_mono_14, 0);
   lv_obj_set_style_text_color(grid, lv_color_white(), 0);
   lv_obj_set_style_text_align(grid, LV_TEXT_ALIGN_LEFT, 0);
   lv_label_set_long_mode(grid, LV_LABEL_LONG_WRAP);
-  lv_obj_set_width(grid, 280);
-  lv_obj_align(grid, LV_ALIGN_TOP_LEFT, 8, 26);
+  lv_obj_set_width(grid, 296);
+  lv_obj_align(grid, LV_ALIGN_TOP_LEFT, 6, 20);
 
   if (bn_count == 0) {
     lv_label_set_text(grid, "(none yet)");
@@ -6756,12 +6759,13 @@ static void bn_show_history_popup()
     lv_label_set_text(grid, buf);
   }
 
-  // Hint
+  // Hint — kept small (dejavu_mono_8) so it doesn't eat into the grid's
+  // vertical budget now that the numbers themselves are the larger font.
   lv_obj_t *hint = lv_label_create(pop);
-  lv_label_set_text(hint, "tap: back  .  hold: exit");
-  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+  lv_label_set_text(hint, "tap: back . hold: exit");
+  lv_obj_set_style_text_font(hint, &dejavu_mono_8, 0);
   lv_obj_set_style_text_color(hint, lv_color_make(80, 80, 120), 0);
-  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -4);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -2);
 }
 
 // ── Circle long-press: opens the history popup above ──────────────────────────

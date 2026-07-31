@@ -2769,11 +2769,17 @@ static void open_clock_editor()
   // Time row  (montserrat_48): centred at y=24, height=48
   const int TY=24, TH=48, TA=16;  // top-row y, height, arrow height
   // Date row  (montserrat_16): centred at y=96, height=20
-  const int DY=112, DH=20, DA=12;  // date-row y, height, arrow height
-  // Time columns
-  const int HX=60,HW=60, MX=168,MW=60;
-  // Date columns
-  const int DDX=50,DDW=36, MOX=110,MOW=44, YX=180,YW=58;
+  const int DY=112, DH=20, DA=16;  // date-row y, height, arrow height
+  // Time columns — row spans 76..244, centred on x=160 (76px margin each side)
+  const int HX=76,HW=60, MX=184,MW=60;
+  // Date columns — row spans 66..254, centred on x=160 (66px margin each side)
+  const int DDX=66,DDW=36, MOX=126,MOW=44, YX=196,YW=58;
+  // Touch-zone columns: each field owns the territory out to the midpoint of the
+  // gap with its neighbour, so no dead strips remain between the fields.
+  const int ZL=40, ZR=280;                // outer margins (match the divider)
+  const int ZTM=(HX+HW+MX)/2;             // 160 — HH | mm boundary
+  const int ZD1=(DDX+DDW+MOX)/2;          // 114 — DD | MON boundary
+  const int ZD2=(MOX+MOW+YX)/2;           // 183 — MON | YYYY boundary
 
   auto mkcont=[&](int x,int w,int y,int h)->lv_obj_t*{
     lv_obj_t*cont=lv_obj_create(editor_cont);
@@ -2781,6 +2787,7 @@ static void open_clock_editor()
     lv_obj_set_style_bg_opa(cont,LV_OPA_TRANSP,0);
     lv_obj_set_style_border_width(cont,0,0); lv_obj_set_style_pad_all(cont,0,0);
     lv_obj_set_style_radius(cont,0,0); lv_obj_clear_flag(cont,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(cont,LV_OBJ_FLAG_CLICKABLE);   // decorative only — never eat a touch
     return cont;
   };
   auto mkarr=[&](int x,int w,int y,const char*s,bool small){
@@ -2802,7 +2809,7 @@ static void open_clock_editor()
   lv_obj_t*col=lv_label_create(editor_cont); lv_label_set_text(col,":");
   lv_obj_set_style_text_font(col,&lv_font_montserrat_48,0);
   lv_obj_set_style_text_color(col,lv_color_make(140,140,180),0);
-  lv_obj_set_pos(col,142,TY);
+  lv_obj_set_pos(col,158,TY);   // midpoint of the HH/mm gap, less the 2px optical nudge
 
   lv_obj_t*mc=mkcont(MX,MW,TY,TH);
   se_min_lbl=lv_label_create(mc);
@@ -2816,18 +2823,24 @@ static void open_clock_editor()
   mkarr(MX,MW,TY-TA,LV_SYMBOL_UP,false);
   mkarr(MX,MW,TY+TH,LV_SYMBOL_DOWN,false);
 
-  int t_mid = TY+TH/2;
-  se_zone(editor_cont,HX,TA,HW,t_mid-TA,se_h_up);
-  se_zone(editor_cont,HX,t_mid,HW,TY+TH-t_mid,se_h_dn);
-  se_zone(editor_cont,MX,TA,MW,t_mid-TA,se_m_up);
-  se_zone(editor_cont,MX,t_mid,MW,TY+TH-t_mid,se_m_dn);
+  // Touch zones are derived from the drawn geometry so they can't drift again:
+  //   t_top = top edge of the ▲ arrows,  t_mid = split point,
+  //   t_bot = top edge of the date ▲ arrows (hand-off to the date row).
+  int t_mid = TY+TH/2;   //  48
+  int t_top = TY-TA;     //   8  — same y as mkarr(...,TY-TA,...)
+  int t_bot = DY-DA;     //  96  — same y as mkarr(...,DY-DA,...)
+  se_zone(editor_cont,ZL, t_top,ZTM-ZL,t_mid-t_top,se_h_up);
+  se_zone(editor_cont,ZL, t_mid,ZTM-ZL,t_bot-t_mid,se_h_dn);
+  se_zone(editor_cont,ZTM,t_top,ZR-ZTM,t_mid-t_top,se_m_up);
+  se_zone(editor_cont,ZTM,t_mid,ZR-ZTM,t_bot-t_mid,se_m_dn);
 
   // ── Thin divider between time and date rows ───────────────────────────────
   lv_obj_t*div=lv_obj_create(editor_cont);
-  lv_obj_set_size(div,240,1); lv_obj_set_pos(div,40,DY-16);
+  lv_obj_set_size(div,240,1); lv_obj_set_pos(div,40,DY-DA-4);   // y=92, above date ▲
   lv_obj_set_style_bg_color(div,lv_color_make(50,60,100),0);
   lv_obj_set_style_bg_opa(div,LV_OPA_COVER,0);
   lv_obj_set_style_border_width(div,0,0); lv_obj_set_style_radius(div,0,0);
+  lv_obj_clear_flag(div,LV_OBJ_FLAG_CLICKABLE);   // sits inside the HH/mm ▼ zone
 
   // ── Date row ─────────────────────────────────────────────────────────────
   lv_obj_t*dc=mkcont(DDX,DDW,DY,DH);
@@ -2869,12 +2882,12 @@ static void open_clock_editor()
   mkarr(YX, YW, DY-DA,LV_SYMBOL_UP,true);
   mkarr(YX, YW, DY+DH+2,LV_SYMBOL_DOWN,true);
 
-  se_zone(editor_cont,DDX,DY-DA,DDW,DH/2+DA,se_day_up);
-  se_zone(editor_cont,DDX,d_mid,DDW,DH/2+DA+4,se_day_dn);
-  se_zone(editor_cont,MOX,DY-DA,MOW,DH/2+DA,se_mon_up);
-  se_zone(editor_cont,MOX,d_mid,MOW,DH/2+DA+4,se_mon_dn);
-  se_zone(editor_cont,YX, DY-DA,YW, DH/2+DA,se_yr_up);
-  se_zone(editor_cont,YX, d_mid,YW, DH/2+DA+4,se_yr_dn);
+  se_zone(editor_cont,ZL, DY-DA,ZD1-ZL, DH/2+DA,   se_day_up);
+  se_zone(editor_cont,ZL, d_mid,ZD1-ZL, DH/2+DA+4, se_day_dn);
+  se_zone(editor_cont,ZD1,DY-DA,ZD2-ZD1,DH/2+DA,   se_mon_up);
+  se_zone(editor_cont,ZD1,d_mid,ZD2-ZD1,DH/2+DA+4, se_mon_dn);
+  se_zone(editor_cont,ZD2,DY-DA,ZR-ZD2, DH/2+DA,   se_yr_up);
+  se_zone(editor_cont,ZD2,d_mid,ZR-ZD2, DH/2+DA+4, se_yr_dn);
 
   lv_obj_t*hint=lv_label_create(editor_cont);
   lv_label_set_text(hint,"hold to save & exit");

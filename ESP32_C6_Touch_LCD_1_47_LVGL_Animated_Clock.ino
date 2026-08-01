@@ -4261,7 +4261,7 @@ static void metro_build_ui()
   // Hint y=148
   //
   // Margins: 8px left/right. Button gaps: 4px.
-  // -5: w=90  +5: w=90  START: w=116  (8+90+4+90+4+116+8=320)
+  // -1: w=90  +1: w=90  START: w=116  (8+90+4+90+4+116+8=320)
   const int LM = 8;         // left margin
   const int BTN_H = 34;
   const int BTN_Y = 40;
@@ -4270,10 +4270,23 @@ static void metro_build_ui()
   const int BTN_START = 320 - LM - BTN_SM - BTN_GAP - BTN_SM - BTN_GAP - LM;  // 116
 
   // ── Row 1: Slider + BPM number ─────────────────────────────────────────────
-  // Slider: x=8, y=12, width=174, track h=12 (thin)
-  // BPM:    x=190, y=4, montserrat_24 (fits 3 digits: ~44px wide)
-  // Unit:   x=238, y=14, montserrat_14
+  // Slider track: x=20, y=12, w=174, h=12 (thin)
+  //
+  // SL_X is LM+12, NOT LM — the knob is drawn centred on the value position and
+  // overhangs the track by (knob_size>>1) + pad_left = (SL_H/2=6) + 6 = 12 px.
+  // At BPM_MIN the knob therefore reaches back to x=8, flush with the buttons
+  // below. Moving the track to LM would clip the knob off the left edge.
+  //
+  // Touch: lv_slider's constructor sets ext_click_area = LV_DPX(8) = 7 px at the
+  // default 130 DPI, and LV_OBJ_FLAG_ADV_HITTEST is not set, so the whole track
+  // is grabbable over roughly x 13..201, y 5..31 — not just the knob.
+  //
+  // BPM number: right-aligned so its right edge stays put as 60->100 adds a
+  //             third digit; only the left edge moves, next to the slider.
+  // Unit "BPM": fixed x, montserrat_14
   const int SL_X=LM+12, SL_Y=12, SL_W=174, SL_H=12;
+  const int BPM_X=190, BPM_W=64;        // right-aligned box, right edge at 254
+  const int BPM_UNIT_X=BPM_X+BPM_W+6;   // 260
 
   metro_slider = lv_slider_create(apps_cont);
   lv_obj_set_pos(metro_slider, SL_X, SL_Y);
@@ -4299,19 +4312,23 @@ static void metro_build_ui()
   lv_obj_add_event_cb(metro_slider, metro_slider_cb, LV_EVENT_VALUE_CHANGED, nullptr);
   // lv_obj_add_event_cb(metro_slider, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
 
-  // BPM value — montserrat_24: "240" = ~46px wide, 24px tall, no overlap
+  // BPM value — montserrat_24, right-aligned in a fixed BPM_W box so the digits
+  // grow leftwards. Left-aligned, "240" sits ~13px closer to the unit than "60"
+  // does, so the gap visibly tightens as the tempo is scrubbed up.
   metro_bpm_lbl = lv_label_create(apps_cont);
   char bpmBuf[8]; snprintf(bpmBuf, sizeof(bpmBuf), "%d", metro_bpm);
   lv_label_set_text(metro_bpm_lbl, bpmBuf);
   lv_obj_set_style_text_font(metro_bpm_lbl, &lv_font_montserrat_24, 0);
   lv_obj_set_style_text_color(metro_bpm_lbl, lv_color_white(), 0);
-  lv_obj_set_pos(metro_bpm_lbl, SL_X + SL_W + 20, 6);  // right of slider, vertically centred
+  lv_obj_set_pos(metro_bpm_lbl, BPM_X, 6);
+  lv_obj_set_width(metro_bpm_lbl, BPM_W);
+  lv_obj_set_style_text_align(metro_bpm_lbl, LV_TEXT_ALIGN_RIGHT, 0);
 
   lv_obj_t *bpm_unit = lv_label_create(apps_cont);
   lv_label_set_text(bpm_unit, "BPM");
   lv_obj_set_style_text_font(bpm_unit, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(bpm_unit, lv_color_make(160,160,180), 0);
-  lv_obj_set_pos(bpm_unit, SL_X + SL_W + 70, 12);  // right of BPM number
+  lv_obj_set_pos(bpm_unit, BPM_UNIT_X, 12);  // right of BPM number
 
   // ── Row 2: Full-width buttons ─────────────────────────────────────────────
   int bx = LM;

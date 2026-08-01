@@ -2769,11 +2769,17 @@ static void open_clock_editor()
   // Time row  (montserrat_48): centred at y=24, height=48
   const int TY=24, TH=48, TA=16;  // top-row y, height, arrow height
   // Date row  (montserrat_16): centred at y=96, height=20
-  const int DY=112, DH=20, DA=12;  // date-row y, height, arrow height
-  // Time columns
-  const int HX=60,HW=60, MX=168,MW=60;
-  // Date columns
-  const int DDX=50,DDW=36, MOX=110,MOW=44, YX=180,YW=58;
+  const int DY=112, DH=20, DA=16;  // date-row y, height, arrow height
+  // Time columns — row spans 76..244, centred on x=160 (76px margin each side)
+  const int HX=76,HW=60, MX=184,MW=60;
+  // Date columns — row spans 66..254, centred on x=160 (66px margin each side)
+  const int DDX=66,DDW=36, MOX=126,MOW=44, YX=196,YW=58;
+  // Touch-zone columns: each field owns the territory out to the midpoint of the
+  // gap with its neighbour, so no dead strips remain between the fields.
+  const int ZL=40, ZR=280;                // outer margins (match the divider)
+  const int ZTM=(HX+HW+MX)/2;             // 160 — HH | mm boundary
+  const int ZD1=(DDX+DDW+MOX)/2;          // 114 — DD | MON boundary
+  const int ZD2=(MOX+MOW+YX)/2;           // 183 — MON | YYYY boundary
 
   auto mkcont=[&](int x,int w,int y,int h)->lv_obj_t*{
     lv_obj_t*cont=lv_obj_create(editor_cont);
@@ -2781,6 +2787,7 @@ static void open_clock_editor()
     lv_obj_set_style_bg_opa(cont,LV_OPA_TRANSP,0);
     lv_obj_set_style_border_width(cont,0,0); lv_obj_set_style_pad_all(cont,0,0);
     lv_obj_set_style_radius(cont,0,0); lv_obj_clear_flag(cont,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(cont,LV_OBJ_FLAG_CLICKABLE);   // decorative only — never eat a touch
     return cont;
   };
   auto mkarr=[&](int x,int w,int y,const char*s,bool small){
@@ -2802,7 +2809,7 @@ static void open_clock_editor()
   lv_obj_t*col=lv_label_create(editor_cont); lv_label_set_text(col,":");
   lv_obj_set_style_text_font(col,&lv_font_montserrat_48,0);
   lv_obj_set_style_text_color(col,lv_color_make(140,140,180),0);
-  lv_obj_set_pos(col,142,TY);
+  lv_obj_set_pos(col,158,TY);   // midpoint of the HH/mm gap, less the 2px optical nudge
 
   lv_obj_t*mc=mkcont(MX,MW,TY,TH);
   se_min_lbl=lv_label_create(mc);
@@ -2816,18 +2823,24 @@ static void open_clock_editor()
   mkarr(MX,MW,TY-TA,LV_SYMBOL_UP,false);
   mkarr(MX,MW,TY+TH,LV_SYMBOL_DOWN,false);
 
-  int t_mid = TY+TH/2;
-  se_zone(editor_cont,HX,TA,HW,t_mid-TA,se_h_up);
-  se_zone(editor_cont,HX,t_mid,HW,TY+TH-t_mid,se_h_dn);
-  se_zone(editor_cont,MX,TA,MW,t_mid-TA,se_m_up);
-  se_zone(editor_cont,MX,t_mid,MW,TY+TH-t_mid,se_m_dn);
+  // Touch zones are derived from the drawn geometry so they can't drift again:
+  //   t_top = top edge of the ▲ arrows,  t_mid = split point,
+  //   t_bot = top edge of the date ▲ arrows (hand-off to the date row).
+  int t_mid = TY+TH/2;   //  48
+  int t_top = TY-TA;     //   8  — same y as mkarr(...,TY-TA,...)
+  int t_bot = DY-DA;     //  96  — same y as mkarr(...,DY-DA,...)
+  se_zone(editor_cont,ZL, t_top,ZTM-ZL,t_mid-t_top,se_h_up);
+  se_zone(editor_cont,ZL, t_mid,ZTM-ZL,t_bot-t_mid,se_h_dn);
+  se_zone(editor_cont,ZTM,t_top,ZR-ZTM,t_mid-t_top,se_m_up);
+  se_zone(editor_cont,ZTM,t_mid,ZR-ZTM,t_bot-t_mid,se_m_dn);
 
   // ── Thin divider between time and date rows ───────────────────────────────
   lv_obj_t*div=lv_obj_create(editor_cont);
-  lv_obj_set_size(div,240,1); lv_obj_set_pos(div,40,DY-16);
+  lv_obj_set_size(div,240,1); lv_obj_set_pos(div,40,DY-DA-4);   // y=92, above date ▲
   lv_obj_set_style_bg_color(div,lv_color_make(50,60,100),0);
   lv_obj_set_style_bg_opa(div,LV_OPA_COVER,0);
   lv_obj_set_style_border_width(div,0,0); lv_obj_set_style_radius(div,0,0);
+  lv_obj_clear_flag(div,LV_OBJ_FLAG_CLICKABLE);   // sits inside the HH/mm ▼ zone
 
   // ── Date row ─────────────────────────────────────────────────────────────
   lv_obj_t*dc=mkcont(DDX,DDW,DY,DH);
@@ -2869,12 +2882,12 @@ static void open_clock_editor()
   mkarr(YX, YW, DY-DA,LV_SYMBOL_UP,true);
   mkarr(YX, YW, DY+DH+2,LV_SYMBOL_DOWN,true);
 
-  se_zone(editor_cont,DDX,DY-DA,DDW,DH/2+DA,se_day_up);
-  se_zone(editor_cont,DDX,d_mid,DDW,DH/2+DA+4,se_day_dn);
-  se_zone(editor_cont,MOX,DY-DA,MOW,DH/2+DA,se_mon_up);
-  se_zone(editor_cont,MOX,d_mid,MOW,DH/2+DA+4,se_mon_dn);
-  se_zone(editor_cont,YX, DY-DA,YW, DH/2+DA,se_yr_up);
-  se_zone(editor_cont,YX, d_mid,YW, DH/2+DA+4,se_yr_dn);
+  se_zone(editor_cont,ZL, DY-DA,ZD1-ZL, DH/2+DA,   se_day_up);
+  se_zone(editor_cont,ZL, d_mid,ZD1-ZL, DH/2+DA+4, se_day_dn);
+  se_zone(editor_cont,ZD1,DY-DA,ZD2-ZD1,DH/2+DA,   se_mon_up);
+  se_zone(editor_cont,ZD1,d_mid,ZD2-ZD1,DH/2+DA+4, se_mon_dn);
+  se_zone(editor_cont,ZD2,DY-DA,ZR-ZD2, DH/2+DA,   se_yr_up);
+  se_zone(editor_cont,ZD2,d_mid,ZR-ZD2, DH/2+DA+4, se_yr_dn);
 
   lv_obj_t*hint=lv_label_create(editor_cont);
   lv_label_set_text(hint,"hold to save & exit");
@@ -4248,7 +4261,7 @@ static void metro_build_ui()
   // Hint y=148
   //
   // Margins: 8px left/right. Button gaps: 4px.
-  // -5: w=90  +5: w=90  START: w=116  (8+90+4+90+4+116+8=320)
+  // -1: w=90  +1: w=90  START: w=116  (8+90+4+90+4+116+8=320)
   const int LM = 8;         // left margin
   const int BTN_H = 34;
   const int BTN_Y = 40;
@@ -4257,10 +4270,23 @@ static void metro_build_ui()
   const int BTN_START = 320 - LM - BTN_SM - BTN_GAP - BTN_SM - BTN_GAP - LM;  // 116
 
   // ── Row 1: Slider + BPM number ─────────────────────────────────────────────
-  // Slider: x=8, y=12, width=174, track h=12 (thin)
-  // BPM:    x=190, y=4, montserrat_24 (fits 3 digits: ~44px wide)
-  // Unit:   x=238, y=14, montserrat_14
+  // Slider track: x=20, y=12, w=174, h=12 (thin)
+  //
+  // SL_X is LM+12, NOT LM — the knob is drawn centred on the value position and
+  // overhangs the track by (knob_size>>1) + pad_left = (SL_H/2=6) + 6 = 12 px.
+  // At BPM_MIN the knob therefore reaches back to x=8, flush with the buttons
+  // below. Moving the track to LM would clip the knob off the left edge.
+  //
+  // Touch: lv_slider's constructor sets ext_click_area = LV_DPX(8) = 7 px at the
+  // default 130 DPI, and LV_OBJ_FLAG_ADV_HITTEST is not set, so the whole track
+  // is grabbable over roughly x 13..201, y 5..31 — not just the knob.
+  //
+  // BPM number: right-aligned so its right edge stays put as 60->100 adds a
+  //             third digit; only the left edge moves, next to the slider.
+  // Unit "BPM": fixed x, montserrat_14
   const int SL_X=LM+12, SL_Y=12, SL_W=174, SL_H=12;
+  const int BPM_X=190, BPM_W=64;        // right-aligned box, right edge at 254
+  const int BPM_UNIT_X=BPM_X+BPM_W+6;   // 260
 
   metro_slider = lv_slider_create(apps_cont);
   lv_obj_set_pos(metro_slider, SL_X, SL_Y);
@@ -4286,19 +4312,23 @@ static void metro_build_ui()
   lv_obj_add_event_cb(metro_slider, metro_slider_cb, LV_EVENT_VALUE_CHANGED, nullptr);
   // lv_obj_add_event_cb(metro_slider, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
 
-  // BPM value — montserrat_24: "240" = ~46px wide, 24px tall, no overlap
+  // BPM value — montserrat_24, right-aligned in a fixed BPM_W box so the digits
+  // grow leftwards. Left-aligned, "240" sits ~13px closer to the unit than "60"
+  // does, so the gap visibly tightens as the tempo is scrubbed up.
   metro_bpm_lbl = lv_label_create(apps_cont);
   char bpmBuf[8]; snprintf(bpmBuf, sizeof(bpmBuf), "%d", metro_bpm);
   lv_label_set_text(metro_bpm_lbl, bpmBuf);
   lv_obj_set_style_text_font(metro_bpm_lbl, &lv_font_montserrat_24, 0);
   lv_obj_set_style_text_color(metro_bpm_lbl, lv_color_white(), 0);
-  lv_obj_set_pos(metro_bpm_lbl, SL_X + SL_W + 20, 6);  // right of slider, vertically centred
+  lv_obj_set_pos(metro_bpm_lbl, BPM_X, 6);
+  lv_obj_set_width(metro_bpm_lbl, BPM_W);
+  lv_obj_set_style_text_align(metro_bpm_lbl, LV_TEXT_ALIGN_RIGHT, 0);
 
   lv_obj_t *bpm_unit = lv_label_create(apps_cont);
   lv_label_set_text(bpm_unit, "BPM");
   lv_obj_set_style_text_font(bpm_unit, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(bpm_unit, lv_color_make(160,160,180), 0);
-  lv_obj_set_pos(bpm_unit, SL_X + SL_W + 70, 12);  // right of BPM number
+  lv_obj_set_pos(bpm_unit, BPM_UNIT_X, 12);  // right of BPM number
 
   // ── Row 2: Full-width buttons ─────────────────────────────────────────────
   int bx = LM;

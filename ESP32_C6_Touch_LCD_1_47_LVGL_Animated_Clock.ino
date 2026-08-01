@@ -1207,9 +1207,163 @@ static void start_ap_mode()
 //   POST /settime — validates PIN, applies date+time immediately to RTC
 //   POST /reboot  — validates PIN, reboots the ESP32
 //   GET  /log     — streams last_seen.txt as plain-text download (read-only)
+//   GET  /bingo   — printable bingo ticket sheet, generated in-browser (read-only)
 //
 // Runs identically in both STA and AP mode.
 // Called at most once; guarded by webServerRunning.
+// ── /bingo page ───────────────────────────────────────────────────────────────
+// A self-contained printable bingo-ticket sheet. Everything (layout + ticket
+// generation) runs client-side in the browser, so the ESP32 just serves this
+// one static blob straight out of flash via send_P() — no String building, no
+// heap churn, no per-request CPU. Fresh tickets on every load, plus a "New
+// cards" button that re-rolls without touching the device at all.
+//
+// Tickets are UK/housie style to match the 1-90 caller in the Bingo! app:
+// 3 rows x 9 columns, 15 numbers, exactly 5 per row, each column holding only
+// its own decade (col 1 = 1-9 ... col 9 = 80-90) with 1-3 numbers in it.
+// Column counts are drawn first (all start at 1, the remaining 6 distributed
+// with a cap of 3), then rows are assigned emptiest-first so every row lands
+// on exactly 5. A fixed known-valid layout is kept as a fallback so a pumped
+// RNG can never produce a malformed ticket.
+//
+// Print notes: the page is light-themed on screen so what you see is what you
+// print, grid lines are real borders (mobile browsers print background colours
+// off by default), and each ticket carries page-break-inside:avoid so a ticket
+// spills whole onto page 2 rather than being sliced in half.
+static const char BINGO_PAGE[] PROGMEM = R"HTML(<!DOCTYPE html><html><head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>Bingo Cards</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:14px/1.4 sans-serif;background:#fff;color:#000;padding:6mm}
+.bar{max-width:190mm;margin:0 auto 6mm;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.bar span{font-size:12px;color:#555;margin-right:2px}
+.b{padding:8px 12px;border:1px solid #bbb;border-radius:6px;background:#f2f2f2;
+   color:#000;font-size:13px;cursor:pointer;font-family:inherit}
+.b.on{background:#1a7f64;border-color:#1a7f64;color:#fff;font-weight:600}
+.b.act{background:#1f6feb;border-color:#1f6feb;color:#fff;font-weight:600}
+.sheet{max-width:190mm;margin:0 auto}
+.ticket{page-break-inside:avoid;break-inside:avoid}
+.lbl{font-size:8pt;letter-spacing:1px;margin-bottom:1mm}
+table{border-collapse:collapse;width:100%;table-layout:fixed}
+td{border:1.2pt solid #000;text-align:center;font-weight:700;padding:0}
+.d4 td{height:16mm;font-size:20pt}
+.d6 td{height:11mm;font-size:15pt}
+.d8 td{height:8mm;font-size:11pt}
+.d4 .ticket{margin-bottom:6mm}
+.d6 .ticket{margin-bottom:5mm}
+.d8 .ticket{margin-bottom:4mm}
+@page{size:A4 portrait;margin:10mm}
+@media print{
+  .noprint{display:none!important}
+  body{padding:0}
+  .sheet{max-width:none}
+}
+</style></head><body class='d6'>
+<div class='bar noprint'>
+  <span>Tickets per page:</span>
+  <button class='b' id='n4' onclick='setN(4)'>4</button>
+  <button class='b on' id='n6' onclick='setN(6)'>6</button>
+  <button class='b' id='n8' onclick='setN(8)'>8</button>
+  <button class='b act' onclick='build()'>New cards</button>
+  <button class='b act' onclick='window.print()'>Print</button>
+</div>
+<div class='sheet' id='sheet'></div>
+<script>
+var N=6;
+
+/* Fixed known-valid mask: rows 5/5/5, every column 1-3 numbers, total 15.
+   Only ever used if the random generator somehow fails to converge. */
+var FALLBACK=[[1,0,1,1,0,1,1,0,0],
+              [1,1,0,1,1,0,0,1,0],
+              [0,1,1,0,1,1,0,0,1]];
+
+function setN(n){
+  N=n;
+  document.body.className='d'+n;
+  var ids=[4,6,8];
+  for(var i=0;i<3;i++){
+    document.getElementById('n'+ids[i]).className=(ids[i]===n)?'b on':'b';
+  }
+  build();
+}
+
+/* Column counts: all start at 1 (=9), distribute the remaining 6, cap 3. */
+function counts(){
+  var c=[1,1,1,1,1,1,1,1,1],extra=6;
+  while(extra>0){var i=Math.floor(Math.random()*9);if(c[i]<3){c[i]++;extra--;}}
+  return c;
+}
+
+/* Place each column's numbers into rows, filling the emptiest rows first so
+   all three rows land on exactly 5. Returns null if it paints itself in. */
+function mask(c){
+  var m=[[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]];
+  var left=[5,5,5];
+  var cols=[0,1,2,3,4,5,6,7,8];
+  cols.sort(function(a,b){return c[b]-c[a];});
+  for(var i=0;i<9;i++){
+    var col=cols[i],n=c[col];
+    var rows=[0,1,2];
+    rows.sort(function(a,b){
+      if(left[b]!==left[a])return left[b]-left[a];
+      return Math.random()-0.5;
+    });
+    for(var k=0;k<n;k++){
+      var r=rows[k];
+      if(left[r]<=0)return null;
+      m[r][col]=1;left[r]--;
+    }
+  }
+  if(left[0]||left[1]||left[2])return null;
+  return m;
+}
+
+/* Build one ticket: pick the layout, then draw each column's numbers from its
+   own decade and sort them top-to-bottom (as on a real ticket). */
+function ticket(){
+  var m=null;
+  for(var a=0;a<200&&!m;a++)m=mask(counts());
+  if(!m)m=FALLBACK;
+  var g=[[],[],[]];
+  for(var col=0;col<9;col++){
+    var lo=(col===0)?1:col*10;
+    var hi=(col===8)?90:col*10+9;
+    var pool=[];
+    for(var v=lo;v<=hi;v++)pool.push(v);
+    for(var i=pool.length-1;i>0;i--){
+      var j=Math.floor(Math.random()*(i+1));
+      var t=pool[i];pool[i]=pool[j];pool[j]=t;
+    }
+    var need=0;
+    for(var r=0;r<3;r++)if(m[r][col])need++;
+    var pick=pool.slice(0,need);
+    pick.sort(function(a,b){return a-b;});
+    var k=0;
+    for(var r=0;r<3;r++)g[r][col]=m[r][col]?pick[k++]:0;
+  }
+  return g;
+}
+
+function build(){
+  var out='';
+  for(var t=0;t<N;t++){
+    var g=ticket();
+    out+="<div class='ticket'><div class='lbl'>TICKET "+(t+1)+"</div><table>";
+    for(var r=0;r<3;r++){
+      out+='<tr>';
+      for(var c=0;c<9;c++)out+='<td>'+(g[r][c]?g[r][c]:'')+'</td>';
+      out+='</tr>';
+    }
+    out+='</table></div>';
+  }
+  document.getElementById('sheet').innerHTML=out;
+}
+
+build();
+</script></body></html>)HTML";
+
 static void start_web_server()
 {
   if (webServerRunning) return;
@@ -1294,6 +1448,7 @@ static void start_web_server()
         ".reboot{background:#b62324;color:#fff}"
         ".log{background:#1f6feb;color:#fff}"
         ".time-btn{background:#6e40c9;color:#fff}"
+        ".bingo{background:#1a7f64;color:#fff}"
         ".note{font-size:11px;color:#8b949e;margin-top:8px}"
         ".err{color:#f85149;font-size:12px;margin-top:6px;display:none}"
         "hr{border:none;border-top:1px solid #30363d;margin:10px 0}"
@@ -1330,6 +1485,18 @@ static void start_web_server()
         "<a class='btn log' href='/log'>&#x1F4CB; Download Log</a>"
         "</div>"
         "<p class='err' id='cfg-err'></p>"
+        "</div>"
+
+        // ── Bingo ticket sheet ────────────────────────────────────────────
+        "<div class='card'>"
+        "<label>&#x1F3B2; Printable bingo tickets &mdash; new set every time</label>"
+        "<div class='row'>"
+        "<a class='btn bingo' href='/bingo' target='_blank' rel='noopener'>"
+        "&#x1F3AB; Bingo Cards</a>"
+        "</div>"
+        "<p class='note'>Opens a printable sheet of 3&times;9 tickets (1&ndash;90) to pair"
+        " with the Bingo! app. Choose 4, 6 or 8 per page, then use your browser's"
+        " Share &rarr; Print.</p>"
         "</div>"
 
         // ── Date / time setter ────────────────────────────────────────────
@@ -1504,6 +1671,12 @@ static void start_web_server()
     web_server.sendHeader("Content-Disposition", "attachment; filename=\"last_seen.txt\"");
     web_server.streamFile(f, "text/plain");
     f.close();
+  });
+
+  // ── GET /bingo — printable ticket sheet (no PIN — generates nothing on SD) ──
+  // Served straight from flash; the browser does all the ticket generation.
+  web_server.on("/bingo", HTTP_GET, []() {
+    web_server.send_P(200, "text/html", BINGO_PAGE);
   });
 
   web_server.begin();

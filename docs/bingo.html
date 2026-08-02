@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bingo Cards — ESP32-C6 Animated Clock</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Fira+Code&display=swap" rel="stylesheet">
+</head>
+<body>
+
+    <nav class="navbar noprint">
+        <div class="nav-container">
+            <a href="index.html" class="logo">⌚ ESP32-C6 Clock</a>
+            <div class="menu-toggle" id="mobile-menu">
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+            </div>
+            <ul class="nav-menu">
+                <li><a href="user-manual.html" class="nav-links">User Manual</a></li>
+                <li><a href="index.html#gallery" class="nav-links">Gallery</a></li>
+                <li><a href="index.html#features" class="nav-links">Features</a></li>
+                <li><a href="index.html#webconfig" class="nav-links">Web Config</a></li>
+                <li><button id="theme-toggle" class="theme-btn">🌙 Dark</button></li>
+            </ul>
+        </div>
+    </nav>
+
+    <header class="hero noprint">
+        <h1>🎱 Bingo <span>Cards</span></h1>
+        <p>Printable UK/housie-style bingo tickets — the same generator built into the clock's Web Configuration page, playable here without any hardware.</p>
+        <div class="action-buttons">
+            <a href="index.html" class="btn secondary">← Back to Home</a>
+        </div>
+    </header>
+
+    <main class="content-container">
+
+        <section id="bingo-generator">
+            <h2 class="noprint">How it works</h2>
+            <p class="noprint">Each ticket is 3 rows × 9 columns with exactly 15 numbers, 5 per row, and every column
+            restricted to its own decade (column 1 = 1&ndash;9 … column 9 = 80&ndash;90) — the standard layout used
+            to pair with the clock's on-device <strong>Bingo!</strong> caller (a 1&ndash;90 number-caller app in the
+            Apps Menu). Tickets regenerate entirely in your browser, so every load — and every tap of
+            <strong>New cards</strong> — deals a fresh set. Nothing is sent anywhere.</p>
+
+            <div class="bgc-toolbar noprint">
+                <span>Tickets per page:</span>
+                <button class="bgc-btn" id="bgc-n4">4</button>
+                <button class="bgc-btn on" id="bgc-n6">6</button>
+                <button class="bgc-btn" id="bgc-n8">8</button>
+                <button class="bgc-btn act" id="bgc-new">New cards</button>
+                <button class="bgc-btn act" id="bgc-print">🖨️ Print</button>
+            </div>
+
+            <div class="bgc-sheet bgc-d6" id="bgc-sheet"></div>
+
+            <p class="noprint" style="margin-top:1.5rem;">Tickets stay light/paper-styled regardless of the site
+            theme, so what you see above is exactly what prints. Use your browser's Print (or Share → Print on
+            mobile) once you're happy with the set.</p>
+        </section>
+
+    </main>
+
+    <footer class="noprint">
+        <p>Released under the <strong>MIT License</strong>. Do whatever you like with it.</p>
+        <p><a href="https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock" target="_blank">View project on GitHub</a></p>
+    </footer>
+
+    <script src="script.js"></script>
+    <script src="bingo.js"></script>
+</body>
+</html>

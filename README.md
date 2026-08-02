@@ -47,6 +47,8 @@ A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47
 | **Tennis Letters** | Breakout-style ASCII game. Catch cycling letters (a-z) with a tilt-controlled paddle. Score points and complete alphabets |
 | **Letters Rain** | Falling-letters ASCII game. Letters and modifiers rain in waves; catch the target letter (A→Z) with a gyro-controlled paddle. Wrong catches shrink the paddle; `+` / `-` modify its size; `*` restores the default. Miss the target letter and the game ends. Last score saved to `config.ini` |
 | **Snake Letters** | Classic snake ASCII game. Steer using tilt to eat the alphabet (a-z). Avoid distraction letters and manage length with modifiers. High scores persisted to `config.ini` |
+| **Bingo!** | On-device 1–90 number caller. Tap or tilt to draw a ball with a cycling reveal animation and buzzer; long-press the circle for a history popup of every number called. No repeats — powered by a fresh Fisher-Yates shuffle each game |
+| **Printable Bingo tickets** | Web Configuration page links to `/bingo` — a self-contained, in-browser generator for UK/housie-style 3×9 ticket sheets (1–90) to pair with the on-device caller. Fresh tickets every load, no PIN needed |
 | **Gyro shake/tilt trigger** | While playing RPS or Dice, physically shaking the device (ΔaccelZ > 1.8 g) or tilting it hard sideways (accelY > 1.0 g) restarts the game — no tap needed |
 | **Metronome** | Full-screen BPM metronome (60–240 BPM) with hardware-timer accuracy, visual beat dots, time-signature selector (2/4, 3/4, 4/4), and distinct hi/lo tones for downbeat vs weak beats |
 | **Apps sounds** | Melody on correct math answer, failure tune on wrong; beeps during animations; toggleable. Metronome always sounds regardless of this toggle |
@@ -428,15 +430,27 @@ A new PIN is generated on every power cycle — reading it requires physical acc
 
 ### Web UI
 
-The dark-themed page has three panels:
+The dark-themed page has several panels:
 
 | Panel | Action |
 |---|---|
 | **PIN field** | Enter the 6-digit PIN shown on the device. All save/apply/reboot actions require a valid PIN. |
 | **config.ini editor** | Textarea pre-filled with the current config. The WiFi password is masked as `••••••••` — leave it unchanged to keep the current password, or type a new value to update it. Tap **Save & Reload** to write the file and apply settings that don't need a reboot (alarm, timer, animation, timezone). WiFi/NTP changes take effect after a reboot. |
+| **Bingo Cards** | Opens `/bingo` in a new tab — a printable sheet of tickets for the on-device [Bingo!](#bingo) caller. No PIN needed (read-only, nothing is saved to SD). |
 | **Set date & time** | A `datetime-local` picker pre-filled with the current device time. Tap **Apply Time** to set the RTC immediately via `settimeofday()` — no reboot needed. |
 | **Reboot** | Reboots the device remotely after PIN confirmation. |
 | **Download Log** | Downloads `/last_seen.txt` — no PIN needed (read-only). |
+
+### Printable Bingo Tickets
+
+`GET /bingo` serves a self-contained, printable ticket sheet to pair with the on-device [Bingo!](#bingo) caller — no PIN required, and nothing is written to the SD card. Layout and ticket generation run entirely client-side in the browser; the ESP32 just streams one static page out of flash.
+
+- Tickets are **UK/housie style**, matching the 1–90 caller: 3 rows × 9 columns, 15 numbers per ticket, exactly 5 per row, each column restricted to its own decade (column 1 = 1–9 … column 9 = 80–90).
+- A fresh random set is generated every time the page loads. A **New cards** button re-rolls without touching the device at all.
+- Choose 4, 6, or 8 tickets per page, then use your browser's Print (Share → Print on mobile).
+- The page is light-themed on screen so what you see is what you print, and each ticket avoids being split across a page break.
+
+The exact same generator (same ticket algorithm, ported to `docs/bingo.js`) is also mirrored on the [GitHub Pages site](https://andreimagic.github.io/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/bingo.html), so anyone can print a set without owning the hardware — themed to match the rest of the docs site, tickets always rendered paper-white for a faithful print preview. The two copies are independent; mirror any change to the ticket-generation rules in both `BINGO_PAGE` (the `.ino`) and `docs/bingo.js`.
 
 ### Security model
 
@@ -510,7 +524,7 @@ A random arithmetic problem (+ − × ÷, result always < 100) is shown in large
 
 ### Apps carousel
 
-Four games plus a sounds toggle, navigated with **◀ ▶**. **Tap** to enter, **long-press** to go back.
+Eight games plus a sounds toggle, navigated with **◀ ▶**. **Tap** to enter, **long-press** to go back.
 
 ```
 ┌─────────────────────────────────────────┐
@@ -603,6 +617,17 @@ Each successive target spawns within 5–15 columns of the previous one, keeping
 
 #### Snake Letters
 Classic snake ASCII game. Steer using tilt to eat the alphabet (a-z) in order. Avoid "distraction" letters that end the game instantly. Look out for modifiers: `-` shrinks the snake, and `/` halves its length. High scores are persisted to `config.ini`.
+
+#### Bingo!
+
+An on-device number caller for playing classic 1–90 bingo with printed tickets (see [Printable Bingo Tickets](#printable-bingo-tickets) below).
+
+- A large circle in the centre of the screen shows the current ball; a status bar below shows `Previous: X` (left) and `Numbers left: Y` (right).
+- **Tap** anywhere, or **tilt left/right**, to draw the next ball.
+- Each draw plays a short cycle-and-reveal animation — three amber "peek" frames from the remaining pool followed by the real number in white — with a `Bip-Bip-Bip-Bop` buzzer pattern (silent if `[menu] sounds = false`).
+- **Long-press inside the circle** opens a history popup listing every number called so far, in call order. Tap the popup to return to the game; long-press it to exit to the carousel.
+- Numbers are drawn from a fresh Fisher-Yates shuffle of 1–90 at the start of each game, so there are never any repeats. Calling all 90 numbers ("full house") plays a success tune.
+- **Long-press anywhere outside the circle** exits to the carousel.
 
 #### Sounds toggle
 
@@ -876,6 +901,7 @@ read: 8161
 - **ASCII games** — all art is rendered using DejaVu Mono fixed-width font via LVGL labels. RPS and Dice use LVGL timer callbacks (`rps_anim_tick_cb`, `dice_anim_tick_cb`) at 250 ms intervals for consistent animation cadence. Buzzer tones use `ledcChangeFrequency()` to switch pitch without re-attaching the PWM channel.
 - **Gyro shake/tilt trigger** — `app_gyro_poll_cb()` runs as a 150 ms LVGL timer while RPS or Dice is active. It reads `accelZ` and `accelY` from the QMI8658; a Z-axis spike (|ΔaccelZ| > 1.8 g between samples) detects a physical shake, and a hard side tilt (|accelY| > 1.0 g) detects a roll gesture. Both call `app_screen_start()` identically to a screen tap. The timer is created when the game starts and deleted when leaving.
 - **Metronome** — beat timing uses two `esp_timer` hardware timers (`metro_hw_beat_cb`, `metro_hw_off_cb`) running outside the LVGL loop for µs-accurate periods. The beat callback writes directly to `ledcChangeFrequency()` (safe from timer task context) and sets a volatile flag. A 20 ms LVGL poll timer (`metro_dot_poll_cb`) reads the flag and updates dot colours on the LVGL thread. Changing BPM while running stops and restarts the periodic timer with the new `60,000,000 / bpm` µs period. Changing time signature calls `metro_build_ui()` which rebuilds only the dot row, then restarts if it was running.
+- **Bingo!** — `bn_shuffle()` runs a single Fisher-Yates pass over 1–90 into `bn_order[]` at game start, so every draw is just `bn_order[bn_count++]` with no "already called?" lookup ever needed. `bn_anim_tick_cb()` (250 ms LVGL timer) drives three cosmetic "peek" frames sampled from the remaining pool before revealing the real, already-fixed next number. Tap, the circle, and tilt (own 150 ms gyro timer, `bn_gyro_tick_cb`, hysteresis-latched on `accelY`) all funnel through the same `bn_start_reveal()`. The `/bingo` web route serves a static `PROGMEM` page — ticket generation and printing happen entirely client-side, so the request costs the ESP32 nothing beyond `send_P()`.
 - **Emotion tilt** — `zone_ul_cb` sets `emotion_tilt_active = true` and starts `tilt_timer` after opening the smile GIF. `tilt_poll_cb` branches on this flag: in emotion mode it reads both `accelX` (forward/back) and `accelY` (left/right), determines the desired GIF path, and calls `lv_gif_set_src()` on the existing widget (retrieved from `overlay_cont` user data) only when the path changes. This swaps the animation in-place with no overlay rebuild. Both the flag and the timer are cleared by `overlay_close_event_cb`.
 - **Buzzer state machine** — a single 9-step table drives both alarm and timer patterns. `buzzer_fade_after` is set by the caller for finite sequences; `buzzer_stop()` triggers `overlay_fade_and_close()` automatically after the last beep.
 - **WiFi reconnect guard** — `wifi_poll_cb()` skips `wifiMulti.run()` when any modal or overlay is open, when WiFi is manually disabled (`cfg.wifi_enabled`), and reduces attempts to every 30 s when disconnected — preventing radio lock stalls from blocking UI interaction.
@@ -909,7 +935,9 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v2.3.0 | ✅ released | PIN-protected web configuration UI — edit config, set RTC, reboot; WPA2 AP with boot-generated PIN |
 | v2.4.0 | ✅ released | Tennis Letters game: Breakout-style ASCII game with tilt-controlled paddle and alphabet cycling |
 | v2.5.0 | ✅ released | Letters Rain game: letters and modifiers fall in waves; catch the target letter (A→Z) with a gyro paddle while dodging wrong letters |
-| v2.6.0 | 🚀 new | Snake Letters game: classic snake with alphabet targets, distraction letters, and length modifiers |
+| v2.6.0 | ✅ released | Snake Letters game: classic snake with alphabet targets, distraction letters, and length modifiers |
+| v2.6.1 | ✅ released | Bugfix: Clock editor touch zones re-derived from drawn geometry, fixing dead strips and drift between the HH/mm/date fields; Metronome BPM label right-aligned so digits grow without overlapping the "BPM" unit or the slider |
+| v2.7.0 | 🚀 new | Bingo! — on-device 1–90 number caller (tap/tilt to draw, cycle-and-reveal animation, call-history popup); web-served printable UK/housie ticket sheets at `/bingo`, linked from the Web Configuration page; same generator mirrored on the docs site at `/bingo.html` |
 
 ## License
 

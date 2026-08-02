@@ -2738,10 +2738,11 @@ static void run_daily_automation(int hour, int minute)
   if (at_alarm_time) {
     bool long_uptime = (UPTIME_MS > FIVE_MIN_MS);
 
-    if (ntp_disabled && !timeSynced) {
+    if (ntp_disabled && !timeSynced && !long_uptime) {
       // Case D: AP / OFF mode. The RTC has no correction source at all, so the
       // drift is unbounded — it accrues across every deep sleep and keeps
-      // accruing while awake. Always warn, however long the device has been up.
+      // accruing while awake.
+      // `&& !long_uptime` adds a 5 min uptime check, removing that will always warn, however long the device has been up.
       Serial.printf("[ALARM] Firing at %02d:%02d with drift warning (mode=%s)\n",
                     hour, minute, wifi_cfg_mode_label());
       show_alarm_warning(ALARM_WARN_NTP_DISABLED);

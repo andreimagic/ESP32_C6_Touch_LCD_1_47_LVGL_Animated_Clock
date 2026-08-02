@@ -440,3 +440,103 @@ footer {
         max-height: 300px;
     }
 }
+
+/* --- BINGO CARDS PAGE --- */
+.bgc-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    align-items: center;
+    margin-bottom: 1.5rem;
+}
+
+.bgc-toolbar span {
+    font-size: 0.85rem;
+    color: var(--text-color);
+    opacity: 0.8;
+    margin-right: 0.25rem;
+}
+
+.bgc-btn {
+    padding: 0.5rem 0.9rem;
+    border: 2px solid var(--border-color);
+    border-radius: 6px;
+    background-color: var(--secondary-color);
+    color: var(--secondary-text);
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.bgc-btn:hover {
+    border-color: var(--primary-color);
+}
+
+.bgc-btn.on {
+    background-color: #1a7f64;
+    border-color: #1a7f64;
+    color: #fff;
+}
+
+.bgc-btn.act {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
+    color: #fff;
+}
+
+.bgc-btn.act:hover {
+    background-color: var(--primary-hover);
+}
+
+.bgc-sheet {
+    max-width: 190mm;
+    margin: 0 auto;
+    background-color: #fff;
+    padding: 6mm;
+    border-radius: 8px;
+}
+
+.bgc-ticket {
+    page-break-inside: avoid;
+    break-inside: avoid;
+}
+
+.bgc-lbl {
+    font-size: 8pt;
+    letter-spacing: 1px;
+    margin-bottom: 1mm;
+    color: #000;
+}
+
+.bgc-sheet table {
+    border-collapse: collapse;
+    width: 100%;
+    table-layout: fixed;
+    margin-top: 0;
+}
+
+.bgc-sheet td {
+    border: 1.2pt solid #000;
+    text-align: center;
+    font-weight: 700;
+    padding: 0;
+    color: #000;
+}
+
+.bgc-d4 td { height: 16mm; font-size: 20pt; }
+.bgc-d6 td { height: 11mm; font-size: 15pt; }
+.bgc-d8 td { height: 8mm;  font-size: 11pt; }
+.bgc-d4 .bgc-ticket { margin-bottom: 6mm; }
+.bgc-d6 .bgc-ticket { margin-bottom: 5mm; }
+.bgc-d8 .bgc-ticket { margin-bottom: 4mm; }
+
+@media print {
+    .noprint { display: none !important; }
+    body { padding: 0; background: #fff; }
+    .content-container { padding: 0; max-width: none; }
+    section { border: none; box-shadow: none; padding: 0; margin: 0; }
+    .bgc-sheet { max-width: none; border-radius: 0; }
+    @page { size: A4 portrait; margin: 10mm; }
+}

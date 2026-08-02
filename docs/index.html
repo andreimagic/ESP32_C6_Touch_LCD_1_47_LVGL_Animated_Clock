@@ -19,6 +19,7 @@
             </div>
             <ul class="nav-menu">
                 <li><a href="user-manual.html" class="nav-links">User Manual</a></li>
+                <li><a href="bingo.html" class="nav-links">Bingo Cards</a></li>
                 <li><a href="#gallery" class="nav-links">Gallery</a></li>
                 <li><a href="#features" class="nav-links">Features</a></li>
                 <li><a href="#hardware" class="nav-links">Hardware</a></li>
@@ -96,8 +97,10 @@
                         <tr><td><strong>AP hotspot</strong></td><td>WPA2 fallback AP (<code>ESP32-Clock</code>) with boot-generated PIN shown on the device screen — physical access required</td></tr>
                         <tr><td><strong>Battery monitor</strong></td><td>Live percentage, voltage, ADC raw — with LiPo discharge curve</td></tr>
                         <tr><td><strong>Low-power gate</strong></td><td>Refuses to boot if battery ≤ 10%, shows empty battery icon and deep sleeps.</td></tr>
-                        <tr><td><strong>Apps menu</strong></td><td>Math challenge gate, Rock Paper Scissors, Rolling Dice, Coin Flip, Metronome, Tennis Letters, Letters Rain, Snake Letters</td></tr>
+                        <tr><td><strong>Apps menu</strong></td><td>Math challenge gate, Rock Paper Scissors, Rolling Dice, Coin Flip, Metronome, Tennis Letters, Letters Rain, Snake Letters, Bingo!</td></tr>
                         <tr><td><strong>Metronome</strong></td><td>60–240 BPM with hardware-timer accuracy, beat dot indicators, 2/4 3/4 4/4 time signatures, distinct hi/lo tones</td></tr>
+                        <tr><td><strong>Bingo!</strong></td><td>On-device 1–90 number caller with cycle-and-reveal animation, tilt-to-draw, and a call-history popup — no repeats, ever</td></tr>
+                        <tr><td><strong>Printable Bingo tickets</strong></td><td>Web Configuration links to <code>/bingo</code> — an in-browser generator for UK/housie-style ticket sheets, fresh set every load</td></tr>
                         <tr><td><strong>Gyro shake/tilt</strong></td><td>Physically shaking or hard-tilting the device restarts RPS or Dice — no tap needed</td></tr>
                         <tr><td><strong>SD card config</strong></td><td>All settings in <code>/config.ini</code> — no recompile needed</td></tr>
                     </tbody>
@@ -190,7 +193,7 @@
                 <li><strong>Status (LL):</strong> Shows WiFi, NTP, and Brightness. Tilt left/right to adjust brightness.</li>
                 <li><strong>Battery (LR):</strong> Live %, voltage. Long-press for software power-off.</li>
                 <li><strong>Emotion Tilt:</strong> Tap UL (Smile). While playing, tilt the device to change emotions (sad, joy, sleep) in real-time via IMU.</li>
-                <li><strong>Apps Menu:</strong> Long-press the smile GIF → pass Math Gate → access Rock Paper Scissors, Dice, Coin Flip, Metronome, Tennis Letters, Letters Rain, and Snake Letters.</li>
+                <li><strong>Apps Menu:</strong> Long-press the smile GIF → pass Math Gate → access Rock Paper Scissors, Dice, Coin Flip, Metronome, Tennis Letters, Letters Rain, Snake Letters, and Bingo!.</li>
                 <li><strong>Gyro shake/tilt:</strong> While playing RPS or Dice, physically shake the device or tilt it hard sideways to restart the game — no tap needed.</li>
             </ul>
 
@@ -222,6 +225,9 @@
 
             <h3>🐍 Snake Letters</h3>
             <p>A classic snake ASCII game. Steer the snake using the device's <strong>tilt</strong> to eat letters of the alphabet in order (a-z). Be careful: after reaching a certain score, "distraction" letters appear—touching any of them ends the game immediately! Look out for modifiers: <code class="code-inline">-</code> shrinks your snake, and <code class="code-inline">/</code> halves its length. High scores are persisted to <code class="code-inline">config.ini</code>.</p>
+
+            <h3>🎱 Bingo!</h3>
+            <p>An on-device 1–90 number caller for playing classic bingo with printed tickets. A large circle shows the current ball with a status bar underneath (<code class="code-inline">Previous: X</code> / <code class="code-inline">Numbers left: Y</code>). <strong>Tap</strong> anywhere, or <strong>tilt left/right</strong>, to draw the next ball — each draw plays a short cycle-and-reveal animation with a distinct buzzer pattern. <strong>Long-press inside the circle</strong> opens a history popup of every number called so far, in call order. Numbers are drawn from a fresh shuffle each game, so there are never repeats; calling all 90 plays a success tune. Pair it with the printable ticket sheets at <a href="#webconfig">Web Configuration</a>.</p>
 
             <h3>Config.ini Reference</h3>
 <pre><code>[wifi]
@@ -267,6 +273,7 @@ duration = 10
                     <tbody>
                         <tr><td><strong>PIN field</strong></td><td>Enter the 6-digit PIN shown on the device screen. Required for all save / apply / reboot actions.</td></tr>
                         <tr><td><strong>config.ini editor</strong></td><td>Textarea pre-filled with the current config. WiFi password is masked as <code>••••••••</code> — leave it to keep the current password, or type a new value to change it. <strong>Save &amp; Reload</strong> writes the file and applies non-reboot settings immediately.</td></tr>
+                        <tr><td><strong>Bingo Cards</strong></td><td>Opens <code>/bingo</code> in a new tab — a printable sheet of UK/housie tickets for the on-device Bingo! caller. No PIN needed, nothing saved to SD, fresh tickets every load.</td></tr>
                         <tr><td><strong>Set date &amp; time</strong></td><td>A date/time picker pre-filled with the current device time. <strong>Apply Time</strong> sets the RTC immediately via <code>settimeofday()</code> — no reboot needed.</td></tr>
                         <tr><td><strong>Reboot</strong></td><td>Reboots the device remotely after PIN confirmation.</td></tr>
                         <tr><td><strong>Download Log</strong></td><td>Downloads <code>/last_seen.txt</code> — read-only, no PIN required.</td></tr>
@@ -334,7 +341,9 @@ duration = 10
                         <tr><td>v2.3.0</td><td>✅ released</td><td>PIN-protected web configuration UI — edit config, set RTC, reboot; WPA2 AP with boot-generated PIN.</td></tr>
                         <tr><td>v2.4.0</td><td>✅ released</td><td>Tennis Letters game: Breakout-style ASCII game with tilt-controlled paddle and alphabet cycling.</td></tr>
                         <tr><td>v2.5.0</td><td>✅ released</td><td>Letters Rain game: letters and modifiers fall in waves; catch the target letter (A→Z) with a gyro paddle while dodging wrong letters.</td></tr>
-                        <tr><td>v2.6.0</td><td>🚀 new</td><td>Snake Letters game: classic snake with alphabet targets, distraction letters, and length modifiers.</td></tr>
+                        <tr><td>v2.6.0</td><td>✅ released</td><td>Snake Letters game: classic snake with alphabet targets, distraction letters, and length modifiers.</td></tr>
+                        <tr><td>v2.6.1</td><td>✅ released</td><td>Bugfix: Clock editor touch zones re-derived from drawn geometry (fixes drift between HH/mm/date fields); Metronome BPM label right-aligned to stop digit overlap.</td></tr>
+                        <tr><td>v2.7.0</td><td>🚀 new</td><td>Bingo! on-device 1–90 number caller with tap/tilt draw and call-history popup; printable UK/housie ticket sheets served at <code>/bingo</code> from Web Configuration, also mirrored here on the docs site at <a href="bingo.html">Bingo Cards</a>.</td></tr>
                     </tbody>
                 </table>
             </div>

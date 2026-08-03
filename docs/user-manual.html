@@ -93,7 +93,7 @@
                         <tr><td><strong>Clock</strong></td><td>Date & Time</td><td>Adjust HH:MM and DD/MM/YYYY using ▲/▼. Long-press to save.</td></tr>
                         <tr><td><strong>Timer</strong></td><td>Countdown</td><td>Set duration. Toggle to <strong>"Ready!"</strong> and long-press to start.</td></tr>
                         <tr><td><strong>Alarm</strong></td><td>Wake-up Call</td><td>Set time and toggle <strong>ON/OFF</strong>. Long-press to save.</td></tr>
-                        <tr><td><strong>WiFi</strong></td><td>Connectivity</td><td>Tap to toggle WiFi on/off. Access the AP PIN and IP via the detail popup.</td></tr>
+                        <tr><td><strong>WiFi</strong></td><td>Radio mode</td><td>Tap to open the mode screen. Use ◀ ▶ to pick WiFi / AP / Off, then long-press to save. Access the AP name, web PIN and IP via the detail popup (Status screen long-press).</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -144,17 +144,17 @@
 
             <h3>Deep Sleep & Waking</h3>
             <p>When the device is powered off via the Battery screen, it enters a low-power deep sleep. To wake the device, press the physical <strong>RESET</strong> button on the board.</p>
-            <p><strong>Alarm Auto-Wake:</strong> If an alarm is set, the device will automatically wake up 5 minutes early to sync time via NTP, ensuring your alarm fires at the exact second.</p>
+            <p><strong>Alarm Auto-Wake:</strong> If an alarm is set in <strong>WiFi mode</strong>, the device will automatically wake up 5 minutes early to sync time via NTP, ensuring your alarm fires at the exact second. In <strong>AP</strong> or <strong>Off</strong> mode there's no sync source, so it just wakes 30 seconds before the alarm instead — and if the time can't be verified when the alarm fires, it still sounds, but shows a text warning instead of the usual animation so you know to check another clock.</p>
         </section>
 
         <section id="web-config">
             <h2>🌐 Web Configuration</h2>
-            <p>You can manage your clock from any web browser without needing a cable.</p>
-            
+            <p>You can manage your clock from any web browser without needing a cable — whenever the radio is up (WiFi or AP mode; not reachable in Off/airplane mode).</p>
+
             <h3>Connecting:</h3>
             <ul>
-                <li><strong>Home Network (STA):</strong> Go to <code style="background-color: var(--code-bg); color: var(--code-text); padding: 0.2rem 0.4rem; border-radius: 4px;">http://esp32clock.local</code>.</li>
-                <li><strong>Direct Connection (AP):</strong> Connect to the WiFi hotspot <code style="background-color: var(--code-bg); color: var(--code-text); padding: 0.2rem 0.4rem; border-radius: 4px;">ESP32-Clock</code>. The password is the 6-digit PIN shown on the device screen (Carousel → WiFi). Then go to <code style="background-color: var(--code-bg); color: var(--code-text); padding: 0.2rem 0.4rem; border-radius: 4px;">http://192.168.4.1</code>.</li>
+                <li><strong>Home Network (WiFi mode):</strong> Go to <code style="background-color: var(--code-bg); color: var(--code-text); padding: 0.2rem 0.4rem; border-radius: 4px;">http://esp32clock.local</code>.</li>
+                <li><strong>Direct Connection (AP mode):</strong> Join the hotspot named <code style="background-color: var(--code-bg); color: var(--code-text); padding: 0.2rem 0.4rem; border-radius: 4px;">ESP32-Clock-XXXXXX</code> (unique per device, shown on the WiFi detail popup) — it's <strong>open, no password needed</strong>. Then go to <code style="background-color: var(--code-bg); color: var(--code-text); padding: 0.2rem 0.4rem; border-radius: 4px;">http://192.168.4.1</code>. AP mode also kicks in automatically if the WiFi password in <code style="background-color: var(--code-bg); color: var(--code-text); padding: 0.2rem 0.4rem; border-radius: 4px;">config.ini</code> keeps getting rejected, so you can always reach the web UI to fix it.</li>
             </ul>
 
             <h3>The Web Interface:</h3>

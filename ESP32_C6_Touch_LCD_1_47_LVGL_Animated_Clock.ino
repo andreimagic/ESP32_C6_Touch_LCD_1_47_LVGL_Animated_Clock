@@ -231,8 +231,13 @@ static volatile uint8_t wifi_last_reason = 0;
 // ── AP / web PIN — random 6-digit code generated once at boot ─────────────────
 // Shown on the device via the long-press WiFi detail popup.
 // Required by every mutating web route (POST /config, POST /reboot).
-// Never logged or transmitted in plain sight; used as WPA2 AP password too.
+// Authorises the mutating web routes only (/config, /settime, /reboot).
+// NOT a WiFi key — the AP hotspot is deliberately open.
 static char ap_pin[7] = "000000";   // filled in setup() via generate_ap_pin()
+// Actual AP SSID, resolved at AP start from the softAP MAC so several units
+// stay tellable apart. Read back from the radio afterwards so the UI cannot
+// drift from what is really being broadcast.
+static char ap_ssid[32] = "ESP32-Clock";
 
 // ─── UI handles ──────────────────────────────────────────────────────────────
 lv_obj_t   *overlay_cont   = nullptr;
@@ -1240,7 +1245,7 @@ static void seed_snake_config()
 }
 
 // ── Generate a random 6-digit PIN at boot ─────────────────────────────────────
-// Used as both the WPA2 AP password and the web UI PIN.
+// Web UI authorisation only; the AP hotspot is open and needs no key.
 // A new PIN is produced on every power cycle — physical access to the screen
 // is required to read it, so no fixed credential is ever embedded in firmware.
 static void generate_ap_pin()
@@ -1360,13 +1365,37 @@ static void start_ap_mode()
   WiFi.setAutoReconnect(false);
   WiFi.disconnect(true, false);
   WiFi.mode(WIFI_AP);
-  // Use the boot-generated PIN as the WPA2 password — read it from the
-  // long-press WiFi popup on the device screen.
-  WiFi.softAP("ESP32-Clock", ap_pin);
+
+  // Name the hotspot after the radio's own MAC so several units in one house
+  // stay tellable apart, e.g. "ESP32-Clock-8AF8A5". The suffix is the same three
+  // bytes the IDF uses for its own "ESP_xxxxxx" default name.
+  String apmac = WiFi.softAPmacAddress();     // "8A:F8:A5:12:34:56"
+  apmac.replace(":", "");
+  if (apmac.length() >= 6)
+    snprintf(ap_ssid, sizeof(ap_ssid), "ESP32-Clock-%s",
+             apmac.substring(apmac.length() - 6).c_str());
+
+  // Deliberately OPEN — no WPA2 passphrase. Joining the hotspot is meant to be
+  // frictionless; ap_pin is not a WiFi key, it authorises the mutating web
+  // routes (/config, /settime, /reboot) only.
+  //
+  // Do NOT pass ap_pin here as the second argument: softAP() rejects any
+  // passphrase shorter than 8 chars and returns false *before* applying the
+  // SSID, which would silently leave the IDF's default "ESP_xxxxxx" open AP
+  // broadcasting instead of this one.
+  bool ap_ok = WiFi.softAP(ap_ssid);
+  if (!ap_ok)
+    Serial.println("[WiFi] *** softAP() refused the config — check the SSID ***");
+
+  // Read the name back from the radio rather than trusting what we asked for.
+  String live = WiFi.softAPSSID();
+  if (live.length()) strncpy(ap_ssid, live.c_str(), sizeof(ap_ssid) - 1);
+  ap_ssid[sizeof(ap_ssid) - 1] = '\0';
+
   wifiMode      = WM_AP;
   wifiConnected = false;
-  Serial.printf("[WiFi] AP started. SSID=ESP32-Clock  IP=%s  (PIN protected)\n",
-                WiFi.softAPIP().toString().c_str());
+  Serial.printf("[WiFi] AP started. SSID=%s  IP=%s  (open — PIN guards web writes)\n",
+                ap_ssid, WiFi.softAPIP().toString().c_str());
   start_web_server();
   wifi_timer_sync_to_mode();
 }
@@ -1922,7 +1951,7 @@ static void show_wifi_detail_popup()
     lv_label_set_text_fmt(l1, LV_SYMBOL_WIFI "  %s", WiFi.SSID().c_str());
     lv_obj_set_style_text_color(l1, lv_color_make(80, 200, 120), 0);
   } else if (wifiMode == WM_AP) {
-    lv_label_set_text(l1, LV_SYMBOL_WIFI "  ESP32-Clock  (AP)");
+    lv_label_set_text_fmt(l1, LV_SYMBOL_WIFI "  %s", ap_ssid);
     lv_obj_set_style_text_color(l1, lv_color_make(80, 180, 220), 0);
   } else if (wifiMode == WM_OFF) {
     lv_label_set_text(l1, LV_SYMBOL_CLOSE "  WiFi OFF");
@@ -1960,7 +1989,7 @@ static void show_wifi_detail_popup()
   // Row 3: PIN — only meaningful while the web UI is actually up
   lv_obj_t *l3 = lv_label_create(wifi_detail_popup);
   if (web_reachable) {
-    lv_label_set_text_fmt(l3, LV_SYMBOL_EDIT "  PIN: %s", ap_pin);
+    lv_label_set_text_fmt(l3, LV_SYMBOL_EDIT "  Web PIN: %s", ap_pin);
     lv_obj_set_style_text_color(l3, lv_color_make(255, 210, 80), 0);  // amber
   } else {
     lv_label_set_text_fmt(l3, "Mode: %s", wifi_cfg_mode_label());

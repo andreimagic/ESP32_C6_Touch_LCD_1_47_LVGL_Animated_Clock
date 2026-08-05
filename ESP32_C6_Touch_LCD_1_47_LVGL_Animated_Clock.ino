@@ -3906,6 +3906,10 @@ static void carousel_build()
     carousel_idx==3?wifi_mode_col:lv_color_make(160,160,180),0);
   lv_obj_align(desc_lbl,LV_ALIGN_CENTER,0,40);
 
+  // Fade the centre content in on every ◀/▶ navigation — same se_flash() the
+  // WiFi mode editor uses on selection change. Arrows and dots stay static.
+  se_flash(icon); se_flash(name_lbl); se_flash(desc_lbl);
+
   // Centre tap zone — uses CLICKED so long-press and tap are mutually
   // exclusive: CLICKED only fires when the finger lifts without triggering
   // LONG_PRESSED, so the editor never opens immediately before closing.
@@ -7817,6 +7821,7 @@ static void apps_carousel_build()
     lv_obj_set_style_text_color(sdesc,
       cfg.menu_sounds ? lv_color_make(80,200,120) : lv_color_make(180,60,60), 0);
     lv_obj_align(sdesc, LV_ALIGN_CENTER, 0, 28);
+    se_flash(sicon); se_flash(sdesc);
   } else if (apps_idx == 7) {
     // ── Bingo! ────────────────────────────────────────────────────────────
     lv_obj_t *name_lbl = lv_label_create(apps_cont);
@@ -7833,6 +7838,7 @@ static void apps_carousel_build()
     lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
     lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
+    se_flash(name_lbl); se_flash(desc_lbl);
   } else if (apps_idx == 6) {
     // ── Snake Letters ─────────────────────────────────────────────────────
     lv_obj_t *name_lbl = lv_label_create(apps_cont);
@@ -7849,6 +7855,7 @@ static void apps_carousel_build()
     lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
     lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
+    se_flash(name_lbl); se_flash(desc_lbl);
 
     if (cfg.sn_high_score > 0) {
       lv_obj_t *hs_lbl = lv_label_create(apps_cont);
@@ -7858,6 +7865,7 @@ static void apps_carousel_build()
       lv_obj_set_style_text_font(hs_lbl, &lv_font_montserrat_14, 0);
       lv_obj_set_style_text_color(hs_lbl, lv_color_make(255, 210, 60), 0);
       lv_obj_align(hs_lbl, LV_ALIGN_CENTER, 0, 44);
+      se_flash(hs_lbl);
     }
   } else if (apps_idx == 5) {
     // ── Letters Rain ──────────────────────────────────────────────────────
@@ -7875,6 +7883,7 @@ static void apps_carousel_build()
     lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
     lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
+    se_flash(name_lbl); se_flash(desc_lbl);
 
     if (cfg.lr_last_score > 0) {
       lv_obj_t *ls_lbl = lv_label_create(apps_cont);
@@ -7884,6 +7893,7 @@ static void apps_carousel_build()
       lv_obj_set_style_text_font(ls_lbl, &lv_font_montserrat_14, 0);
       lv_obj_set_style_text_color(ls_lbl, lv_color_make(255, 210, 60), 0);
       lv_obj_align(ls_lbl, LV_ALIGN_CENTER, 0, 44);
+      se_flash(ls_lbl);
     }
   } else if (apps_idx == 4) {
     // ── Tennis Letters ────────────────────────────────────────────────────
@@ -7901,6 +7911,7 @@ static void apps_carousel_build()
     lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
     lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
+    se_flash(name_lbl); se_flash(desc_lbl);
 
     if (cfg.tennis_high_score > 0) {
       lv_obj_t *hs_lbl = lv_label_create(apps_cont);
@@ -7910,6 +7921,7 @@ static void apps_carousel_build()
       lv_obj_set_style_text_font(hs_lbl, &lv_font_montserrat_14, 0);
       lv_obj_set_style_text_color(hs_lbl, lv_color_make(255, 210, 60), 0);
       lv_obj_align(hs_lbl, LV_ALIGN_CENTER, 0, 44);
+      se_flash(hs_lbl);
     }
   } else {
     // ── Named game items (0=RPS, 1=Dice, 2=Coin, 3=Metronome) ────────────
@@ -7927,6 +7939,7 @@ static void apps_carousel_build()
     lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
     lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
+    se_flash(name_lbl); se_flash(desc_lbl);
   }
 
   // Centre tap zone — CLICKED enters, LONG_PRESSED exits

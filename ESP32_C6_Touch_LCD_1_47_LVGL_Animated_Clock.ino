@@ -4059,25 +4059,25 @@ static void clock_face_show(lv_timer_t *t)
 // ── Happy Birthday melody (non-blocking, LVGL-timer-driven) ──────────────────
 // Played instead of the standard 4-beep pattern when today matches a birthday.
 // Each entry is {frequency_hz, duration_ms}; freq=0 is an articulation gap.
-// Key: C major. Tempo: ~90 BPM (quarter ≈ 667ms).
+// Key: C major. Tempo: ~120 BPM (quarter ≈ 500ms).
 static const struct { uint16_t freq; uint16_t ms; } HB_NOTES[] = {
   // "Hap-py  Birth-day  to   You"
-  {NOTE_C4,187},{0,63},{NOTE_C4,125},{0,63},
-  {NOTE_D4,375},{0,63},{NOTE_C4,375},{0,63},
-  {NOTE_F4,375},{0,63},{NOTE_E4,750},{0,200},
+  {NOTE_C4,140},{0,47},{NOTE_C4,94},{0,47},
+  {NOTE_D4,281},{0,47},{NOTE_C4,281},{0,47},
+  {NOTE_F4,281},{0,47},{NOTE_E4,563},{0,150},
   // "Hap-py  Birth-day  to   You"
-  {NOTE_C4,187},{0,63},{NOTE_C4,125},{0,63},
-  {NOTE_D4,375},{0,63},{NOTE_C4,375},{0,63},
-  {NOTE_G4,375},{0,63},{NOTE_F4,750},{0,200},
+  {NOTE_C4,140},{0,47},{NOTE_C4,94},{0,47},
+  {NOTE_D4,281},{0,47},{NOTE_C4,281},{0,47},
+  {NOTE_G4,281},{0,47},{NOTE_F4,563},{0,150},
   // "Hap-py  Birth-day  dear  [child]"
-  {NOTE_C4,187},{0,63},{NOTE_C4,125},{0,63},
-  {NOTE_C5,375},{0,63},{NOTE_A4,375},{0,63},
-  {NOTE_F4,375},{0,63},{NOTE_E4,375},{0,63},
-  {NOTE_D4,750},{0,200},
+  {NOTE_C4,140},{0,47},{NOTE_C4,94},{0,47},
+  {NOTE_C5,281},{0,47},{NOTE_A4,281},{0,47},
+  {NOTE_F4,281},{0,47},{NOTE_E4,281},{0,47},
+  {NOTE_D4,563},{0,150},
   // "Hap-py  Birth-day  to   You"
-  {NOTE_BB4,187},{0,63},{NOTE_BB4,125},{0,63},
-  {NOTE_A4,375},{0,63}, {NOTE_F4,375},{0,63},
-  {NOTE_G4,375},{0,63}, {NOTE_F4,875}
+  {NOTE_BB4,140},{0,47},{NOTE_BB4,94},{0,47},
+  {NOTE_A4,281},{0,47}, {NOTE_F4,281},{0,47},
+  {NOTE_G4,281},{0,47}, {NOTE_F4,656}
 };
 #define HB_NOTE_COUNT (sizeof(HB_NOTES)/sizeof(HB_NOTES[0]))
 

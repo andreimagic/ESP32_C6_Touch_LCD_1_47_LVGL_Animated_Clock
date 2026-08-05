@@ -56,7 +56,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v2.7.1-beta"
+#define FW_VERSION      "v2.7.1"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -3801,7 +3801,7 @@ static void modal_close()
   if (modal_cont) { lv_obj_del(modal_cont); modal_cont=nullptr; alarm_cont=nullptr; }
 }
 
-// ── Long-press: save and exit all the way to clock ───────────────────────────
+// ── Long-press: save and return to carousel (or exit to clock if already there) ──
 static void modal_longpress_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e)!=LV_EVENT_LONG_PRESSED) return;
@@ -3814,7 +3814,7 @@ static void modal_longpress_cb(lv_event_t *e)
     case 3: close_wifi_editor();  break;
     default: break;
   }
-  modal_close();
+  carousel_build();
 }
 
 // ── Carousel tap: enter the selected item ────────────────────────────────────
@@ -3843,6 +3843,7 @@ static void carousel_build()
 {
   if (editor_cont) { lv_obj_del(editor_cont); editor_cont=nullptr; }
   se_hour_lbl=se_min_lbl=se_onoff_lbl=nullptr;
+  se_day_lbl=se_mon_lbl=se_yr_lbl=nullptr;
   se_wifi_labels_reset();
   lv_obj_clean(modal_cont);
 

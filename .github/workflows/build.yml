@@ -1,0 +1,138 @@
+# .github/workflows/build.yml
+#
+# Stage 1 — compile validation.
+# Proves the sketch builds against a pinned toolchain and fits the 3MB APP partition.
+
+name: Build
+
+on:
+  pull_request:
+    branches: [development, main]
+  push:
+    branches: [development, main]
+  workflow_dispatch:
+
+# A new push to the same PR cancels the previous run.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Set these to match what your Arduino IDE has installed.
+  # Boards Manager -> esp32 -> the version shown there.
+  ESP32_CORE_VERSION: "3.3.11"
+  LVGL_VERSION: "9.5.0"
+
+jobs:
+  compile:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ESP32-C6 Touch LCD 1.47
+            slug: esp32c6-lcd147
+            # Mirrors the mandatory IDE settings from the README:
+            #   USB CDC On Boot = Enabled      -> CDCOnBoot=cdc
+            #   Flash Size      = 8MB (64Mb)   -> FlashSize=8M
+            #   Partition       = 8M w/ spiffs -> PartitionScheme=default_8MB  (3MB APP)
+            #   CPU 160MHz / QIO / 80MHz / JTAG Disabled / Zigbee Disabled
+            fqbn: >-
+              esp32:esp32:esp32c6:JTAGAdapter=default,CDCOnBoot=cdc,PartitionScheme=default_8MB,CPUFreq=160,FlashMode=qio,FlashFreq=80,FlashSize=8M,ZigbeeMode=default
+
+    steps:
+      # Checkout lands the repo at .../<repo-name>/, which matches the .ino
+      # filename — so arduino-cli accepts it as a sketch folder unmodified.
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install arduino-cli
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Restore Arduino cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.arduino15
+            ~/Arduino/libraries
+          key: arduino-${{ runner.os }}-core${{ env.ESP32_CORE_VERSION }}-lvgl${{ env.LVGL_VERSION }}
+
+      - name: Install ESP32 core
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli config add board_manager.additional_urls \
+            https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install "esp32:esp32@${ESP32_CORE_VERSION}"
+
+      - name: Install libraries
+        run: |
+          arduino-cli lib update-index
+          arduino-cli lib install "lvgl@${LVGL_VERSION}"
+          arduino-cli lib install "GFX Library for Arduino"
+          arduino-cli lib install "FastIMU"
+
+      # LVGL 9.5 resolves its config in this order:
+      #   1. LV_CONF_PATH
+      #   2. lv_conf.h reachable via __has_include  (finds the sketch-folder copy)
+      #   3. ../../lv_conf.h                        (i.e. libraries/lv_conf.h)
+      # Copying the repo file to libraries/ makes branch 3 valid too, so the
+      # build is deterministic regardless of how includes get resolved.
+      - name: Install project lv_conf.h
+        run: |
+          test -f lv_conf.h || { echo "::error::lv_conf.h missing from repo root"; exit 1; }
+          mkdir -p "$HOME/Arduino/libraries"
+          cp lv_conf.h "$HOME/Arduino/libraries/lv_conf.h"
+
+      - name: Record toolchain
+        run: |
+          arduino-cli version
+          arduino-cli core list
+          arduino-cli lib list
+
+      - name: Compile
+        id: compile
+        run: |
+          set -o pipefail
+          arduino-cli compile \
+            --fqbn "${{ matrix.fqbn }}" \
+            --warnings default \
+            --output-dir "build-out" \
+            . 2>&1 | tee compile.log
+
+      - name: Report size
+        if: always() && steps.compile.outcome != 'skipped'
+        run: |
+          {
+            echo "### ${{ matrix.name }}"
+            echo ""
+            echo '```'
+            grep -E "of (program storage space|dynamic memory)" compile.log || echo "no size data"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload firmware
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: firmware-${{ matrix.slug }}-${{ github.sha }}
+          path: |
+            build-out/*.bin
+            build-out/*.elf
+            build-out/*.map
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload compile log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: compile-log-${{ matrix.slug }}
+          path: compile.log
+          retention-days: 7

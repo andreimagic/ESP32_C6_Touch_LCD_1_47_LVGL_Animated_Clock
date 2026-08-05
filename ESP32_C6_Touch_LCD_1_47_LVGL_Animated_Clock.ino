@@ -3907,9 +3907,9 @@ static void carousel_build()
     carousel_idx==3?wifi_mode_col:lv_color_make(160,160,180),0);
   lv_obj_align(desc_lbl,LV_ALIGN_CENTER,0,40);
 
-  // Fade the centre content in on every ◀/▶ navigation — same se_flash() the
-  // WiFi mode editor uses on selection change. Arrows and dots stay static.
-  se_flash(icon); se_flash(name_lbl); se_flash(desc_lbl);
+  // // Fade the centre content in on every ◀/▶ navigation — same se_flash() the
+  // // WiFi mode editor uses on selection change. Arrows and dots stay static.
+  // se_flash(icon); se_flash(name_lbl); se_flash(desc_lbl);
 
   // Centre tap zone — uses CLICKED so long-press and tap are mutually
   // exclusive: CLICKED only fires when the finger lifts without triggering
@@ -4059,25 +4059,25 @@ static void clock_face_show(lv_timer_t *t)
 // ── Happy Birthday melody (non-blocking, LVGL-timer-driven) ──────────────────
 // Played instead of the standard 4-beep pattern when today matches a birthday.
 // Each entry is {frequency_hz, duration_ms}; freq=0 is an articulation gap.
-// Key: C major. Tempo: ~90 BPM (quarter ≈ 667ms).
+// Key: C major. Tempo: ~120 BPM (quarter ≈ 500ms).
 static const struct { uint16_t freq; uint16_t ms; } HB_NOTES[] = {
   // "Hap-py  Birth-day  to   You"
-  {NOTE_C4,187},{0,63},{NOTE_C4,125},{0,63},
-  {NOTE_D4,375},{0,63},{NOTE_C4,375},{0,63},
-  {NOTE_F4,375},{0,63},{NOTE_E4,750},{0,200},
+  {NOTE_C4,140},{0,47},{NOTE_C4,94},{0,47},
+  {NOTE_D4,281},{0,47},{NOTE_C4,281},{0,47},
+  {NOTE_F4,281},{0,47},{NOTE_E4,563},{0,150},
   // "Hap-py  Birth-day  to   You"
-  {NOTE_C4,187},{0,63},{NOTE_C4,125},{0,63},
-  {NOTE_D4,375},{0,63},{NOTE_C4,375},{0,63},
-  {NOTE_G4,375},{0,63},{NOTE_F4,750},{0,200},
+  {NOTE_C4,140},{0,47},{NOTE_C4,94},{0,47},
+  {NOTE_D4,281},{0,47},{NOTE_C4,281},{0,47},
+  {NOTE_G4,281},{0,47},{NOTE_F4,563},{0,150},
   // "Hap-py  Birth-day  dear  [child]"
-  {NOTE_C4,187},{0,63},{NOTE_C4,125},{0,63},
-  {NOTE_C5,375},{0,63},{NOTE_A4,375},{0,63},
-  {NOTE_F4,375},{0,63},{NOTE_E4,375},{0,63},
-  {NOTE_D4,750},{0,200},
+  {NOTE_C4,140},{0,47},{NOTE_C4,94},{0,47},
+  {NOTE_C5,281},{0,47},{NOTE_A4,281},{0,47},
+  {NOTE_F4,281},{0,47},{NOTE_E4,281},{0,47},
+  {NOTE_D4,563},{0,150},
   // "Hap-py  Birth-day  to   You"
-  {NOTE_BB4,187},{0,63},{NOTE_BB4,125},{0,63},
-  {NOTE_A4,375},{0,63}, {NOTE_F4,375},{0,63},
-  {NOTE_G4,375},{0,63}, {NOTE_F4,875}
+  {NOTE_BB4,140},{0,47},{NOTE_BB4,94},{0,47},
+  {NOTE_A4,281},{0,47}, {NOTE_F4,281},{0,47},
+  {NOTE_G4,281},{0,47}, {NOTE_F4,656}
 };
 #define HB_NOTE_COUNT (sizeof(HB_NOTES)/sizeof(HB_NOTES[0]))
 
@@ -7822,7 +7822,7 @@ static void apps_carousel_build()
     lv_obj_set_style_text_color(sdesc,
       cfg.menu_sounds ? lv_color_make(80,200,120) : lv_color_make(180,60,60), 0);
     lv_obj_align(sdesc, LV_ALIGN_CENTER, 0, 28);
-    se_flash(sicon); se_flash(sdesc);
+    // se_flash(sicon); se_flash(sdesc);
   } else if (apps_idx == 7) {
     // ── Bingo! ────────────────────────────────────────────────────────────
     lv_obj_t *name_lbl = lv_label_create(apps_cont);
@@ -7839,7 +7839,7 @@ static void apps_carousel_build()
     lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
     lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
-    se_flash(name_lbl); se_flash(desc_lbl);
+    // se_flash(name_lbl); se_flash(desc_lbl);
   } else if (apps_idx == 6) {
     // ── Snake Letters ─────────────────────────────────────────────────────
     lv_obj_t *name_lbl = lv_label_create(apps_cont);
@@ -7856,7 +7856,7 @@ static void apps_carousel_build()
     lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
     lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
-    se_flash(name_lbl); se_flash(desc_lbl);
+    // se_flash(name_lbl); se_flash(desc_lbl);
 
     if (cfg.sn_high_score > 0) {
       lv_obj_t *hs_lbl = lv_label_create(apps_cont);
@@ -7866,7 +7866,7 @@ static void apps_carousel_build()
       lv_obj_set_style_text_font(hs_lbl, &lv_font_montserrat_14, 0);
       lv_obj_set_style_text_color(hs_lbl, lv_color_make(255, 210, 60), 0);
       lv_obj_align(hs_lbl, LV_ALIGN_CENTER, 0, 44);
-      se_flash(hs_lbl);
+      // se_flash(hs_lbl);
     }
   } else if (apps_idx == 5) {
     // ── Letters Rain ──────────────────────────────────────────────────────
@@ -7884,7 +7884,7 @@ static void apps_carousel_build()
     lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
     lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
-    se_flash(name_lbl); se_flash(desc_lbl);
+    // se_flash(name_lbl); se_flash(desc_lbl);
 
     if (cfg.lr_last_score > 0) {
       lv_obj_t *ls_lbl = lv_label_create(apps_cont);
@@ -7894,7 +7894,7 @@ static void apps_carousel_build()
       lv_obj_set_style_text_font(ls_lbl, &lv_font_montserrat_14, 0);
       lv_obj_set_style_text_color(ls_lbl, lv_color_make(255, 210, 60), 0);
       lv_obj_align(ls_lbl, LV_ALIGN_CENTER, 0, 44);
-      se_flash(ls_lbl);
+      // se_flash(ls_lbl);
     }
   } else if (apps_idx == 4) {
     // ── Tennis Letters ────────────────────────────────────────────────────
@@ -7912,7 +7912,7 @@ static void apps_carousel_build()
     lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
     lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
-    se_flash(name_lbl); se_flash(desc_lbl);
+    // se_flash(name_lbl); se_flash(desc_lbl);
 
     if (cfg.tennis_high_score > 0) {
       lv_obj_t *hs_lbl = lv_label_create(apps_cont);
@@ -7922,7 +7922,7 @@ static void apps_carousel_build()
       lv_obj_set_style_text_font(hs_lbl, &lv_font_montserrat_14, 0);
       lv_obj_set_style_text_color(hs_lbl, lv_color_make(255, 210, 60), 0);
       lv_obj_align(hs_lbl, LV_ALIGN_CENTER, 0, 44);
-      se_flash(hs_lbl);
+      // se_flash(hs_lbl);
     }
   } else {
     // ── Named game items (0=RPS, 1=Dice, 2=Coin, 3=Metronome) ────────────
@@ -7940,7 +7940,7 @@ static void apps_carousel_build()
     lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
     lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
-    se_flash(name_lbl); se_flash(desc_lbl);
+    // se_flash(name_lbl); se_flash(desc_lbl);
   }
 
   // Centre tap zone — CLICKED enters, LONG_PRESSED exits

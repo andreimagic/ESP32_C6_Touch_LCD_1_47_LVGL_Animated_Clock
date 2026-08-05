@@ -36,8 +36,17 @@
 #include <SD.h>
 #include <SPI.h>
 #include <WiFi.h>
-#include <WiFiMulti.h>
+// WiFiMulti removed in v2.8.0 — WiFiMulti::run() performs a *blocking* full
+// channel scan (~1.5-3 s) on every call while disconnected, which stalled LVGL
+// and kept the radio+CPU busy whenever the SSID was absent or the password
+// wrong. Plain WiFi.begin() is non-blocking and the IDF handles association.
 #include <WebServer.h>
+#if __has_include(<esp_sntp.h>)
+  #include <esp_sntp.h>          // esp_sntp_stop() — halt SNTP in AP / OFF mode
+  #define HAS_ESP_SNTP 1
+#else
+  #define HAS_ESP_SNTP 0
+#endif
 #include <ESPmDNS.h>
 #include <time.h>
 #include <FastIMU.h>
@@ -47,18 +56,24 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v2.7.0"
+#define FW_VERSION      "v2.7.1"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
 // These hardcoded values are the fallback when the card or file is absent.
+
+// Radio policy chosen by the user — [wifi] mode = wifi | ap | off
+//   WCFG_WIFI : join the configured SSID (STA). NTP runs. Web UI on the LAN.
+//   WCFG_AP   : own hotspot only. No internet, so NTP is never started.
+//   WCFG_OFF  : airplane mode. Radio down, no SNTP, no web server, no polling.
+enum WifiCfgMode : uint8_t { WCFG_WIFI = 0, WCFG_AP = 1, WCFG_OFF = 2 };
 
 struct AppConfig {
   char wifi_ssid[64]                 = "myhomewifi";     // [wifi] ssid
   char wifi_password[64]             = "changeme";       // [wifi] password
   char ntp_server[64]                = "pool.ntp.org";   // [clock] ntp_server
   char tz_string[48]                 = "CET-1CEST,M3.5.0,M10.5.0/3"; // [clock] tz (POSIX — set once, handles DST forever)
-  bool wifi_enabled                  = true;    // [wifi] enabled
+  uint8_t wifi_mode                  = WCFG_WIFI; // [wifi] mode (wifi|ap|off)
   bool alarm_enabled                 = false;   // [alarm] enabled
   int  alarm_hour                    = 7;       // [alarm] time HH
   int  alarm_minute                  = 0;       // [alarm] time MM
@@ -136,12 +151,20 @@ static void show_gif_fullscreen(const char *path);
 static void show_battery_screen(void);
 static void show_status_screen(void);
 static void overlay_close_event_cb(lv_event_t *e);
+static lv_obj_t *make_overlay(lv_color_t bg_color);
+static void show_alarm_warning(const char *msg);
 static void lvgl_sd_fs_init(void);
 static void show_carousel(void);
 static void save_config(void);
 static void apply_wifi_state(void);
 static void start_ap_mode(void);
 static void start_web_server(void);
+static void stop_web_server(void);
+static void wifi_sta_begin(void);
+static void wifi_radio_down(void);
+static void wifi_timer_sync_to_mode(void);
+static bool wifi_ntp_possible(void);
+static const char *wifi_cfg_mode_name(void);
 static void show_wifi_detail_popup(void);
 static void buzzer_start_birthday(int sequences);
 static void generate_ap_pin(void);
@@ -160,24 +183,61 @@ uint32_t  screenWidth;
 uint32_t  screenHeight;
 
 // ─── WiFi / NTP state ────────────────────────────────────────────────────────
-WiFiMulti wifiMulti;
 bool wifiConnected = false;
 
 // ── Extended WiFi / web-server state ─────────────────────────────────────────
-// Tracks the current WiFi mode so the status screen can display it concisely.
-enum WifiMode : uint8_t { WM_IDLE=0, WM_CONNECTING, WM_STA, WM_AP };
+// Runtime mode — what the radio is *actually* doing right now. This is not the
+// same as cfg.wifi_mode (what the user asked for): a STA request can end up in
+// WM_RETRY (waiting, radio off) or WM_AP (credential rescue) without the user
+// setting changing. Every runtime decision reads wifiMode, never cfg.wifi_mode,
+// so a config.ini edited over the web cannot desync the state machine.
+enum WifiMode : uint8_t {
+  WM_IDLE = 0,
+  WM_CONNECTING,   // association in progress, radio on
+  WM_STA,          // joined, IP acquired
+  WM_AP,           // own hotspot up
+  WM_RETRY,        // STA failed — radio OFF, waiting out the backoff
+  WM_FAILED,       // STA given up permanently — radio OFF until reboot/mode change
+  WM_OFF           // airplane mode — radio OFF by user request
+};
 static WifiMode  wifiMode         = WM_IDLE;
 static uint32_t  wifi_sta_start   = 0;       // millis() when STA attempt began
-static bool      webServerRunning = false;
+static uint32_t  wifi_retry_at    = 0;       // millis() when the next attempt is due
+static uint8_t   wifi_fail_count  = 0;       // consecutive failed STA attempts
+static uint8_t   wifi_auth_fails  = 0;       // consecutive *credential* failures
+static bool      webServerRunning = false;   // listener currently accepting
+static bool      webRoutesRegistered = false;// routes registered once, ever
 static WebServer web_server(80);             // HTTP server, port 80
-#define WIFI_STA_TIMEOUT_MS 12000            // fall back to AP after 12 s
 bool timeSynced    = false;
+
+// Last STA disconnect reason, written from the WiFi event task — read-only
+// elsewhere. Lets us tell "wrong password" from "SSID not in range" and pick
+// the right recovery, instead of hammering the radio forever either way.
+static volatile uint8_t wifi_last_reason = 0;
+
+// ── STA retry policy ─────────────────────────────────────────────────────────
+// Worst case with a wrong password: 2 attempts × 15 s, then a single switch to
+// AP rescue. Worst case with the SSID out of range: 15 s of radio, then the
+// radio is powered down completely between attempts, backing off 30 s → 60 s →
+// 2 min → 4 min → 8 min → capped at 10 min. Nothing spins, nothing polls.
+#define WIFI_STA_TIMEOUT_MS   15000UL    // association window per attempt
+#define WIFI_RETRY_BASE_MS    30000UL    // first backoff
+#define WIFI_RETRY_MAX_MS    600000UL    // backoff ceiling (10 min)
+#define WIFI_AUTHFAIL_LIMIT       2      // credential failures before AP rescue
+// 1 = fall back to the AP hotspot when the password is rejected, so the web UI
+// stays reachable to fix config.ini. 0 = go to WM_FAILED (radio off) instead.
+#define WIFI_AUTHFAIL_TO_AP       1
 
 // ── AP / web PIN — random 6-digit code generated once at boot ─────────────────
 // Shown on the device via the long-press WiFi detail popup.
 // Required by every mutating web route (POST /config, POST /reboot).
-// Never logged or transmitted in plain sight; used as WPA2 AP password too.
+// Authorises the mutating web routes only (/config, /settime, /reboot).
+// NOT a WiFi key — the AP hotspot is deliberately open.
 static char ap_pin[7] = "000000";   // filled in setup() via generate_ap_pin()
+// Actual AP SSID, resolved at AP start from the softAP MAC so several units
+// stay tellable apart. Read back from the radio afterwards so the UI cannot
+// drift from what is really being broadcast.
+static char ap_ssid[32] = "ESP32-Clock";
 
 // ─── UI handles ──────────────────────────────────────────────────────────────
 lv_obj_t   *overlay_cont   = nullptr;
@@ -520,6 +580,7 @@ static void load_config()
   char   line[128];
   char   section[32] = "";
   int    lineNum = 0;
+  bool   wifi_mode_seen = false;   // [wifi] mode wins over the legacy enabled key
 
   while (f.available()) {
     // Read one line
@@ -566,6 +627,15 @@ static void load_config()
         strncpy(cfg.wifi_password, val, sizeof(cfg.wifi_password) - 1);
         Serial.println("[CFG]   wifi.password = (hidden)");
       }
+      else if (strcmp(key, "mode") == 0) {
+        // Anything unrecognised falls back to WiFi rather than silently
+        // leaving the clock offline because of a typo.
+        if      (strcmp(val, "off") == 0 || strcmp(val, "OFF") == 0) cfg.wifi_mode = WCFG_OFF;
+        else if (strcmp(val, "ap")  == 0 || strcmp(val, "AP")  == 0) cfg.wifi_mode = WCFG_AP;
+        else                                                         cfg.wifi_mode = WCFG_WIFI;
+        wifi_mode_seen = true;
+        Serial.printf("[CFG]   wifi.mode          = %s\n", wifi_cfg_mode_name());
+      }
     }
 
     // ── [clock] — NTP server + POSIX timezone string ─────────────────────
@@ -581,10 +651,14 @@ static void load_config()
       }
     }
 
-    // ── [wifi] extra keys ────────────────────────────────────────────────────
-    if (strcmp(section, "wifi") == 0 && strcmp(key, "enabled") == 0) {
-      cfg.wifi_enabled = (strcmp(val,"true")==0||strcmp(val,"1")==0);
-      Serial.printf("[CFG]   wifi.enabled       = %s\n", cfg.wifi_enabled?"true":"false");
+    // ── [wifi] legacy key ────────────────────────────────────────────────────
+    // Pre-2.8.0 files only had enabled = true/false, where false meant
+    // "start the AP hotspot". Honour that unless an explicit mode key exists.
+    if (strcmp(section, "wifi") == 0 && strcmp(key, "enabled") == 0 && !wifi_mode_seen) {
+      bool en = (strcmp(val,"true")==0||strcmp(val,"1")==0);
+      cfg.wifi_mode = en ? WCFG_WIFI : WCFG_AP;
+      Serial.printf("[CFG]   wifi.enabled       = %s  (legacy -> mode %s)\n",
+                    en?"true":"false", wifi_cfg_mode_name());
     }
 
     // ── [alarm] ─────────────────────────────────────────────────────────────
@@ -964,7 +1038,7 @@ static void save_config()
 
   // Managed sections — exactly one blank line before each header
   fw.print("\n[wifi]\n");
-  fw.printf("enabled = %s\n",  cfg.wifi_enabled ? "true" : "false");
+  fw.printf("mode = %s\n",     wifi_cfg_mode_name());   // wifi | ap | off
   fw.printf("ssid = %s\n",     cfg.wifi_ssid);
   fw.printf("password = %s\n", cfg.wifi_password);
 
@@ -1171,7 +1245,7 @@ static void seed_snake_config()
 }
 
 // ── Generate a random 6-digit PIN at boot ─────────────────────────────────────
-// Used as both the WPA2 AP password and the web UI PIN.
+// Web UI authorisation only; the AP hotspot is open and needs no key.
 // A new PIN is produced on every power cycle — physical access to the screen
 // is required to read it, so no fixed credential is ever embedded in firmware.
 static void generate_ap_pin()
@@ -1182,21 +1256,148 @@ static void generate_ap_pin()
   Serial.printf("[AP]  PIN generated: %s\n", ap_pin);
 }
 
-// ── WiFi runtime toggle ───────────────────────────────────────────────────────
-// ── AP hotspot fallback ───────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+//  RADIO HELPERS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Config mode as written to config.ini (lowercase keyword).
+static const char *wifi_cfg_mode_name()
+{
+  switch (cfg.wifi_mode) {
+    case WCFG_AP:  return "ap";
+    case WCFG_OFF: return "off";
+    default:       return "wifi";
+  }
+}
+
+// Config mode as shown on screen.
+static const char *wifi_cfg_mode_label()
+{
+  switch (cfg.wifi_mode) {
+    case WCFG_AP:  return "AP";
+    case WCFG_OFF: return "OFF";
+    default:       return "WiFi";
+  }
+}
+
+// True only while a time sync could realistically still land. AP has no uplink
+// and OFF has no radio, so callers must not sit around waiting for NTP in those
+// modes — see the alarm guard and the deep-sleep wake margin.
+static bool wifi_ntp_possible()
+{
+  return (wifiMode == WM_STA || wifiMode == WM_CONNECTING);
+}
+
+// Halt the SNTP client. Left running it would keep re-arming a lwIP timeout and
+// re-resolving the NTP host forever on a link that cannot carry the packets.
+static void ntp_stop_client()
+{
+#if HAS_ESP_SNTP
+  if (esp_sntp_enabled()) esp_sntp_stop();
+#endif
+  timeSynced = false;
+}
+
+// Power the radio all the way down. Used by OFF mode and between STA retries —
+// an idle-but-associated radio still costs ~20 mA, a scanning one far more.
+static void wifi_radio_down()
+{
+  stop_web_server();
+  WiFi.setAutoReconnect(false);   // stop the core re-associating behind our back
+  WiFi.softAPdisconnect(true);
+  WiFi.disconnect(true, false);   // wifioff = true
+  WiFi.mode(WIFI_OFF);
+  wifiConnected = false;
+}
+
+// ── STA association attempt ──────────────────────────────────────────────────
+// Non-blocking: begin() returns in a few ms and the IDF drives association in
+// its own task. Nothing here scans, so LVGL is never stalled.
+static void wifi_sta_begin()
+{
+  WiFi.persistent(false);         // don't rewrite NVS on every attempt
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(true);            // modem sleep between DTIM beacons
+  WiFi.setAutoReconnect(true);
+  wifi_last_reason = 0;
+  wifi_sta_start   = millis();
+  wifiMode         = WM_CONNECTING;
+  WiFi.begin(cfg.wifi_ssid, cfg.wifi_password);
+  // configTzTime sets the TZ env var AND starts SNTP in one call.
+  // NTP delivers UTC; localtime_r converts to local using tz_string.
+  configTzTime(cfg.tz_string, cfg.ntp_server);
+  Serial.printf("[WiFi] STA attempt %u -> SSID '%s'\n",
+                (unsigned)(wifi_fail_count + 1), cfg.wifi_ssid);
+}
+
+// Classify the last disconnect: true = the AP actively rejected our key, so
+// retrying with the same credentials will fail exactly the same way every time.
+// Deliberately narrow — ASSOC_FAIL / CONNECTION_FAIL are also thrown by flaky
+// or congested routers, and treating those as "wrong password" would strand a
+// perfectly good configuration in AP rescue. Those go down the normal backoff path.
+static bool wifi_reason_is_auth(uint8_t r)
+{
+  switch (r) {
+    case WIFI_REASON_AUTH_EXPIRE:              //   2
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:   //  15 — classic wrong PSK
+    case WIFI_REASON_AUTH_FAIL:                // 202
+    case WIFI_REASON_HANDSHAKE_TIMEOUT:        // 204
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Runs in the WiFi event task — must not touch LVGL. Records the reason only.
+static void wifi_event_cb(WiFiEvent_t event, WiFiEventInfo_t info)
+{
+  if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED)
+    wifi_last_reason = info.wifi_sta_disconnected.reason;
+}
+
+// ── AP hotspot ───────────────────────────────────────────────────────────────
+// Reached either by user choice (cfg.wifi_mode == WCFG_AP) or as the credential
+// rescue path when STA authentication keeps being rejected.
 static void start_ap_mode()
 {
-  WiFi.disconnect(true);
+  ntp_stop_client();              // no uplink here — NTP can never succeed
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(true, false);
   WiFi.mode(WIFI_AP);
-  // Use the boot-generated PIN as the WPA2 password — read it from the
-  // long-press WiFi popup on the device screen.
-  WiFi.softAP("ESP32-Clock", ap_pin);
+
+  // Name the hotspot after the radio's own MAC so several units in one house
+  // stay tellable apart, e.g. "ESP32-Clock-8AF8A5". The suffix is the same three
+  // bytes the IDF uses for its own "ESP_xxxxxx" default name.
+  String apmac = WiFi.softAPmacAddress();     // "8A:F8:A5:12:34:56"
+  apmac.replace(":", "");
+  if (apmac.length() >= 6)
+    snprintf(ap_ssid, sizeof(ap_ssid), "ESP32-Clock-%s",
+             apmac.substring(apmac.length() - 6).c_str());
+
+  // Deliberately OPEN — no WPA2 passphrase. Joining the hotspot is meant to be
+  // frictionless; ap_pin is not a WiFi key, it authorises the mutating web
+  // routes (/config, /settime, /reboot) only.
+  //
+  // Do NOT pass ap_pin here as the second argument: softAP() rejects any
+  // passphrase shorter than 8 chars and returns false *before* applying the
+  // SSID, which would silently leave the IDF's default "ESP_xxxxxx" open AP
+  // broadcasting instead of this one.
+  bool ap_ok = WiFi.softAP(ap_ssid);
+  if (!ap_ok)
+    Serial.println("[WiFi] *** softAP() refused the config — check the SSID ***");
+
+  // Read the name back from the radio rather than trusting what we asked for.
+  String live = WiFi.softAPSSID();
+  if (live.length()) strncpy(ap_ssid, live.c_str(), sizeof(ap_ssid) - 1);
+  ap_ssid[sizeof(ap_ssid) - 1] = '\0';
+
   wifiMode      = WM_AP;
   wifiConnected = false;
-  timeSynced    = false;
-  Serial.printf("[WiFi] AP started. SSID=ESP32-Clock  IP=%s  (PIN protected)\n",
-                WiFi.softAPIP().toString().c_str());
+  Serial.printf("[WiFi] AP started. SSID=%s  IP=%s  (open — PIN guards web writes)\n",
+                ap_ssid, WiFi.softAPIP().toString().c_str());
   start_web_server();
+  wifi_timer_sync_to_mode();
 }
 
 // ── HTTP web server ───────────────────────────────────────────────────────────
@@ -1210,7 +1411,9 @@ static void start_ap_mode()
 //   GET  /bingo   — printable bingo ticket sheet, generated in-browser (read-only)
 //
 // Runs identically in both STA and AP mode.
-// Called at most once; guarded by webServerRunning.
+// May be started and stopped repeatedly as the radio comes and goes, so the
+// route table is built exactly once — WebServer::on() appends to a linked list
+// and would leak a full set of handlers on every restart otherwise.
 // ── /bingo page ───────────────────────────────────────────────────────────────
 // A self-contained printable bingo-ticket sheet. Everything (layout + ticket
 // generation) runs client-side in the browser, so the ESP32 just serves this
@@ -1367,6 +1570,12 @@ build();
 static void start_web_server()
 {
   if (webServerRunning) return;
+  if (webRoutesRegistered) {          // routes already built — just re-listen
+    web_server.begin();
+    webServerRunning = true;
+    Serial.println("[WEB] HTTP server restarted on port 80");
+    return;
+  }
 
   // ── GET / — config editor page ───────────────────────────────────────────
   web_server.on("/", HTTP_GET, []() {
@@ -1480,6 +1689,8 @@ static void start_web_server()
         " type a new value to change it, leave as-is to keep current.</p>"
         "<p class='note'>Alarm, timer, menu &amp; birthday changes apply immediately."
         " WiFi / NTP / TZ changes need a reboot.</p>"
+        "<p class='note'>[wifi] mode = <b>wifi</b> (join your network) &middot;"
+        " <b>ap</b> (hotspot only, no NTP) &middot; <b>off</b> (airplane mode).</p>"
         "<div class='row'>"
         "<button class='btn save' onclick='doSave()'>&#x1F4BE; Save &amp; Reload</button>"
         "<a class='btn log' href='/log'>&#x1F4CB; Download Log</a>"
@@ -1679,9 +1890,23 @@ static void start_web_server()
     web_server.send_P(200, "text/html", BINGO_PAGE);
   });
 
+  webRoutesRegistered = true;
   web_server.begin();
   webServerRunning = true;
   Serial.println("[WEB] HTTP server started on port 80");
+}
+
+// ── Stop the HTTP listener ───────────────────────────────────────────────────
+// Called whenever the radio goes down. loop() checks webServerRunning before
+// handleClient(), so once this returns nothing touches the network stack.
+static void stop_web_server()
+{
+  if (webServerRunning) {
+    web_server.stop();
+    webServerRunning = false;
+    Serial.println("[WEB] HTTP server stopped");
+  }
+  MDNS.end();
 }
 
 // ── WiFi detail popup — shown on long-press of WiFi row in status screen ─────
@@ -1714,14 +1939,26 @@ static void show_wifi_detail_popup()
     if (wifi_detail_popup) { lv_obj_del(wifi_detail_popup); wifi_detail_popup = nullptr; }
   }, LV_EVENT_CLICKED, nullptr);
 
+  // The web UI only exists while a listener is running, so in OFF / retry /
+  // failed states the PIN and URL rows would be misleading — they are replaced
+  // by a plain explanation of what the radio is doing.
+  const bool web_reachable = webServerRunning &&
+                             ((wifiMode == WM_STA && wifiConnected) || wifiMode == WM_AP);
+
   // Row 1: SSID or AP name
   lv_obj_t *l1 = lv_label_create(wifi_detail_popup);
   if (wifiMode == WM_STA && wifiConnected) {
     lv_label_set_text_fmt(l1, LV_SYMBOL_WIFI "  %s", WiFi.SSID().c_str());
     lv_obj_set_style_text_color(l1, lv_color_make(80, 200, 120), 0);
   } else if (wifiMode == WM_AP) {
-    lv_label_set_text(l1, LV_SYMBOL_WIFI "  ESP32-Clock  (AP)");
+    lv_label_set_text_fmt(l1, LV_SYMBOL_WIFI "  %s", ap_ssid);
     lv_obj_set_style_text_color(l1, lv_color_make(80, 180, 220), 0);
+  } else if (wifiMode == WM_OFF) {
+    lv_label_set_text(l1, LV_SYMBOL_CLOSE "  WiFi OFF");
+    lv_obj_set_style_text_color(l1, lv_color_make(160, 160, 180), 0);
+  } else if (wifiMode == WM_RETRY || wifiMode == WM_FAILED) {
+    lv_label_set_text_fmt(l1, LV_SYMBOL_WARNING "  %s", cfg.wifi_ssid);
+    lv_obj_set_style_text_color(l1, lv_color_make(220, 120, 80), 0);
   } else {
     lv_label_set_text(l1, LV_SYMBOL_WIFI "  Connecting...");
     lv_obj_set_style_text_color(l1, lv_color_make(220, 160, 50), 0);
@@ -1729,28 +1966,45 @@ static void show_wifi_detail_popup()
   lv_obj_set_style_text_font(l1, &lv_font_montserrat_14, 0);
   lv_obj_align(l1, LV_ALIGN_TOP_MID, 0, 8);
 
-  // Row 2: IP address
+  // Row 2: IP address, or what the radio is doing instead
   lv_obj_t *l2 = lv_label_create(wifi_detail_popup);
   if (wifiMode == WM_STA && wifiConnected)
     lv_label_set_text_fmt(l2, "IP  %s", WiFi.localIP().toString().c_str());
   else if (wifiMode == WM_AP)
     lv_label_set_text_fmt(l2, "IP  %s", WiFi.softAPIP().toString().c_str());
+  else if (wifiMode == WM_OFF)
+    lv_label_set_text(l2, "Radio down - clock runs offline");
+  else if (wifiMode == WM_RETRY) {
+    int32_t remain = (int32_t)(wifi_retry_at - millis());
+    if (remain < 0) remain = 0;
+    lv_label_set_text_fmt(l2, "Radio off - retry in %lds", (long)(remain / 1000));
+  }
+  else if (wifiMode == WM_FAILED)
+    lv_label_set_text(l2, "Password rejected - radio off");
   else
     lv_label_set_text(l2, "IP  —");
   lv_obj_set_style_text_color(l2, lv_color_make(180, 180, 200), 0);
   lv_obj_align(l2, LV_ALIGN_TOP_MID, 0, 30);
 
-  // Row 3: PIN (always shown — needed to use the web UI or connect to AP)
+  // Row 3: PIN — only meaningful while the web UI is actually up
   lv_obj_t *l3 = lv_label_create(wifi_detail_popup);
-  lv_label_set_text_fmt(l3, LV_SYMBOL_EDIT "  PIN: %s", ap_pin);
-  lv_obj_set_style_text_color(l3, lv_color_make(255, 210, 80), 0);  // amber
+  if (web_reachable) {
+    lv_label_set_text_fmt(l3, LV_SYMBOL_EDIT "  Web PIN: %s", ap_pin);
+    lv_obj_set_style_text_color(l3, lv_color_make(255, 210, 80), 0);  // amber
+  } else {
+    lv_label_set_text_fmt(l3, "Mode: %s", wifi_cfg_mode_label());
+    lv_obj_set_style_text_color(l3, lv_color_make(140, 140, 170), 0);
+  }
   lv_obj_set_style_text_font(l3, &lv_font_montserrat_14, 0);
   lv_obj_align(l3, LV_ALIGN_TOP_MID, 0, 52);
 
   // Row 4: URL
   lv_obj_t *l4 = lv_label_create(wifi_detail_popup);
-  lv_label_set_text(l4, (wifiMode == WM_STA) ? "http://esp32clock.local"
-                                              : "http://192.168.4.1");
+  if (!web_reachable)
+    lv_label_set_text(l4, "web UI unavailable");
+  else
+    lv_label_set_text(l4, (wifiMode == WM_STA) ? "http://esp32clock.local"
+                                                : "http://192.168.4.1");
   lv_obj_set_style_text_color(l4, lv_color_make(100, 200, 255), 0);
   lv_obj_align(l4, LV_ALIGN_TOP_MID, 0, 74);
 
@@ -1765,6 +2019,25 @@ static void show_wifi_detail_popup()
 // ══════════════════════════════════════════════════════════════════════════════
 //  WiFi / NTP state management
 // ══════════════════════════════════════════════════════════════════════════════
+// Pause / resume the background poll timer to match the runtime mode.
+// The poll only has work to do while a STA attempt is alive: AP and OFF are
+// steady states, so the timer is stopped outright rather than left ticking.
+static void wifi_timer_sync_to_mode()
+{
+  if (!wifi_timer) return;   // called from setup() before the UI exists
+  if (wifiMode == WM_AP || wifiMode == WM_OFF || wifiMode == WM_IDLE) {
+    lv_timer_pause(wifi_timer);
+  } else {
+    lv_timer_set_period(wifi_timer, 1000);
+    lv_timer_resume(wifi_timer);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Apply cfg.wifi_mode — the single entry point for every mode change.
+//  Always tears the previous mode down first so no listener, SNTP client or
+//  netif survives into the new mode.
+// ══════════════════════════════════════════════════════════════════════════════
 static void apply_wifi_state()
 {
   // Apply POSIX TZ immediately — makes localtime_r correct even offline
@@ -1772,21 +2045,41 @@ static void apply_wifi_state()
   tzset();
   Serial.printf("[TZ] Applied: %s\n", cfg.tz_string);
 
-  if (cfg.wifi_enabled) {
-    Serial.println("[WiFi] Enabling STA mode...");
-    wifiMode         = WM_CONNECTING;
-    wifi_sta_start   = millis();
-    WiFi.mode(WIFI_STA);
-    wifiMulti.addAP(cfg.wifi_ssid, cfg.wifi_password);
-    // configTzTime sets TZ env var AND starts SNTP in one call.
-    // NTP delivers UTC; localtime_r converts to local using tz_string.
-    configTzTime(cfg.tz_string, cfg.ntp_server);
-    // Kick off the first connection attempt immediately (non-blocking; ~50ms)
-    wifiMulti.run(0);
-  } else {
-    Serial.println("[WiFi] STA disabled — starting AP hotspot");
-    start_ap_mode();
+  // ── Tear down whatever was running ───────────────────────────────────────
+  ntp_stop_client();
+  wifi_radio_down();
+  wifi_fail_count = 0;
+  wifi_auth_fails = 0;
+  wifi_retry_at   = 0;
+
+  switch (cfg.wifi_mode) {
+
+    case WCFG_OFF:
+      // Airplane mode: radio down, SNTP stopped, web server stopped, poll timer
+      // paused. Nothing WiFi-related runs again until the mode is changed.
+      wifiMode = WM_OFF;
+      Serial.println("[WiFi] Mode OFF — airplane mode, radio and NTP stopped");
+      break;
+
+    case WCFG_AP:
+      Serial.println("[WiFi] Mode AP — hotspot only, NTP not started");
+      start_ap_mode();
+      break;
+
+    case WCFG_WIFI:
+    default:
+      // An empty SSID can never associate — don't burn 15 s finding that out.
+      if (cfg.wifi_ssid[0] == '\0') {
+        Serial.println("[WiFi] Mode WiFi but SSID is empty — starting AP to allow setup");
+        start_ap_mode();
+        break;
+      }
+      Serial.println("[WiFi] Mode WiFi — joining configured network");
+      wifi_sta_begin();
+      break;
   }
+
+  wifi_timer_sync_to_mode();
 }
 
 // ── Countdown timer ───────────────────────────────────────────────────────────
@@ -2004,9 +2297,12 @@ static void shutdown_execute()
     // have time to sync before the alarm fires.
     // If alarm is 5 min or less away: wake 30s early — no time for NTP,
     // the fallback warning alarm will cover any drift.
+    // In AP / OFF mode there is nothing to sync with, so waking 5 min early
+    // would just burn 4.5 min of battery on an idle screen every single day.
     const int EARLY_NTP  = 5 * 60;   // 300s = 5 min
     const int EARLY_BOOT =      30;  // 30s  — just enough to boot
-    int early = (diff_sec > EARLY_NTP) ? EARLY_NTP : EARLY_BOOT;
+    int early = (cfg.wifi_mode == WCFG_WIFI && diff_sec > EARLY_NTP)
+                ? EARLY_NTP : EARLY_BOOT;
     diff_sec = max(diff_sec - early, 10);
     esp_sleep_enable_timer_wakeup((uint64_t)diff_sec * 1000000ULL);
     Serial.printf("[PWR] Timer wakeup set for %ds (%d min early, alarm at %02d:%02d)\n",
@@ -2126,21 +2422,54 @@ static void battery_timer_callback(lv_timer_t * /*timer*/)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  WIFI + NTP BACKGROUND POLL TIMER  (every 5 s)
-//  Runs entirely from the LVGL timer so it never blocks the display.
+//  WIFI + NTP BACKGROUND POLL TIMER
+//  Runs entirely from the LVGL timer so it never blocks the display, and only
+//  while a STA attempt is alive — it is paused outright in AP and OFF mode.
+//
+//  Failure handling, by scenario:
+//    wrong password   → the AP rejects us within a second or two; after
+//                       WIFI_AUTHFAIL_LIMIT rejections we stop trying and bring
+//                       up the hotspot so config.ini can be fixed from a phone.
+//    SSID not in range→ association simply times out; the radio is powered down
+//                       and the next attempt is pushed out exponentially, so a
+//                       device left out of range costs one 15 s attempt every
+//                       10 minutes instead of a permanent scan loop.
+//    router rebooted  → same path, and the first backoff (30 s) usually covers
+//                       it, so the clock is back online without user action.
 // ══════════════════════════════════════════════════════════════════════════════
 static void wifi_poll_cb(lv_timer_t *t)
 {
-  // AP mode has no polling to do — web server runs independently in loop()
-  if (wifiMode == WM_AP) { lv_timer_set_period(t, 5000); return; }
+  // Steady states — nothing to poll. Belt and braces: the timer is normally
+  // paused in these modes, so this only catches a mode change mid-tick.
+  if (wifiMode == WM_AP || wifiMode == WM_OFF || wifiMode == WM_IDLE) {
+    lv_timer_pause(t);
+    return;
+  }
+
+  // ── Waiting out a backoff, radio off ───────────────────────────────────────
+  // Signed subtraction keeps this correct across the 49-day millis() rollover.
+  if (wifiMode == WM_RETRY) {
+    int32_t remain = (int32_t)(wifi_retry_at - millis());
+    if (remain <= 0) { wifi_sta_begin(); lv_timer_set_period(t, 1000); }
+    else             { lv_timer_set_period(t, (uint32_t)remain); }
+    return;
+  }
+
+  // ── Gave up permanently (only reachable with WIFI_AUTHFAIL_TO_AP = 0) ──────
+  if (wifiMode == WM_FAILED) {
+    lv_timer_pause(t);
+    return;
+  }
 
   wl_status_t wst = WiFi.status();
 
+  // ── Connected ─────────────────────────────────────────────────────────────
   if (wst == WL_CONNECTED) {
     if (!wifiConnected) {
-      // First connection — start mDNS and web server exactly once
-      wifiConnected = true;
-      wifiMode      = WM_STA;
+      wifiConnected   = true;
+      wifiMode        = WM_STA;
+      wifi_fail_count = 0;
+      wifi_auth_fails = 0;
       MDNS.begin("esp32clock");
       start_web_server();
       Serial.printf("[WiFi] Connected: SSID=%s  IP=%s  URL=http://esp32clock.local\n",
@@ -2148,36 +2477,72 @@ static void wifi_poll_cb(lv_timer_t *t)
     }
     time_t now = time(nullptr);
     timeSynced = (now >= 8 * 3600 * 2);
-    lv_timer_set_period(t, 5000);   // steady-state: poll every 5 s
-
-  } else {
-    // Not connected
-    if (wifiConnected) {
-      // Connection was just lost
-      wifiConnected = false;
-      wifiMode      = WM_CONNECTING;
-      wifi_sta_start = millis();    // restart timeout clock on disconnect
-    }
-
-    // Timeout: give up on STA and fall back to AP
-    if (wifiMode == WM_CONNECTING &&
-        (millis() - wifi_sta_start) > WIFI_STA_TIMEOUT_MS) {
-      Serial.println("[WiFi] STA timeout — falling back to AP hotspot");
-      start_ap_mode();
-      lv_timer_set_period(t, 5000);
-      return;
-    }
-
-    timeSynced = false;
-    // wifiMulti.run() briefly stalls the FreeRTOS scheduler (20–80 ms).
-    // Only attempt reconnect when no modal/editor/overlay is open.
-    if (!modal_cont && !overlay_cont && !apps_cont && cfg.wifi_enabled) {
-      wifiMulti.run(0);
-    }
-    // Poll frequently while connecting so we detect success quickly,
-    // slow down once settled into disconnect-retry mode.
-    lv_timer_set_period(t, (wifiMode == WM_CONNECTING) ? 2000 : 30000);
+    lv_timer_set_period(t, 10000);   // steady state: a cheap status read
+    return;
   }
+
+  // ── Link lost after having been up ────────────────────────────────────────
+  if (wifiConnected) {
+    wifiConnected  = false;
+    timeSynced     = false;
+    wifiMode       = WM_CONNECTING;
+    wifi_sta_start = millis();       // let auto-reconnect have one full window
+    stop_web_server();               // listener is dead with the netif anyway
+    Serial.printf("[WiFi] Link lost (reason %u) — reconnecting\n",
+                  (unsigned)wifi_last_reason);
+  }
+
+  // ── Association window still open ─────────────────────────────────────────
+  if ((millis() - wifi_sta_start) <= WIFI_STA_TIMEOUT_MS) {
+    lv_timer_set_period(t, 1000);
+    return;
+  }
+
+  // ── Window expired — this attempt failed ──────────────────────────────────
+  uint8_t reason = wifi_last_reason;
+  if (wifi_fail_count < 250) wifi_fail_count++;
+
+  if (wifi_reason_is_auth(reason)) {
+    if (wifi_auth_fails < 250) wifi_auth_fails++;
+    Serial.printf("[WiFi] Attempt failed: credentials rejected (reason %u, %u/%d)\n",
+                  (unsigned)reason, (unsigned)wifi_auth_fails, WIFI_AUTHFAIL_LIMIT);
+  } else {
+    Serial.printf("[WiFi] Attempt failed: network not reachable (reason %u)\n",
+                  (unsigned)reason);
+  }
+
+  // Credentials are wrong — retrying cannot help. Stop and open the hotspot so
+  // the web UI is reachable to correct them.
+  if (wifi_auth_fails >= WIFI_AUTHFAIL_LIMIT) {
+#if WIFI_AUTHFAIL_TO_AP
+    Serial.println("[WiFi] Password rejected repeatedly — switching to AP for setup");
+    ntp_stop_client();
+    start_ap_mode();
+#else
+    Serial.println("[WiFi] Password rejected repeatedly — radio off until reboot");
+    ntp_stop_client();
+    wifi_radio_down();
+    wifiMode = WM_FAILED;
+    lv_timer_pause(t);
+#endif
+    return;
+  }
+
+  // Otherwise: power the radio down and wait. 30 s, 60 s, 2 min, 4 min, 8 min,
+  // then a 10 min ceiling — the CPU is idle and the radio is off throughout.
+  uint32_t backoff = WIFI_RETRY_BASE_MS;
+  if (wifi_fail_count > 1) {
+    uint8_t shift = (wifi_fail_count - 1 > 5) ? 5 : (wifi_fail_count - 1);
+    backoff = WIFI_RETRY_BASE_MS << shift;
+    if (backoff > WIFI_RETRY_MAX_MS) backoff = WIFI_RETRY_MAX_MS;
+  }
+  ntp_stop_client();
+  wifi_radio_down();
+  wifiMode      = WM_RETRY;
+  wifi_retry_at = millis() + backoff;
+  Serial.printf("[WiFi] Radio off — next attempt in %lus\n",
+                (unsigned long)(backoff / 1000));
+  lv_timer_set_period(t, backoff);   // one wakeup, when the attempt is due
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2258,6 +2623,46 @@ static void run_scheduled_animation(int hour)
 //  DAILY AUTOMATION  —  brightness schedule + sleep GIF
 //  Called once per minute from clock_tick_cb (only when minute changes).
 // ══════════════════════════════════════════════════════════════════════════════
+// ── Alarm warning overlay ────────────────────────────────────────────────────
+// Fires the alarm without a GIF, replacing it with a plain text warning that
+// the displayed time cannot be trusted. Used for both "NTP is switched off" and
+// "NTP was expected but never arrived" — the buzzer still sounds either way, so
+// the alarm is never silently skipped just because the clock might be adrift.
+//
+// Rationale: the RTC crystal drifts measurably across a full 8 h deep sleep. In
+// WiFi mode the 5-minute early wake exists precisely to re-sync that away before
+// the alarm. With no sync source the drift stands uncorrected, so the user is
+// told to verify against another clock rather than being given a false
+// impression of accuracy.
+static void show_alarm_warning(const char *msg)
+{
+  close_scheduled_gif();
+  set_brightness(50);
+  if (!overlay_cont) {
+    overlay_cont = make_overlay(lv_color_make(20, 20, 20));
+    lv_obj_t *h = lv_label_create(overlay_cont);
+    lv_label_set_text(h, "HELLO!");
+    lv_obj_set_style_text_font(h, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(h, lv_color_white(), 0);
+    lv_obj_align(h, LV_ALIGN_CENTER, 0, -34);
+    lv_obj_t *w = lv_label_create(overlay_cont);
+    lv_label_set_text(w, msg);
+    lv_obj_set_style_text_font(w, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(w, lv_color_make(255, 180, 60), 0);
+    lv_label_set_long_mode(w, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(w, 300);
+    lv_obj_set_style_text_align(w, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(w, LV_ALIGN_CENTER, 0, 32);
+    lv_obj_add_event_cb(overlay_cont, overlay_close_event_cb, LV_EVENT_CLICKED, nullptr);
+  }
+  buzzer_start_alarm();
+}
+
+// Text shown when the mode itself rules NTP out (AP / OFF), versus when NTP was
+// expected but never landed (WiFi mode, radio or server unreachable).
+#define ALARM_WARN_NTP_DISABLED  "NTP disabled - time may have\ndrifted. Check a clock nearby!"
+#define ALARM_WARN_NTP_FAILED    "NTP not in sync\nCheck the time!"
+
 static void run_daily_automation(int hour, int minute)
 {
   Serial.printf("[SCHED] %02d:%02d\n", hour, minute);
@@ -2306,12 +2711,18 @@ static void run_daily_automation(int hour, int minute)
   //
   //  B) Uptime ≤ 5 min AND alarm is HH:MM match:
   //     B1) NTP synced   → time is accurate. Fire normally.
-  //     B2) NTP not synced yet → hold in alarm_ntp_pending = true.
-  //         The pending check runs every minute until NTP syncs or
+  //     B2) NTP still possible but not synced → hold in alarm_ntp_pending.
+  //         Re-checked every minute until NTP syncs, becomes impossible, or
   //         15 min have passed (giving up with a warning alarm).
   //
   //  C) Uptime ≤ 5 min AND alarm is NOT yet at HH:MM (woke 5 min early)
   //     → normal pre-alarm window, let automation continue.
+  //
+  //  D) NTP ruled out by the WiFi mode (AP / OFF) → fire immediately, but with
+  //     the drift warning instead of the GIF. The alarm must never be skipped
+  //     or delayed just because the time cannot be verified; the user is told
+  //     to check another clock. Holding would be pointless here, since no sync
+  //     is ever coming.
   //
   const uint32_t UPTIME_MS       = millis() - boot_millis;
   const uint32_t FIVE_MIN_MS     = 5UL * 60 * 1000;
@@ -2319,6 +2730,9 @@ static void run_daily_automation(int hour, int minute)
   bool           at_alarm_time   = cfg.alarm_enabled
                                    && hour   == cfg.alarm_hour
                                    && minute == cfg.alarm_minute;
+  // NTP is switched off at the source — the user chose AP or OFF. Distinct from
+  // "WiFi mode but the sync has not landed yet", which may still resolve.
+  bool           ntp_disabled    = (cfg.wifi_mode != WCFG_WIFI);
 
   // ── Pending alarm: check each minute whether NTP has synced ──────────
   if (alarm_ntp_pending) {
@@ -2330,31 +2744,18 @@ static void run_daily_automation(int hour, int minute)
       set_brightness(50);
       show_gif_fullscreen(alarm_gif_path());
       buzzer_start_alarm();
+    } else if (!wifi_ntp_possible()) {
+      // The radio gave up or the mode changed — no sync is coming. Fire now
+      // with the warning rather than sitting on the alarm for 15 minutes.
+      alarm_ntp_pending = false;
+      Serial.println("[ALARM] NTP no longer possible — firing with drift warning");
+      show_alarm_warning(ntp_disabled ? ALARM_WARN_NTP_DISABLED
+                                      : ALARM_WARN_NTP_FAILED);
     } else if (UPTIME_MS > NTP_GIVE_UP_MS) {
       // 15 min elapsed, NTP never synced — show warning alarm
       alarm_ntp_pending = false;
       Serial.println("[ALARM] NTP timeout — showing warning alarm");
-      close_scheduled_gif();
-      set_brightness(50);
-      // Warning overlay: no GIF, just text
-      if (!overlay_cont) {
-        overlay_cont = make_overlay(lv_color_make(20, 20, 20));
-        lv_obj_t *h = lv_label_create(overlay_cont);
-        lv_label_set_text(h, "HELLO!");
-        lv_obj_set_style_text_font(h, &lv_font_montserrat_48, 0);
-        lv_obj_set_style_text_color(h, lv_color_white(), 0);
-        lv_obj_align(h, LV_ALIGN_CENTER, 0, -24);
-        lv_obj_t *w = lv_label_create(overlay_cont);
-        lv_label_set_text(w, "NTP not in sync\nCheck the time!");
-        lv_obj_set_style_text_font(w, &lv_font_montserrat_16, 0);
-        lv_obj_set_style_text_color(w, lv_color_make(255, 180, 60), 0);
-        lv_label_set_long_mode(w, LV_LABEL_LONG_WRAP);
-        lv_obj_set_width(w, 280);
-        lv_obj_set_style_text_align(w, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(w, LV_ALIGN_CENTER, 0, 36);
-        lv_obj_add_event_cb(overlay_cont, overlay_close_event_cb, LV_EVENT_CLICKED, nullptr);
-      }
-      buzzer_start_alarm();
+      show_alarm_warning(ALARM_WARN_NTP_FAILED);
     } else {
       Serial.printf("[ALARM] Pending — waiting for NTP (uptime %lus)\n",
                     UPTIME_MS / 1000);
@@ -2365,7 +2766,16 @@ static void run_daily_automation(int hour, int minute)
   // ── Normal alarm match ────────────────────────────────────────────────
   if (at_alarm_time) {
     bool long_uptime = (UPTIME_MS > FIVE_MIN_MS);
-    if (long_uptime || timeSynced) {
+
+    if (ntp_disabled && !timeSynced && !long_uptime) {
+      // Case D: AP / OFF mode. The RTC has no correction source at all, so the
+      // drift is unbounded — it accrues across every deep sleep and keeps
+      // accruing while awake.
+      // `&& !long_uptime` adds a 5 min uptime check, removing that will always warn, however long the device has been up.
+      Serial.printf("[ALARM] Firing at %02d:%02d with drift warning (mode=%s)\n",
+                    hour, minute, wifi_cfg_mode_label());
+      show_alarm_warning(ALARM_WARN_NTP_DISABLED);
+    } else if (long_uptime || timeSynced) {
       // Case A or B1: reliable time — fire immediately
       Serial.printf("[ALARM] Firing at %02d:%02d (uptime=%lus, NTP=%s)\n",
                     hour, minute, UPTIME_MS / 1000, timeSynced ? "yes" : "no");
@@ -2374,7 +2784,7 @@ static void run_daily_automation(int hour, int minute)
       show_gif_fullscreen(alarm_gif_path());
       buzzer_start_alarm();
     } else {
-      // Case B2: fresh boot, NTP not yet synced — hold
+      // Case B2: fresh boot, NTP still possible but not synced — hold
       alarm_ntp_pending = true;
       Serial.printf("[ALARM] Holding at %02d:%02d — waiting for NTP sync\n",
                     hour, minute);
@@ -2652,6 +3062,7 @@ static void show_status_screen(void)
   if      (wifiMode == WM_STA && wifiConnected) wifi_color = lv_color_make(80, 200, 120);  // green
   else if (wifiMode == WM_AP)                   wifi_color = lv_color_make(80, 180, 220);  // cyan
   else if (wifiMode == WM_CONNECTING)           wifi_color = lv_color_make(220, 160, 50);  // amber
+  else if (wifiMode == WM_OFF)                  wifi_color = lv_color_make(120, 120, 140); // grey
   else                                          wifi_color = lv_color_make(200, 80, 80);   // red
   lv_obj_set_style_text_color(wifi_icon, wifi_color, 0);
   lv_obj_align(wifi_icon, LV_ALIGN_LEFT_MID, 20, -28);
@@ -2669,6 +3080,17 @@ static void show_status_screen(void)
     lv_label_set_text(wifi_val, ap_buf);
   } else if (wifiMode == WM_CONNECTING) {
     lv_label_set_text(wifi_val, "Connecting...");
+  } else if (wifiMode == WM_OFF) {
+    lv_label_set_text(wifi_val, "Off  (airplane)");
+  } else if (wifiMode == WM_RETRY) {
+    // Show the wait so it is obvious the clock is idle, not stuck retrying
+    int32_t remain = (int32_t)(wifi_retry_at - millis());
+    if (remain < 0) remain = 0;
+    char rbuf[32];
+    snprintf(rbuf, sizeof(rbuf), "Retry in %lds", (long)(remain / 1000));
+    lv_label_set_text(wifi_val, rbuf);
+  } else if (wifiMode == WM_FAILED) {
+    lv_label_set_text(wifi_val, "Failed  (check password)");
   } else {
     lv_label_set_text(wifi_val, "Offline");
   }
@@ -2682,17 +3104,29 @@ static void show_status_screen(void)
                       LV_EVENT_LONG_PRESSED, nullptr);
 
   // ── Row 2: NTP  (y = 0 from mid = 86px from top) ─────────────────────────
+  // In AP and OFF mode there is no uplink, so "not synced" would read as a
+  // fault when it is simply not applicable — say so explicitly instead.
+  const char *ntp_txt;
+  lv_color_t  ntp_col;
+  if (timeSynced) {
+    ntp_txt = "NTP: synced";        ntp_col = lv_color_make(80, 200, 120);
+  } else if (wifiMode == WM_OFF) {
+    ntp_txt = "NTP: off";           ntp_col = lv_color_make(120, 120, 140);
+  } else if (wifiMode == WM_AP) {
+    ntp_txt = "NTP: n/a  (AP mode)";ntp_col = lv_color_make(120, 120, 140);
+  } else {
+    ntp_txt = "NTP: not synced";    ntp_col = lv_color_make(200, 160, 50);
+  }
+
   lv_obj_t *ntp_icon = lv_label_create(overlay_cont);
   lv_label_set_text(ntp_icon, LV_SYMBOL_REFRESH);
-  lv_obj_set_style_text_color(ntp_icon,
-    timeSynced ? lv_color_make(80, 200, 120) : lv_color_make(200, 160, 50), 0);
+  lv_obj_set_style_text_color(ntp_icon, ntp_col, 0);
   lv_obj_align(ntp_icon, LV_ALIGN_LEFT_MID, 20, 0);
   lv_obj_add_flag(ntp_icon, LV_OBJ_FLAG_IGNORE_LAYOUT);
 
   lv_obj_t *ntp_val = lv_label_create(overlay_cont);
-  lv_label_set_text(ntp_val, timeSynced ? "NTP: synced" : "NTP: not synced");
-  lv_obj_set_style_text_color(ntp_val,
-    timeSynced ? lv_color_make(80, 200, 120) : lv_color_make(200, 160, 50), 0);
+  lv_label_set_text(ntp_val, ntp_txt);
+  lv_obj_set_style_text_color(ntp_val, ntp_col, 0);
   lv_obj_align(ntp_val, LV_ALIGN_LEFT_MID, 44, 0);
   lv_obj_add_flag(ntp_val, LV_OBJ_FLAG_IGNORE_LAYOUT);
 
@@ -2820,7 +3254,7 @@ static void show_battery_screen(void)
 //  CAROUSEL + EDITORS
 //  Long-press → carousel: ◀ [ CLOCK | TIMER | ALARM | WiFi ] ▶
 //  Tap centre → open editor (HH:MM + toggle). Long-press → save + exit to clock.
-//  WiFi: tap centre to toggle inline — no sub-screen.
+//  WiFi: tap centre to open the mode editor (◀ WiFi | AP | OFF ▶).
 // ══════════════════════════════════════════════════════════════════════════════
 
 // ── Carousel / editor state ───────────────────────────────────────────────────
@@ -2837,6 +3271,23 @@ static int  edit_year           = 2026;
 static lv_obj_t *se_day_lbl     = nullptr;
 static lv_obj_t *se_mon_lbl     = nullptr;
 static lv_obj_t *se_yr_lbl      = nullptr;
+
+// ── WiFi mode editor state ────────────────────────────────────────────────────
+// wifi_editor_sel is the *pending* choice: nothing is applied or written to the
+// SD card until the long-press commits it, so browsing the options costs
+// nothing and the radio is torn down at most once per visit.
+static uint8_t   wifi_editor_sel = WCFG_WIFI;
+static lv_obj_t *se_wifi_lbl     = nullptr;   // big mode name
+static lv_obj_t *se_wifi_desc    = nullptr;   // one-line explanation
+static lv_obj_t *se_wifi_dot[3]  = {nullptr, nullptr, nullptr};
+
+// Every path that deletes editor_cont must drop these pointers with it —
+// the labels are children of editor_cont and are freed along with it.
+static void se_wifi_labels_reset()
+{
+  se_wifi_lbl = se_wifi_desc = nullptr;
+  for (int i = 0; i < 3; i++) se_wifi_dot[i] = nullptr;
+}
 
 // ── Flash animation ───────────────────────────────────────────────────────────
 static void se_flash_cb(void *obj, int32_t v)
@@ -2899,6 +3350,43 @@ static void se_m_up(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){edi
 static void se_m_dn(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){edit_min=(edit_min+59)%60;se_refresh();}}
 static void se_tog(lv_event_t*e) {if(lv_event_get_code(e)==LV_EVENT_PRESSED){edit_enabled=!edit_enabled;se_refresh();}}
 
+// ── WiFi mode editor: refresh + left/right selection ──────────────────────────
+// Mirrors se_refresh() for the HH:MM editors — repaints the labels in place and
+// flashes them so a tap is always visibly acknowledged.
+static void wifi_editor_refresh()
+{
+  if (!se_wifi_lbl) return;
+
+  static const char *names[3] = {"WiFi", "AP", "OFF"};
+  static const char *descs[3] = {"join your network",
+                                 "hotspot only, no NTP",
+                                 "airplane mode"};
+  const lv_color_t cols[3] = {lv_color_make(80, 200, 120),   // WiFi  green
+                              lv_color_make(80, 180, 220),   // AP     cyan
+                              lv_color_make(200, 80,  80)};  // OFF    red
+  const uint8_t s = (wifi_editor_sel > WCFG_OFF) ? WCFG_WIFI : wifi_editor_sel;
+
+  lv_label_set_text(se_wifi_lbl, names[s]);
+  lv_obj_set_style_text_color(se_wifi_lbl, cols[s], 0);
+  if (se_wifi_desc) lv_label_set_text(se_wifi_desc, descs[s]);
+
+  // Dots mark which of the three options is selected
+  for (int i = 0; i < 3; i++) {
+    if (!se_wifi_dot[i]) continue;
+    lv_label_set_text(se_wifi_dot[i], (i == s) ? "\xe2\x97\x8f" : "\xe2\x97\x8b"); // "●" : "○"
+    lv_obj_set_style_text_color(se_wifi_dot[i],
+      (i == s) ? lv_color_white() : lv_color_make(80, 80, 100), 0);
+  }
+
+  se_flash(se_wifi_lbl);
+  se_flash(se_wifi_desc);
+}
+
+static void se_wifi_prev(lv_event_t*e)
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){wifi_editor_sel=(uint8_t)((wifi_editor_sel+2)%3);wifi_editor_refresh();} }
+static void se_wifi_next(lv_event_t*e)
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){wifi_editor_sel=(uint8_t)((wifi_editor_sel+1)%3);wifi_editor_refresh();} }
+
 // Days in month (leap-year aware)
 static int days_in_month(int m, int y)
 {
@@ -2918,6 +3406,7 @@ static void open_clock_editor()
 {
   if (editor_cont) { lv_obj_del(editor_cont); editor_cont=nullptr; }
   se_hour_lbl=se_min_lbl=se_onoff_lbl=nullptr;
+  se_wifi_labels_reset();
   se_day_lbl=se_mon_lbl=se_yr_lbl=nullptr;
 
   // Pre-load current RTC
@@ -3076,6 +3565,7 @@ static void open_editor(int h,int m,bool enabled,bool show_toggle)
 {
   if (editor_cont) { lv_obj_del(editor_cont); editor_cont=nullptr; }
   se_hour_lbl=se_min_lbl=se_onoff_lbl=nullptr;
+  se_wifi_labels_reset();
   edit_hour=h; edit_min=m; edit_enabled=enabled;
 
   editor_cont=lv_obj_create(modal_cont);
@@ -3156,6 +3646,90 @@ static void open_editor(int h,int m,bool enabled,bool show_toggle)
   se_refresh();
 }
 
+// ── WiFi mode editor ─────────────────────────────────────────────────────────
+//  ┌─────────────────────────────────────────┐
+//  │              WiFi mode                  │
+//  │   ◀            WiFi             ▶       │
+//  │           join your network             │
+//  │                 ● ○ ○                   │
+//  │           hold to save & exit           │
+//  └─────────────────────────────────────────┘
+//  Left/right zones step the selection; long-press anywhere commits and exits.
+//  Nothing is applied until the commit, so browsing is free.
+static void open_wifi_editor()
+{
+  if (editor_cont) { lv_obj_del(editor_cont); editor_cont=nullptr; }
+  se_hour_lbl=se_min_lbl=se_onoff_lbl=nullptr;
+  se_wifi_labels_reset();
+  wifi_editor_sel = (cfg.wifi_mode > WCFG_OFF) ? WCFG_WIFI : cfg.wifi_mode;
+
+  editor_cont=lv_obj_create(modal_cont);
+  lv_obj_set_size(editor_cont,320,172); lv_obj_set_pos(editor_cont,0,0);
+  lv_obj_set_style_bg_color(editor_cont,lv_color_make(8,12,28),0);
+  lv_obj_set_style_bg_opa(editor_cont,LV_OPA_COVER,0);
+  lv_obj_set_style_border_width(editor_cont,0,0);
+  lv_obj_set_style_pad_all(editor_cont,0,0);
+  lv_obj_set_style_radius(editor_cont,0,0);
+  lv_obj_clear_flag(editor_cont,LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(editor_cont,modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
+
+  // Title
+  lv_obj_t*title=lv_label_create(editor_cont);
+  lv_label_set_text(title,LV_SYMBOL_WIFI "  WiFi mode");
+  lv_obj_set_style_text_font(title,&lv_font_montserrat_14,0);
+  lv_obj_set_style_text_color(title,lv_color_make(180,180,220),0);
+  lv_obj_align(title,LV_ALIGN_TOP_MID,0,8);
+
+  // Left / right arrows — same styling as the carousel arrows
+  lv_obj_t*larr=lv_label_create(editor_cont);
+  lv_label_set_text(larr,LV_SYMBOL_LEFT);
+  lv_obj_set_style_text_font(larr,&lv_font_montserrat_48,0);
+  lv_obj_set_style_text_color(larr,lv_color_make(80,100,180),0);
+  lv_obj_align(larr,LV_ALIGN_LEFT_MID,6,0);
+
+  lv_obj_t*rarr=lv_label_create(editor_cont);
+  lv_label_set_text(rarr,LV_SYMBOL_RIGHT);
+  lv_obj_set_style_text_font(rarr,&lv_font_montserrat_48,0);
+  lv_obj_set_style_text_color(rarr,lv_color_make(80,100,180),0);
+  lv_obj_align(rarr,LV_ALIGN_RIGHT_MID,-6,0);
+
+  // Selected mode — big, colour-coded
+  se_wifi_lbl=lv_label_create(editor_cont);
+  lv_obj_set_style_text_font(se_wifi_lbl,&lv_font_montserrat_48,0);
+  lv_obj_align(se_wifi_lbl,LV_ALIGN_CENTER,0,-16);
+
+  // One-line explanation of the selected mode
+  se_wifi_desc=lv_label_create(editor_cont);
+  lv_obj_set_style_text_font(se_wifi_desc,&lv_font_montserrat_14,0);
+  lv_obj_set_style_text_color(se_wifi_desc,lv_color_make(160,160,180),0);
+  lv_obj_align(se_wifi_desc,LV_ALIGN_CENTER,0,22);
+
+  // Three position dots — same glyphs and font as the carousel row
+  for (int i=0;i<3;i++) {
+    se_wifi_dot[i]=lv_label_create(editor_cont);
+    lv_obj_set_style_text_font(se_wifi_dot[i],&dejavu_mono_14,0);
+    lv_obj_set_pos(se_wifi_dot[i],144+i*14,128);
+  }
+
+  // Touch zones, derived from the drawn geometry so they cannot drift:
+  //   WZ_TOP/WZ_BOT clear the title and the bottom hint,
+  //   WZ_L..WZ_R is a neutral centre strip carrying only editor_cont's
+  //   long-press. That gap is deliberate — if the two arrow zones met in the
+  //   middle, se_zone's LV_EVENT_PRESSED would fire before LV_EVENT_LONG_PRESSED
+  //   and every "hold to save" would nudge the selection one step first.
+  const int WZ_TOP=30, WZ_BOT=150;   // vertical span of both zones
+  const int WZ_L=96,   WZ_R=224;     // neutral centre, wider than the "WiFi" label
+  se_zone(editor_cont,0,   WZ_TOP,WZ_L,     WZ_BOT-WZ_TOP,se_wifi_prev);
+  se_zone(editor_cont,WZ_R,WZ_TOP,320-WZ_R, WZ_BOT-WZ_TOP,se_wifi_next);
+
+  lv_obj_t*hint=lv_label_create(editor_cont);
+  lv_label_set_text(hint,"hold to save & exit");
+  lv_obj_set_style_text_color(hint,lv_color_make(100,100,120),0);
+  lv_obj_set_style_text_opa(hint,LV_OPA_60,0);
+  lv_obj_align(hint,LV_ALIGN_BOTTOM_MID,0,-4);
+  wifi_editor_refresh();
+}
+
 // ── Save helpers ──────────────────────────────────────────────────────────────
 static void close_clock_editor()
 {
@@ -3202,16 +3776,32 @@ static void close_alarm_editor()
   }
 }
 
+static void close_wifi_editor()
+{
+  const uint8_t sel = (wifi_editor_sel > WCFG_OFF) ? WCFG_WIFI : wifi_editor_sel;
+  if (sel == cfg.wifi_mode) {
+    // Nothing chosen — skip the radio teardown and the SD write entirely, so
+    // entering the editor just to look costs nothing.
+    Serial.printf("[SETTINGS] WiFi mode unchanged (%s)\n", wifi_cfg_mode_label());
+    return;
+  }
+  cfg.wifi_mode = sel;
+  Serial.printf("[SETTINGS] WiFi mode -> %s\n", wifi_cfg_mode_label());
+  apply_wifi_state();   // tears down the old mode and brings up the new one
+  save_config();
+}
+
 // ── Modal close ───────────────────────────────────────────────────────────────
 static void modal_close()
 {
   se_hour_lbl=se_min_lbl=se_onoff_lbl=nullptr;
   se_day_lbl=se_mon_lbl=se_yr_lbl=nullptr;
+  se_wifi_labels_reset();
   editor_cont=nullptr;
   if (modal_cont) { lv_obj_del(modal_cont); modal_cont=nullptr; alarm_cont=nullptr; }
 }
 
-// ── Long-press: save and exit all the way to clock ───────────────────────────
+// ── Long-press: save and return to carousel (or exit to clock if already there) ──
 static void modal_longpress_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e)!=LV_EVENT_LONG_PRESSED) return;
@@ -3221,9 +3811,10 @@ static void modal_longpress_cb(lv_event_t *e)
     case 0: close_clock_editor(); break;
     case 1: close_timer_editor(); break;
     case 2: close_alarm_editor(); break;
+    case 3: close_wifi_editor();  break;
     default: break;
   }
-  modal_close();
+  carousel_build();
 }
 
 // ── Carousel tap: enter the selected item ────────────────────────────────────
@@ -3236,10 +3827,8 @@ static void carousel_tap_cb(lv_event_t *e)
       open_editor(cfg.timer_hours,cfg.timer_minutes,false,true); break;
     case 2: // Alarm
       open_editor(cfg.alarm_hour,cfg.alarm_minute,cfg.alarm_enabled,true); break;
-    case 3: // WiFi — inline toggle
-      cfg.wifi_enabled=!cfg.wifi_enabled;
-      apply_wifi_state(); save_config();
-      carousel_build(); break;
+    case 3: // WiFi — sub-screen: arrows select, long-press applies
+      open_wifi_editor(); break;
   }
 }
 
@@ -3254,6 +3843,8 @@ static void carousel_build()
 {
   if (editor_cont) { lv_obj_del(editor_cont); editor_cont=nullptr; }
   se_hour_lbl=se_min_lbl=se_onoff_lbl=nullptr;
+  se_day_lbl=se_mon_lbl=se_yr_lbl=nullptr;
+  se_wifi_labels_reset();
   lv_obj_clean(modal_cont);
 
   struct CarouselItem { const char *icon; const char *name; const char *desc; };
@@ -3263,10 +3854,17 @@ static void carousel_build()
     {LV_SYMBOL_BELL, "ALARM",  "Set wake-up alarm"},
     {LV_SYMBOL_WIFI, "WiFi",   nullptr},
   };
-  char wifi_desc[20]={};
+  char wifi_desc[28]={};
   if (carousel_idx==3)
-    snprintf(wifi_desc,sizeof(wifi_desc),"Currently: %s",cfg.wifi_enabled?"ON":"OFF");
+    snprintf(wifi_desc,sizeof(wifi_desc),"Currently: %s",wifi_cfg_mode_label());
   const char *desc=(carousel_idx==3)?wifi_desc:items[carousel_idx].desc;
+
+  // WiFi = green, AP = cyan, OFF = red. Reused for the icon and the caption so
+  // the mode is readable at a glance without entering a sub-screen.
+  lv_color_t wifi_mode_col =
+    (cfg.wifi_mode==WCFG_WIFI) ? lv_color_make(80,200,120) :
+    (cfg.wifi_mode==WCFG_AP)   ? lv_color_make(80,180,220)
+                               : lv_color_make(200,80,80);
 
   lv_obj_add_event_cb(modal_cont,modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
 
@@ -3291,7 +3889,7 @@ static void carousel_build()
   lv_label_set_text(icon,items[carousel_idx].icon);
   lv_obj_set_style_text_font(icon,&lv_font_montserrat_48,0);
   lv_obj_set_style_text_color(icon,
-    carousel_idx==3&&!cfg.wifi_enabled?lv_color_make(180,60,60):lv_color_make(120,200,255),0);
+    carousel_idx==3?wifi_mode_col:lv_color_make(120,200,255),0);
   lv_obj_align(icon,LV_ALIGN_CENTER,0,-28);
 
   // Name
@@ -3306,9 +3904,12 @@ static void carousel_build()
   lv_label_set_text(desc_lbl,desc);
   lv_obj_set_style_text_font(desc_lbl,&lv_font_montserrat_14,0);
   lv_obj_set_style_text_color(desc_lbl,
-    carousel_idx==3?(cfg.wifi_enabled?lv_color_make(80,200,120):lv_color_make(200,80,80))
-                   :lv_color_make(160,160,180),0);
+    carousel_idx==3?wifi_mode_col:lv_color_make(160,160,180),0);
   lv_obj_align(desc_lbl,LV_ALIGN_CENTER,0,40);
+
+  // Fade the centre content in on every ◀/▶ navigation — same se_flash() the
+  // WiFi mode editor uses on selection change. Arrows and dots stay static.
+  se_flash(icon); se_flash(name_lbl); se_flash(desc_lbl);
 
   // Centre tap zone — uses CLICKED so long-press and tap are mutually
   // exclusive: CLICKED only fires when the finger lifts without triggering
@@ -7221,6 +7822,7 @@ static void apps_carousel_build()
     lv_obj_set_style_text_color(sdesc,
       cfg.menu_sounds ? lv_color_make(80,200,120) : lv_color_make(180,60,60), 0);
     lv_obj_align(sdesc, LV_ALIGN_CENTER, 0, 28);
+    se_flash(sicon); se_flash(sdesc);
   } else if (apps_idx == 7) {
     // ── Bingo! ────────────────────────────────────────────────────────────
     lv_obj_t *name_lbl = lv_label_create(apps_cont);
@@ -7237,6 +7839,7 @@ static void apps_carousel_build()
     lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
     lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
+    se_flash(name_lbl); se_flash(desc_lbl);
   } else if (apps_idx == 6) {
     // ── Snake Letters ─────────────────────────────────────────────────────
     lv_obj_t *name_lbl = lv_label_create(apps_cont);
@@ -7253,6 +7856,7 @@ static void apps_carousel_build()
     lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
     lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
+    se_flash(name_lbl); se_flash(desc_lbl);
 
     if (cfg.sn_high_score > 0) {
       lv_obj_t *hs_lbl = lv_label_create(apps_cont);
@@ -7262,6 +7866,7 @@ static void apps_carousel_build()
       lv_obj_set_style_text_font(hs_lbl, &lv_font_montserrat_14, 0);
       lv_obj_set_style_text_color(hs_lbl, lv_color_make(255, 210, 60), 0);
       lv_obj_align(hs_lbl, LV_ALIGN_CENTER, 0, 44);
+      se_flash(hs_lbl);
     }
   } else if (apps_idx == 5) {
     // ── Letters Rain ──────────────────────────────────────────────────────
@@ -7279,6 +7884,7 @@ static void apps_carousel_build()
     lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
     lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
+    se_flash(name_lbl); se_flash(desc_lbl);
 
     if (cfg.lr_last_score > 0) {
       lv_obj_t *ls_lbl = lv_label_create(apps_cont);
@@ -7288,6 +7894,7 @@ static void apps_carousel_build()
       lv_obj_set_style_text_font(ls_lbl, &lv_font_montserrat_14, 0);
       lv_obj_set_style_text_color(ls_lbl, lv_color_make(255, 210, 60), 0);
       lv_obj_align(ls_lbl, LV_ALIGN_CENTER, 0, 44);
+      se_flash(ls_lbl);
     }
   } else if (apps_idx == 4) {
     // ── Tennis Letters ────────────────────────────────────────────────────
@@ -7305,6 +7912,7 @@ static void apps_carousel_build()
     lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
     lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
+    se_flash(name_lbl); se_flash(desc_lbl);
 
     if (cfg.tennis_high_score > 0) {
       lv_obj_t *hs_lbl = lv_label_create(apps_cont);
@@ -7314,6 +7922,7 @@ static void apps_carousel_build()
       lv_obj_set_style_text_font(hs_lbl, &lv_font_montserrat_14, 0);
       lv_obj_set_style_text_color(hs_lbl, lv_color_make(255, 210, 60), 0);
       lv_obj_align(hs_lbl, LV_ALIGN_CENTER, 0, 44);
+      se_flash(hs_lbl);
     }
   } else {
     // ── Named game items (0=RPS, 1=Dice, 2=Coin, 3=Metronome) ────────────
@@ -7331,6 +7940,7 @@ static void apps_carousel_build()
     lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
     lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
+    se_flash(name_lbl); se_flash(desc_lbl);
   }
 
   // Centre tap zone — CLICKED enters, LONG_PRESSED exits
@@ -7656,7 +8266,10 @@ static void home_screen_init(void)
 
   // ── Background timers ─────────────────────────────────────────────────────
   battery_timer = lv_timer_create(battery_timer_callback, 1000, nullptr);
-  wifi_timer    = lv_timer_create(wifi_poll_cb, 5000, nullptr);
+  wifi_timer    = lv_timer_create(wifi_poll_cb, 1000, nullptr);
+  // apply_wifi_state() ran in setup() before this timer existed — pause it now
+  // if the radio is in a steady state (AP / OFF) so it never ticks needlessly.
+  wifi_timer_sync_to_mode();
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -7839,10 +8452,13 @@ void setup()
   Serial.println("[7] Registering LVGL SD filesystem driver...");
   lvgl_sd_fs_init();
   // ── Step 7b: WiFi + NTP ───────────────────────────────────────────────────
-  // addAP() queues the credential; actual connection happens in wifi_poll_cb()
-  // (an LVGL timer, every 5 s) so setup() is never blocked.
+  // WiFi.begin() only queues the association; the result is picked up by
+  // wifi_poll_cb() (an LVGL timer) so setup() is never blocked.
   // configTime() starts the SNTP client; it syncs automatically once online.
+  // The event handler must be registered first so the very first disconnect
+  // reason is captured — that is what tells a wrong password from a missing AP.
   Serial.println("[7b] Applying WiFi state from config...");
+  WiFi.onEvent(wifi_event_cb, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   apply_wifi_state();
   Serial.println("     Done.");
 

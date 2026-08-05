@@ -29,16 +29,18 @@ A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47
 | **Clock editor** | Sets HH:MM **and** DD/MON/YYYY — full date+time offline, no WiFi needed |
 | **Brightness schedule** | Auto-dims at 19:00 → 19:30 → 20:00, brightens at 06:00 → 07:00 |
 | **Tilt brightness** | Tilt device left/right in the Status screen to adjust brightness in 10% steps |
-| **WiFi + NTP** | Connects at boot, syncs time automatically; can be disabled from the carousel |
-| **Web configuration** | PIN-protected browser UI served by the device — edit `config.ini`, set date/time, reboot; accessible in both STA and AP mode |
-| **AP hotspot** | Falls back to its own WPA2 AP (`ESP32-Clock`) when STA fails; PIN shown on the device screen — physical access required |
+| **WiFi modes** | Three-way radio policy set from the carousel or `config.ini`: **WiFi** (join network, NTP syncs), **AP** (own hotspot only, no internet), **Off** (airplane mode — radio fully down) |
+| **Resilient WiFi connect** | Non-blocking STA association with a disconnect-reason state machine: a rejected password auto-falls-back to the AP hotspot after 2 tries (so the web UI stays reachable to fix it); an unreachable network backs off the radio 30 s → 60 s → 2/4/8 min → 10 min cap instead of scanning forever |
+| **Web configuration** | PIN-protected browser UI served by the device — edit `config.ini`, set date/time, reboot; accessible in both WiFi and AP mode |
+| **AP hotspot** | Own **open** hotspot (no WPA2 passphrase) named `ESP32-Clock-XXXXXX` (unique per device, suffixed from its MAC) when in AP mode or rescuing a rejected password; the boot-generated PIN only authorises the web UI's mutating actions, not joining the hotspot |
 | **DST-aware timezone** | POSIX `tz` string in `config.ini` handles daylight saving automatically forever |
 | **RTC persistence** | Hourly timestamp log on SD card (`/last_seen.txt`) restores time on cold boot without WiFi |
-| **Status screen** | Today's date in the title, WiFi SSID, NTP sync state, current brightness |
+| **Status screen** | Today's date in the title, WiFi SSID/mode, NTP sync state, current brightness |
 | **Battery monitor** | Live percentage, voltage, ADC raw — with LiPo discharge curve |
 | **Battery warning** | Clock text turns orange ≤ 25%, red ≤ 10%; auto-poweroff countdown at ≤ 10% |
 | **Software power-off** | Long-press battery screen → 5 s countdown → deep sleep; RESET button to wake |
-| **Alarm auto-wake** | Device wakes from deep sleep 5 min before alarm to allow NTP sync; falls back to warning screen if sync fails |
+| **Alarm auto-wake** | In WiFi mode, device wakes from deep sleep 5 min before alarm to allow NTP sync; in AP/Off mode it wakes right at alarm time instead (no sync possible, no point burning battery early) |
+| **Alarm drift warning** | If the alarm fires with no reliable time source — AP/Off mode, or WiFi mode where NTP never landed — it still always sounds, but swaps the GIF for a plain text warning telling you to check another clock |
 | **Apps menu** | Long-press the smile GIF → math challenge gate → ASCII games carousel |
 | **Math challenge** | Random arithmetic gate (+ − × ÷, result < 100) with 4 shuffled answer buttons |
 | **Rock Paper Scissors** | Animated 3-2-1 countdown shake → CPU reveals its hand → GO! Shake or hard-tilt the device to restart |
@@ -226,7 +228,10 @@ On cold boot with no WiFi, the firmware reads the last line and restores the RTC
 
 ```ini
 [wifi]
-enabled = true
+# wifi = join the network below, NTP runs, web UI reachable on the LAN
+# ap   = own open hotspot only, no internet/NTP, web UI reachable on the hotspot
+# off  = airplane mode — radio fully down, no NTP, no web UI
+mode = wifi
 ssid = myhomewifi
 password = changeme
 
@@ -305,7 +310,7 @@ next_level_score = 10
 
 | Section | Key | Default | Description |
 |---|---|---|---|
-| `[wifi]` | `enabled` | `true` | Enable WiFi and NTP sync |
+| `[wifi]` | `mode` | `wifi` | `wifi` (join network, NTP on) / `ap` (own hotspot, no NTP) / `off` (airplane mode). Legacy `enabled = true/false` files are still read automatically (`true`→`wifi`, `false`→`ap`) as long as no `mode` key is present, then rewritten to `mode` on the next save. |
 | `[wifi]` | `ssid` | `myhomewifi` | WiFi network name |
 | `[wifi]` | `password` | `changeme` | WiFi password |
 | `[clock]` | `ntp_server` | `pool.ntp.org` | NTP time server |
@@ -400,33 +405,58 @@ To stop a running timer: open the carousel → Timer → set to **Not yet** → 
 
 Opens the HH:MM editor with an **ON / OFF** toggle. Long-press saves to `config.ini`. When enabled, at the configured time any running scheduled animation is first dismissed, then the device raises brightness to 50%, plays `alarm_animation.gif` fullscreen, and sounds the buzzer `beep_sequences` times. The animation fades out automatically after the last beep. Touching the screen dismisses the alarm early.
 
-### WiFi — inline toggle
+### WiFi — mode selector
 
-Tap the centre to toggle WiFi on or off. No sub-screen. The description updates to green **ON** or red **OFF** immediately, and the change is saved to `config.ini`. When WiFi is disabled, NTP sync is suspended and reconnect attempts are skipped entirely.
+Tap the centre to open a dedicated sub-screen — a three-way selector, not an inline toggle:
+
+```
+┌─────────────────────────────────────────┐
+│              WiFi mode                  │
+│   ◀            WiFi             ▶       │
+│           join your network             │
+│                 ● ○ ○                   │
+│           hold to save & exit           │
+└─────────────────────────────────────────┘
+```
+
+Use **◀ ▶** to step through **WiFi** (green — joins the configured network, NTP syncs) → **AP** (cyan — own hotspot only, no internet/NTP) → **OFF** (red — airplane mode, radio fully down). Nothing is applied while browsing; **long-press** commits the selection to `config.ini` and applies it immediately — the old mode is always torn down first (radio, NTP client, web server) before the new one starts, so no listener or netif survives the switch. The carousel's WiFi row shows "Currently: WiFi / AP / OFF" colour-coded the same way.
 
 ---
 
 ## Web Configuration
 
-When WiFi is active the device serves a browser-based configuration UI on port 80 — reachable in **both STA and AP mode**.
+The device serves a browser-based configuration UI on port 80 whenever the radio is up — reachable in **both WiFi and AP mode** (not in **Off**/airplane mode, since the radio is powered down entirely).
 
 ### Connecting
 
-**STA mode** (connected to your home network): navigate to `http://esp32clock.local` or the IP shown in the Status screen WiFi popup.
+**WiFi mode** (joined to your home network): navigate to `http://esp32clock.local` or the IP shown in the Status screen WiFi popup.
 
-**AP mode** (no home WiFi, or STA failed): the device creates a WPA2 hotspot named `ESP32-Clock`. The AP password and web PIN are the same random 6-digit code generated at every boot. Long-press anywhere → Carousel → WiFi to open the detail popup, which shows:
+**AP mode** (chosen explicitly, or entered automatically as a credential-rescue when the WiFi password keeps getting rejected — see [Resilient WiFi connect](#resilient-wifi-connect) below): the device creates its own hotspot, named `ESP32-Clock-XXXXXX` where `XXXXXX` is a 6-hex-digit suffix derived from the device's own MAC address, so multiple units stay distinguishable. Long-press anywhere → Carousel → WiFi to open the detail popup, which shows:
 
 ```
 ┌───────────────────────────────────┐
-│  📶  ESP32-Clock  (AP)            │
+│  📶  ESP32-Clock-8AF8A5           │
 │  IP  192.168.4.1                  │
-│  🔑  PIN: 483921                  │
+│  🔑  Web PIN: 483921              │
 │  http://192.168.4.1               │
 │                      tap to close │
 └───────────────────────────────────┘
 ```
 
-A new PIN is generated on every power cycle — reading it requires physical access to the device screen, so no fixed credential is ever embedded in the firmware.
+The hotspot is **open — no WPA2 passphrase**. Joining it needs nothing more than picking it from a WiFi list; the boot-generated PIN is not a WiFi key, it only unlocks the web UI's mutating actions (`POST /config`, `/settime`, `/reboot`). A new PIN is generated on every power cycle — reading it requires physical access to the device screen, so no fixed credential is ever embedded in the firmware.
+
+In **Off** mode, or while a WiFi-mode connection attempt is between retries (radio intentionally powered down — see below), the detail popup shows what the radio is doing instead of a PIN/URL (e.g. "Radio down — clock runs offline" or "Radio off — retry in 47s"), since there is no web UI to reach.
+
+### Resilient WiFi connect
+
+Joining a network no longer uses a blocking scan-and-connect loop. `WiFi.begin()` is fired once (returns in milliseconds) and a WiFi event handler records *why* a disconnect happened, so the retry logic can tell two very different failures apart:
+
+| Failure | Behaviour |
+|---|---|
+| **Wrong password** (AP actively rejects the credentials) | After 2 rejected attempts, the device stops trying that network and automatically brings up the **AP hotspot** instead, so `config.ini` can be fixed from a phone without a cable. |
+| **Network unreachable** (SSID out of range, router off/rebooting) | Association simply times out (15 s). The radio is then powered fully down and the next attempt is scheduled with exponential backoff: 30 s → 60 s → 2 min → 4 min → 8 min, capped at 10 min. A router reboot is usually caught by the first 30 s retry; a device left permanently out of range costs one 15 s radio-on attempt every 10 minutes instead of scanning forever. |
+
+Radio is powered off completely between retries (not just idle) to save battery — an associated-but-idle radio still draws roughly 20 mA, a scanning one far more.
 
 ### Web UI
 
@@ -454,11 +484,13 @@ The exact same generator (same ticket algorithm, ported to `docs/bingo.js`) is a
 
 ### Security model
 
-- The AP uses WPA2 with the boot-generated PIN — not open
+- The AP hotspot is **deliberately open** (no WPA2 passphrase) — joining it is meant to be frictionless, since it exists purely to reach the web UI, not to protect a network
+- The PIN's job is narrower and different: it authorises the web UI's *mutating* actions only, not joining the hotspot
 - The PIN is never stored, never sent over the wire in cleartext, and never logged to serial
 - The WiFi password is never transmitted to the browser (masked on GET, re-injected server-side on POST if unchanged)
 - All mutating routes (`POST /config`, `POST /settime`, `POST /reboot`) return HTTP 403 if the PIN is wrong or absent
 - A fresh PIN on every boot means stealing a previous PIN is useless
+- Anyone on the open hotspot can still read the config page unauthenticated (as before, over the LAN, and only reachable by being physically close enough to see the AP), but cannot change anything without the PIN shown on the device screen
 
 ---
 
@@ -468,7 +500,9 @@ The exact same generator (same ticket algorithm, ported to `docs/bingo.js`) is a
 Top-right corner shows an Analog clock, view stays opened and refreshes every minute to display the correct time. Clicking on it will return  to the regular Time view. A filled sector centered on the clock center that starts at the top of the hour (12 o’clock) and sweeps clockwise to the current minute position, visually like a pie chart showing elapsed minutes in the current hour. 
 
 ### Status (lower-left tap)
-Title shows today's date (e.g. `Mon 23 Mar 2026`) when the RTC holds a valid time, falling back to `Status` on a fresh unconfigured boot. Shows WiFi connection status (SSID or disconnected), NTP sync state, and current brightness level. **Tilt the device left or right** while this screen is open to decrease or increase brightness in 10% steps.
+Title shows today's date (e.g. `Mon 23 Mar 2026`) when the RTC holds a valid time, falling back to `Status` on a fresh unconfigured boot. **Tilt the device left or right** while this screen is open to decrease or increase brightness in 10% steps.
+
+The WiFi row reflects the live radio state: connected SSID (green), `Connecting...` (amber), `Off (airplane)` (grey) in Off mode, `Retry in Ns` (counting down) while backed off between STA attempts, or `Failed (check password)` after repeated credential rejections. The NTP row is context-aware too — `NTP: synced` / `NTP: not synced` in WiFi mode, `NTP: n/a (AP mode)` in AP mode, and `NTP: off` in Off mode, so an unsynced clock never looks like a fault when the mode itself rules NTP out.
 
 ### Battery (lower-right tap)
 Shows live battery percentage (using a LiPo discharge curve), voltage to two decimal places, and raw ADC value — all updated every second.
@@ -648,20 +682,27 @@ Low-battery gate code will check at startup if the battery is > 10%.
 
 ### Alarm auto-wake and NTP guard
 
-If an alarm is set, the firmware calculates the sleep duration and wakes automatically:
+If an alarm is set **and `[wifi] mode = wifi`**, the firmware calculates the sleep duration and wakes automatically:
 
 - **Alarm > 5 min away:** wakes 5 minutes early so WiFi and NTP have time to sync before the alarm fires
 - **Alarm ≤ 5 min away:** wakes 30 seconds early (no time for NTP; relies on RTC drift being minor)
+
+In **AP** or **Off** mode there is no uplink to sync with, so the early-wake margin is skipped entirely — the device always wakes just 30 seconds before the alarm, saving the battery that would otherwise be spent sitting idle for up to 4.5 minutes waiting on a sync that can never happen.
 
 At alarm time, the following logic applies:
 
 | Condition | Behaviour |
 |---|---|
-| Device uptime > 5 min | Alarm fires normally (was already running, time assumed reliable) |
+| `[wifi] mode = ap` or `off`, fresh wake (uptime ≤ 5 min), never synced | Alarm fires immediately with a **drift warning** instead of the GIF (see below) — there is no correction source, so the RTC's drift since last sync/set is unbounded |
+| `[wifi] mode = ap` or `off`, uptime > 5 min (device already running a while) | Alarm fires normally — the one-time drift warning only applies to a fresh deep-sleep wake, not every subsequent firing |
+| Device uptime > 5 min (WiFi mode) | Alarm fires normally (was already running, time assumed reliable) |
 | Uptime ≤ 5 min, NTP synced | Alarm fires normally (accurate time confirmed) |
-| Uptime ≤ 5 min, NTP not yet synced | Alarm held — checked every minute |
+| Uptime ≤ 5 min, NTP still possible (WiFi mode) but not yet synced | Alarm held — checked every minute |
 | NTP synced while held | Alarm fires immediately |
-| 15 min elapsed, NTP never synced | Warning screen: "HELLO! / NTP not in sync / Check the time!" + buzzer |
+| NTP ruled out while held (mode switched away from WiFi mid-hold) | Alarm fires immediately with the drift warning, rather than continuing to wait |
+| 15 min elapsed, NTP never synced (WiFi mode) | Drift warning: "HELLO! / NTP not in sync / Check the time!" + buzzer |
+
+The drift-warning overlay always sounds the buzzer exactly like a normal alarm — it is never silently skipped, only the GIF is swapped for text. The message differs by cause: `"NTP disabled - time may have drifted. Check a clock nearby!"` when the mode itself rules NTP out (AP/Off), versus the original `"NTP not in sync / Check the time!"` when WiFi mode expected a sync that never arrived.
 
 ### Boot behaviour
 
@@ -826,7 +867,7 @@ read: 8161
     SD.begin() returned: true
     SD mounted OK — type: SD  size: 244 MB
 [CFG] Loading /config.ini...
-[CFG]   wifi.enabled       = true
+[CFG]   wifi.mode          = wifi
 [CFG]   wifi.ssid     = myhomewifi
 [CFG]   wifi.password = (hidden)
 [CFG]   alarm.enabled      = true
@@ -843,8 +884,8 @@ read: 8161
 [7] Registering LVGL SD filesystem driver...
 [7b] Applying WiFi state from config...
 [TZ] Applied: CET-1CEST,M3.5.0,M10.5.0/3
-[WiFi] Enabling...
-     Done.
+[WiFi] Mode WiFi — joining configured network
+[WiFi] STA attempt 1 -> SSID 'myhomewifi'
 [BAT] Boot check: 4.11V = 91%
 [8] Building UI...
 ========== SETUP DONE ==========
@@ -870,17 +911,19 @@ read: 8161
 | IMU not working | Address mismatch or wiring | Confirm `IMU_ADDRESS = 0x6B`; check serial for IMU error code |
 | Alarm not firing | `enabled = false` or device was asleep | Set `enabled = true`; check boot log for wakeup cause |
 | Web UI returns 403 | Wrong or missing PIN | Read the current PIN from the device screen (long-press → Carousel → WiFi) |
-| Web UI not reachable in AP mode | Not connected to `ESP32-Clock` AP | Connect using the PIN shown on the device screen, then navigate to `http://192.168.4.1` |
-| Web UI not reachable in STA mode | mDNS not resolving | Use the IP address shown in the Status WiFi popup instead of `esp32clock.local` |
+| Web UI not reachable in AP mode | Not connected to the device's hotspot | The AP is open (no password needed) — join `ESP32-Clock-XXXXXX` from your WiFi list (name shown on the device's WiFi detail popup), then navigate to `http://192.168.4.1` |
+| Web UI not reachable in WiFi mode | mDNS not resolving | Use the IP address shown in the Status WiFi popup instead of `esp32clock.local` |
+| Web UI unreachable, popup shows "Radio off — retry in Ns" | Backed off after a failed connection attempt | Normal — wait out the countdown, or power-cycle to force an immediate retry |
 | Config saved but WiFi not reconnecting | WiFi/NTP changes need a reboot | Use the Reboot button in the web UI after saving |
-| Date/time set via web not sticking | RTC drift before next NTP sync | Normal — NTP will correct it at next sync; disable WiFi if you want the manual time to persist |
+| Date/time set via web not sticking | RTC drift before next NTP sync | Normal — NTP will correct it at next sync; set `[wifi] mode = ap` or `off` if you want the manual time to persist |
 | Alarm rings twice | RTC drift + NTP correction | Fixed in v1.4.1 — NTP guard prevents double-fire |
-| Warning screen at alarm time | NTP did not sync within 15 min | Check WiFi; device woke 5 min early specifically to allow sync |
+| Drift warning at alarm time (text instead of GIF) | `[wifi] mode = ap`/`off` (no sync source), or WiFi mode where NTP did not sync within 15 min | Expected in AP/Off mode — there's nothing to sync with. In WiFi mode, check the network; the device woke 5 min early specifically to allow sync |
+| WiFi keeps falling back to the AP hotspot | Password in `config.ini` is being rejected (2 failed attempts triggers the rescue) | Join the open `ESP32-Clock-XXXXXX` hotspot, open the web UI, correct the WiFi password, save, then set `[wifi] mode = wifi` again |
 | Buzzer plays all tones at same pitch | Active buzzer used, or ESP32 core issue | Use a **passive** buzzer; firmware uses `ledcChangeFrequency()` for pitch control |
 | Apps menu not opening | Long-pressing wrong zone | Long-press must be on the **smile GIF** (upper-left tap first, then long-press the GIF) |
 | Math challenge not appearing | Smile GIF not open | Must open the smile GIF first by tapping upper-left |
 | Font not found (compile error) | Custom `.c` files missing | Generate and place `montserrat_96.c`, `dejavu_mono_8.c`, `dejavu_mono_14.c`, `dejavu_mono_16.c` |
-| UI stutters during games/math | WiFi reconnect stall | Fixed — `apps_cont` guard added to `wifi_poll_cb` |
+| UI stutters during games/math while reconnecting | Historical issue, pre-v2.7.1 | Fixed in v2.7.1 — `WiFi.begin()` replaced the blocking `WiFiMulti::run()` scan, so reconnect attempts no longer stall LVGL regardless of what's open |
 | `last_seen.txt` not created | SD write error or low battery | Check SD card is writable FAT32; battery must be above 3.4V |
 | BOOT button doesn't wake from sleep | Hardware limitation | GPIO9 is not an LP GPIO on ESP32-C6; press **RESET** instead |
 | Battery % jumps on unplug | ADC reads elevated USB voltage | Normal — LiPo estimate is slightly elevated while USB powers the system |
@@ -897,18 +940,18 @@ read: 8161
 - **Carousel** — a full-screen LVGL modal opened by long-press. Each tap on ◀/▶ calls `lv_obj_clean()` and rebuilds the view in place. The centre zone uses `LV_EVENT_CLICKED` (not `LV_EVENT_PRESSED`) so long-press and tap are mutually exclusive — the editor never opens before the long-press exit fires.
 - **Shared editor** — `open_editor()` builds the HH:MM widget for Timer and Alarm. `open_clock_editor()` builds the full two-row date+time widget. `modal_longpress_cb()` dispatches to the correct save function based on `carousel_idx`.
 - **Animation priority** — `close_scheduled_gif()` forcefully tears down any scheduled overlay (cancels fade timer, deletes overlay synchronously) before alarm or timer open their GIF. Scheduled animation is also skipped entirely if the alarm fires on the same minute.
-- **Apps menu** — `apps_cont` is a global LVGL object separate from `modal_cont` and `overlay_cont`. `wifi_poll_cb` skips `wifiMulti.run()` while it is open to prevent radio lock stalls during gameplay and math input.
+- **Apps menu** — `apps_cont` is a global LVGL object separate from `modal_cont` and `overlay_cont`.
 - **ASCII games** — all art is rendered using DejaVu Mono fixed-width font via LVGL labels. RPS and Dice use LVGL timer callbacks (`rps_anim_tick_cb`, `dice_anim_tick_cb`) at 250 ms intervals for consistent animation cadence. Buzzer tones use `ledcChangeFrequency()` to switch pitch without re-attaching the PWM channel.
 - **Gyro shake/tilt trigger** — `app_gyro_poll_cb()` runs as a 150 ms LVGL timer while RPS or Dice is active. It reads `accelZ` and `accelY` from the QMI8658; a Z-axis spike (|ΔaccelZ| > 1.8 g between samples) detects a physical shake, and a hard side tilt (|accelY| > 1.0 g) detects a roll gesture. Both call `app_screen_start()` identically to a screen tap. The timer is created when the game starts and deleted when leaving.
 - **Metronome** — beat timing uses two `esp_timer` hardware timers (`metro_hw_beat_cb`, `metro_hw_off_cb`) running outside the LVGL loop for µs-accurate periods. The beat callback writes directly to `ledcChangeFrequency()` (safe from timer task context) and sets a volatile flag. A 20 ms LVGL poll timer (`metro_dot_poll_cb`) reads the flag and updates dot colours on the LVGL thread. Changing BPM while running stops and restarts the periodic timer with the new `60,000,000 / bpm` µs period. Changing time signature calls `metro_build_ui()` which rebuilds only the dot row, then restarts if it was running.
 - **Bingo!** — `bn_shuffle()` runs a single Fisher-Yates pass over 1–90 into `bn_order[]` at game start, so every draw is just `bn_order[bn_count++]` with no "already called?" lookup ever needed. `bn_anim_tick_cb()` (250 ms LVGL timer) drives three cosmetic "peek" frames sampled from the remaining pool before revealing the real, already-fixed next number. Tap, the circle, and tilt (own 150 ms gyro timer, `bn_gyro_tick_cb`, hysteresis-latched on `accelY`) all funnel through the same `bn_start_reveal()`. The `/bingo` web route serves a static `PROGMEM` page — ticket generation and printing happen entirely client-side, so the request costs the ESP32 nothing beyond `send_P()`.
 - **Emotion tilt** — `zone_ul_cb` sets `emotion_tilt_active = true` and starts `tilt_timer` after opening the smile GIF. `tilt_poll_cb` branches on this flag: in emotion mode it reads both `accelX` (forward/back) and `accelY` (left/right), determines the desired GIF path, and calls `lv_gif_set_src()` on the existing widget (retrieved from `overlay_cont` user data) only when the path changes. This swaps the animation in-place with no overlay rebuild. Both the flag and the timer are cleared by `overlay_close_event_cb`.
 - **Buzzer state machine** — a single 9-step table drives both alarm and timer patterns. `buzzer_fade_after` is set by the caller for finite sequences; `buzzer_stop()` triggers `overlay_fade_and_close()` automatically after the last beep.
-- **WiFi reconnect guard** — `wifi_poll_cb()` skips `wifiMulti.run()` when any modal or overlay is open, when WiFi is manually disabled (`cfg.wifi_enabled`), and reduces attempts to every 30 s when disconnected — preventing radio lock stalls from blocking UI interaction.
-- **Automation gate** — `run_daily_automation()` fires when `now > 2026-01-01` (RTC sanity check) instead of `timeSynced`, so brightness schedules, alarms, and animations all work correctly when WiFi is disabled or the time was set manually.
-- **Deep sleep & Alarm NTP guard** — `boot_millis` captured at the very start of `setup()`. Wakes 5 min before alarm when > 5 min away, 30 s when close. Holds `alarm_ntp_pending` if time unconfirmed; falls back to warning overlay after 15 min.
-- **config.ini** — parsed once at boot with a hand-rolled INI reader (no external library). On save, `[wifi]`, `[alarm]`, `[timer]`, and `[menu]` sections are fully rewritten; all other sections and comments are preserved.
-- **Web configuration server** — `WebServer` on port 80, started once and shared between STA and AP modes. The boot-generated PIN (`ap_pin[7]`) is seeded from `esp_timer_get_time()` and used as both the WPA2 AP password and the web UI gate. `GET /` sends the config textarea with the WiFi password masked; `POST /config` re-injects the real password from RAM if the placeholder is unchanged, then writes to SD and calls `load_config()`. `POST /settime` parses `YYYY-MM-DDTHH:MM` and calls `settimeofday()` directly. `POST /reboot` calls `ESP.restart()` after flushing the HTTP response. All three POST routes return HTTP 403 on PIN mismatch.
+- **WiFi state machine** — `wifiMode` (`WM_IDLE` / `CONNECTING` / `STA` / `AP` / `RETRY` / `FAILED` / `OFF`) tracks what the radio is *actually* doing, kept deliberately separate from `cfg.wifi_mode` (what the user asked for) so a config.ini edit over the web can never desync live state. `WiFiMulti` was removed — its `run()` performed a blocking full channel scan (~1.5-3 s) on every poll; plain `WiFi.begin()` is non-blocking and the IDF drives association in its own task, so `loop()` and LVGL are never stalled by a reconnect attempt regardless of what UI is open. A `WiFi.onEvent()` handler records the disconnect reason (`wifi_last_reason`), which `wifi_reason_is_auth()` classifies as a credential rejection or not: repeated auth failures (`WIFI_AUTHFAIL_LIMIT = 2`) trigger the AP rescue, anything else backs off exponentially (`WIFI_RETRY_BASE_MS` 30 s, doubling to a `WIFI_RETRY_MAX_MS` 10 min ceiling) with the radio fully powered down between attempts via `wifi_radio_down()`. `wifi_poll_cb()` is paused outright (`lv_timer_pause`) in the AP/Off/idle steady states rather than polling a fixed interval.
+- **Automation gate** — `run_daily_automation()` fires when `now > 2026-01-01` (RTC sanity check) instead of `timeSynced`, so brightness schedules, alarms, and animations all work correctly when WiFi is in AP/Off mode or the time was set manually.
+- **Deep sleep & Alarm NTP guard** — `boot_millis` captured at the very start of `setup()`. In WiFi mode, wakes 5 min before alarm when > 5 min away, 30 s when close; AP/Off mode always wakes 30 s early since there is no sync to wait for (`wifi_ntp_possible()` gates this). Holds `alarm_ntp_pending` while a sync is still possible; `show_alarm_warning()` fires the buzzer with a text overlay instead of the GIF if NTP is ruled out by the mode (AP/Off) or times out after 15 min in WiFi mode — the alarm itself is never skipped or delayed, only its visual changes.
+- **config.ini** — parsed once at boot with a hand-rolled INI reader (no external library). On save, `[wifi]`, `[alarm]`, `[timer]`, and `[menu]` sections are fully rewritten (using the new `mode = wifi|ap|off` key); all other sections and comments are preserved. A legacy `[wifi] enabled` key (no `mode` key present) is still read and mapped (`true`→`wifi`, `false`→`ap`) for backward compatibility with files from before v2.7.1.
+- **Web configuration server** — `WebServer` on port 80, whose routes are registered exactly once (`webRoutesRegistered`) since `WebServer::on()` appends to a linked list and would leak a duplicate handler set on every AP/WiFi mode switch otherwise; `start_web_server()`/`stop_web_server()` just start/stop the listener (and `MDNS.end()`) on top of that fixed route table as the radio comes and goes. The boot-generated PIN (`ap_pin[7]`) is seeded from `esp_timer_get_time()` and authorises the web UI's mutating routes only — the AP hotspot itself (`ap_ssid`, `ESP32-Clock-XXXXXX` from the softAP MAC) is deliberately open, no WPA2 passphrase. `GET /` sends the config textarea with the WiFi password masked; `POST /config` re-injects the real password from RAM if the placeholder is unchanged, then writes to SD and calls `load_config()`. `POST /settime` parses `YYYY-MM-DDTHH:MM` and calls `settimeofday()` directly. `POST /reboot` calls `ESP.restart()` after flushing the HTTP response. All three POST routes return HTTP 403 on PIN mismatch.
 
 ---
 
@@ -937,7 +980,8 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v2.5.0 | ✅ released | Letters Rain game: letters and modifiers fall in waves; catch the target letter (A→Z) with a gyro paddle while dodging wrong letters |
 | v2.6.0 | ✅ released | Snake Letters game: classic snake with alphabet targets, distraction letters, and length modifiers |
 | v2.6.1 | ✅ released | Bugfix: Clock editor touch zones re-derived from drawn geometry, fixing dead strips and drift between the HH/mm/date fields; Metronome BPM label right-aligned so digits grow without overlapping the "BPM" unit or the slider |
-| v2.7.0 | 🚀 new | Bingo! — on-device 1–90 number caller (tap/tilt to draw, cycle-and-reveal animation, call-history popup); web-served printable UK/housie ticket sheets at `/bingo`, linked from the Web Configuration page; same generator mirrored on the docs site at `/bingo.html` |
+| v2.7.0 | ✅ released | Bingo! — on-device 1–90 number caller (tap/tilt to draw, cycle-and-reveal animation, call-history popup); web-served printable UK/housie ticket sheets at `/bingo`, linked from the Web Configuration page; same generator mirrored on the docs site at `/bingo.html` |
+| v2.7.1 | 🚀 new | WiFi configuration redesign — three-way `[wifi] mode = wifi\|ap\|off` (replaces the old on/off toggle) with a carousel sub-screen selector; non-blocking connect state machine with credential-rejection → automatic AP rescue and exponential backoff for unreachable networks (`WiFiMulti` removed); AP hotspot is now **open** and named `ESP32-Clock-XXXXXX` per device — the PIN authorises only the web UI's mutating actions; alarm always fires with a drift-warning overlay instead of the GIF when no time-sync source is available (AP/Off mode, or NTP timeout), and the 5-minute early-wake margin is skipped entirely outside WiFi mode |
 
 ## License
 

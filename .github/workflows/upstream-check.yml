@@ -1,0 +1,77 @@
+# .github/workflows/upstream-check.yml
+#
+# Early warning that an upstream release has broken the build.
+#
+# Compiles the sketch against whatever esp32, lvgl, GFX and FastIMU currently
+# ship, instead of the versions pinned in build.yml. A failure here means a
+# dependency moved — not that anything in this repository is wrong.
+#
+# Weekly rather than per-PR. When this ran on every pull request it resolved to
+# exactly the pinned versions and produced a byte-identical binary, so it cost
+# every PR roughly three minutes and 1.5GB of uncached downloads to report
+# nothing. Upstream moves on the order of weeks; this cadence matches it.
+
+name: Upstream check
+
+on:
+  schedule:
+    # Mondays, 06:00 UTC.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  latest:
+    name: Build against latest dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build firmware
+        uses: ./.github/actions/arduino-build
+        with:
+          # Duplicated from build.yml, which is authoritative. Accepted here
+          # because this is a canary: if the two ever drift, the worst outcome
+          # is that the canary tests a slightly different board config, which
+          # costs nothing real. Do not copy the FQBN into anything that ships.
+          fqbn: >-
+            esp32:esp32:esp32c6:JTAGAdapter=default,CDCOnBoot=cdc,PartitionScheme=default_8MB,CPUFreq=160,FlashMode=qio,FlashFreq=80,FlashSize=8M,ZigbeeMode=default,DebugLevel=none
+          core-version: latest
+          lvgl-version: latest
+          gfx-version: latest
+          fastimu-version: latest
+          # A cache keyed on the string "latest" would freeze whatever happened
+          # to be current when it was first written and stop tracking anything.
+          use-cache: "false"
+          output-dir: build-out
+
+      - name: Report resolved versions and size
+        if: always() && hashFiles('compile.log') != ''
+        run: |
+          {
+            echo "### Latest upstream dependencies"
+            echo ""
+            echo "Compare these against the pins in \`build.yml\`."
+            echo ""
+            echo '```'
+            arduino-cli core list
+            arduino-cli lib list
+            echo '```'
+            echo ""
+            echo '```'
+            grep -E "of (program storage space|dynamic memory)" compile.log || echo "no size data"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload compile log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: upstream-check-log
+          path: compile.log
+          retention-days: 30

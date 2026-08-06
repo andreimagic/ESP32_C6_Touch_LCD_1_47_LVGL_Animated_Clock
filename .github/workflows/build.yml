@@ -1,0 +1,100 @@
+# .github/workflows/build.yml
+#
+# Stage 1 — compile validation.
+# Proves the sketch builds against a pinned toolchain and fits the 3MB APP partition.
+
+name: Build
+
+on:
+  pull_request:
+    branches: [development, main]
+  push:
+    branches: [development, main]
+  workflow_dispatch:
+
+# A new push to the same PR cancels the previous run.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # A new hardware target is one new include: block — never a rewrite.
+        # Versions live here rather than in env: because the env context is not
+        # available to strategy. Flash size is likewise a per-entry property: a
+        # 4MB-flash variant cannot use PartitionScheme=default_8MB and needs its
+        # own partition choice.
+        include:
+          - name: ESP32-C6 Touch LCD 1.47
+            slug: esp32c6-lcd147
+            # Mirrors the mandatory IDE settings from the README:
+            #   USB CDC On Boot = Enabled      -> CDCOnBoot=cdc
+            #   Flash Size      = 8MB (64Mb)   -> FlashSize=8M
+            #   Partition       = 8M w/ spiffs -> PartitionScheme=default_8MB  (3MB APP)
+            #   CPU 160MHz / QIO / 80MHz / JTAG Disabled / Zigbee Disabled
+            # DebugLevel is build-affecting (sets CORE_DEBUG_LEVEL). The README
+            # doesn't mention it, so the IDE default 'none' is what everyone
+            # builds with -- pinned here so the two can't drift apart silently.
+            fqbn: >-
+              esp32:esp32:esp32c6:JTAGAdapter=default,CDCOnBoot=cdc,PartitionScheme=default_8MB,CPUFreq=160,FlashMode=qio,FlashFreq=80,FlashSize=8M,ZigbeeMode=default,DebugLevel=none
+            core-version: "3.3.11"
+            lvgl-version: "9.5.0"
+            gfx-version: "1.6.7"
+            fastimu-version: "1.3.0"
+
+    steps:
+      # Checkout lands the repo at .../<repo-name>/, which matches the .ino
+      # filename — so arduino-cli accepts it as a sketch folder unmodified.
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build firmware
+        uses: ./.github/actions/arduino-build
+        with:
+          fqbn: ${{ matrix.fqbn }}
+          core-version: ${{ matrix.core-version }}
+          lvgl-version: ${{ matrix.lvgl-version }}
+          gfx-version: ${{ matrix.gfx-version }}
+          fastimu-version: ${{ matrix.fastimu-version }}
+          output-dir: build-out
+
+      - name: Report size
+        if: always() && hashFiles('compile.log') != ''
+        run: |
+          {
+            echo "### ${{ matrix.name }}"
+            echo ""
+            echo '```'
+            grep -E "of (program storage space|dynamic memory)" compile.log || echo "no size data"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload firmware
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: firmware-${{ matrix.slug }}-${{ github.sha }}
+          path: |
+            build-out/*.bin
+            build-out/*.elf
+            build-out/*.map
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload compile log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: compile-log-${{ matrix.slug }}
+          path: compile.log
+          retention-days: 7

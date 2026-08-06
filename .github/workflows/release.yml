@@ -1,0 +1,168 @@
+# .github/workflows/release.yml
+#
+# Stage 3 — tag and release.
+# On every push to main, read FW_VERSION from the sketch and, if that version
+# isn't tagged yet, build it and publish a GitHub Release with the binaries.
+#
+# The FW_VERSION macro is the single source of truth: this workflow only reads
+# it. It never edits source and never pushes a commit back to main — the only
+# ref it creates is the tag.
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  ESP32_CORE_VERSION: "3.3.11"
+  LVGL_VERSION: "9.5.0"
+  GFX_VERSION: "1.6.7"
+  FASTIMU_VERSION: "1.3.0"
+  FQBN: "esp32:esp32:esp32c6:JTAGAdapter=default,CDCOnBoot=cdc,PartitionScheme=default_8MB,CPUFreq=160,FlashMode=qio,FlashFreq=80,FlashSize=8M,ZigbeeMode=default,DebugLevel=none"
+
+jobs:
+  release:
+    name: Tag and release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Decides whether there is anything to do. Pushes to main that don't
+      # change FW_VERSION (docs, workflow tweaks, a merge that was already
+      # released) land on an existing tag and exit cleanly here.
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          FW=".github/scripts/fw-version.sh"
+          SKETCH="$(bash "$FW" sketch-name)"
+          VERSION="$(bash "$FW" extract "$SKETCH")"
+          bash "$FW" validate "$VERSION"
+
+          if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+            echo "::notice::Tag $VERSION already exists — nothing to release."
+            echo "Tag \`$VERSION\` already exists; no release cut." >> "$GITHUB_STEP_SUMMARY"
+            echo "should-release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::$VERSION is not tagged yet — cutting a release."
+            echo "should-release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          # A prerelease (v2.8.0-beta) still ships, but is flagged so GitHub
+          # keeps it out of "Latest release".
+          if bash "$FW" is-prerelease "$VERSION"; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sketch=$SKETCH" >> "$GITHUB_OUTPUT"
+
+      - name: Build firmware
+        if: steps.version.outputs.should-release == 'true'
+        uses: ./.github/actions/arduino-build
+        with:
+          fqbn: ${{ env.FQBN }}
+          core-version: ${{ env.ESP32_CORE_VERSION }}
+          lvgl-version: ${{ env.LVGL_VERSION }}
+          gfx-version: ${{ env.GFX_VERSION }}
+          fastimu-version: ${{ env.FASTIMU_VERSION }}
+          output-dir: build-out
+
+      # The ESP32 core emits a single flashable image itself (the
+      # objcopy.postobjcopy.3 hook runs esptool merge-bin), already using the
+      # correct esp32c6 bootloader offset of 0x0 rather than the 0x1000 default
+      # used by the Xtensa targets. Consume that rather than re-deriving it.
+      - name: Collect release assets
+        if: steps.version.outputs.should-release == 'true'
+        id: assets
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SKETCH: ${{ steps.version.outputs.sketch }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+
+          MERGED="build-out/${SKETCH}.merged.bin"
+          if [ ! -f "$MERGED" ]; then
+            echo "::error::Expected merged image '$MERGED' was not produced. Files in build-out:"
+            ls -la build-out >&2
+            exit 1
+          fi
+
+          cp "$MERGED"                        "release/firmware-${VERSION}-full.bin"
+          cp "build-out/${SKETCH}.bin"        "release/firmware-${VERSION}-app.bin"
+          cp "build-out/${SKETCH}.elf"        "release/firmware-${VERSION}.elf"
+
+          {
+            echo "### Flash size"
+            echo ""
+            echo '```'
+            grep -E "of (program storage space|dynamic memory)" compile.log || echo "no size data"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Captured into the release notes below.
+          grep -E "of program storage space" compile.log > flash-line.txt || echo "" > flash-line.txt
+
+      - name: Create tag
+        if: steps.version.outputs.should-release == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" -m "Release $VERSION"
+          git push origin "$VERSION"
+
+      - name: Publish release
+        if: steps.version.outputs.should-release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          {
+            echo "Built from \`${GITHUB_SHA}\` with the toolchain pinned in CI:"
+            echo ""
+            echo "- ESP32 core \`${ESP32_CORE_VERSION}\`"
+            echo "- LVGL \`${LVGL_VERSION}\`"
+            echo "- GFX Library for Arduino \`${GFX_VERSION}\`, FastIMU \`${FASTIMU_VERSION}\`"
+            echo ""
+            echo "\`\`\`"
+            cat flash-line.txt
+            echo "\`\`\`"
+            echo ""
+            echo "### Flashing"
+            echo ""
+            echo "\`firmware-${VERSION}-full.bin\` is a complete image — bootloader, partition table and app — flashed at offset \`0x0\`:"
+            echo ""
+            echo "\`\`\`"
+            echo "esptool --chip esp32c6 write-flash 0x0 firmware-${VERSION}-full.bin"
+            echo "\`\`\`"
+            echo ""
+            echo "\`firmware-${VERSION}-app.bin\` is the application partition alone, for OTA or for reflashing over an existing install at \`0x10000\`."
+          } > notes.md
+
+          FLAGS=(--title "$VERSION" --notes-file notes.md)
+          [ "$PRERELEASE" = "true" ] && FLAGS+=(--prerelease)
+
+          gh release create "$VERSION" "${FLAGS[@]}" release/*

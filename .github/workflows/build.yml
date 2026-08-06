@@ -39,6 +39,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # A new hardware target is one new include: block — never a rewrite.
+        # Flash size is a per-entry property: a 4MB-flash variant cannot use
+        # PartitionScheme=default_8MB and needs its own partition choice.
         include:
           - name: ESP32-C6 Touch LCD 1.47
             slug: esp32c6-lcd147
@@ -59,64 +62,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Install arduino-cli
-        uses: arduino/setup-arduino-cli@v2
-
-      - name: Restore Arduino cache
-        uses: actions/cache@v6
+      - name: Build firmware
+        uses: ./.github/actions/arduino-build
         with:
-          path: |
-            ~/.arduino15
-            ~/Arduino/libraries
-          key: arduino-${{ runner.os }}-core${{ env.ESP32_CORE_VERSION }}-lvgl${{ env.LVGL_VERSION }}-gfx${{ env.GFX_VERSION }}-imu${{ env.FASTIMU_VERSION }}
-
-      - name: Install ESP32 core
-        run: |
-          arduino-cli config init --overwrite
-          arduino-cli config add board_manager.additional_urls \
-            https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
-          arduino-cli core update-index
-          arduino-cli core install "esp32:esp32@${ESP32_CORE_VERSION}"
-
-      - name: Install libraries
-        run: |
-          arduino-cli lib update-index
-          arduino-cli lib install "lvgl@${LVGL_VERSION}"
-          arduino-cli lib install "GFX Library for Arduino@${GFX_VERSION}"
-          arduino-cli lib install "FastIMU@${FASTIMU_VERSION}"
-
-      # LVGL 9.5 resolves its config in this order:
-      #   1. LV_CONF_PATH
-      #   2. lv_conf.h reachable via __has_include  (finds the sketch-folder copy)
-      #   3. ../../lv_conf.h                        (i.e. libraries/lv_conf.h)
-      # The sketch-folder copy at the repo root is what actually satisfies this
-      # (verified: removing it makes LVGL fall through to branch 3 and error).
-      # Copying it to libraries/ makes branch 3 valid too, so the build is
-      # deterministic regardless of how includes get resolved.
-      - name: Install project lv_conf.h
-        run: |
-          test -f lv_conf.h || { echo "::error::lv_conf.h missing from repo root"; exit 1; }
-          mkdir -p "$HOME/Arduino/libraries"
-          cp lv_conf.h "$HOME/Arduino/libraries/lv_conf.h"
-
-      - name: Record toolchain
-        run: |
-          arduino-cli version
-          arduino-cli core list
-          arduino-cli lib list
-
-      - name: Compile
-        id: compile
-        run: |
-          set -o pipefail
-          arduino-cli compile \
-            --fqbn "${{ matrix.fqbn }}" \
-            --warnings default \
-            --output-dir "build-out" \
-            . 2>&1 | tee compile.log
+          fqbn: ${{ matrix.fqbn }}
+          core-version: ${{ env.ESP32_CORE_VERSION }}
+          lvgl-version: ${{ env.LVGL_VERSION }}
+          gfx-version: ${{ env.GFX_VERSION }}
+          fastimu-version: ${{ env.FASTIMU_VERSION }}
+          output-dir: build-out
 
       - name: Report size
-        if: always() && steps.compile.outcome != 'skipped'
+        if: always() && hashFiles('compile.log') != ''
         run: |
           {
             echo "### ${{ matrix.name }}"

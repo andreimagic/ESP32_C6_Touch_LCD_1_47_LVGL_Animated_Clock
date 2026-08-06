@@ -1,0 +1,95 @@
+# Installs the pinned Arduino toolchain and compiles the sketch for one board
+# target. Shared by build.yml (Stage 1) and release.yml (Stage 3) so the two can
+# never drift on the FQBN, the pinned versions, or the lv_conf.h handling — the
+# release must be built exactly the way CI validated it.
+
+name: Arduino build
+description: Install the pinned Arduino toolchain and compile the sketch for one board target.
+
+inputs:
+  fqbn:
+    description: Fully-qualified board name, including every pinned menu option.
+    required: true
+  core-version:
+    description: esp32:esp32 core version, matching Boards Manager on the dev machine.
+    required: true
+  lvgl-version:
+    required: true
+    description: lvgl library version.
+  gfx-version:
+    required: true
+    description: "\"GFX Library for Arduino\" version."
+  fastimu-version:
+    required: true
+    description: FastIMU library version.
+  output-dir:
+    description: Directory to place the compiled binaries in.
+    required: false
+    default: build-out
+  log-file:
+    description: File to tee the compile log to.
+    required: false
+    default: compile.log
+
+runs:
+  using: composite
+  steps:
+    - name: Install arduino-cli
+      uses: arduino/setup-arduino-cli@v2
+
+    - name: Restore Arduino cache
+      uses: actions/cache@v6
+      with:
+        path: |
+          ~/.arduino15
+          ~/Arduino/libraries
+        key: arduino-${{ runner.os }}-core${{ inputs.core-version }}-lvgl${{ inputs.lvgl-version }}-gfx${{ inputs.gfx-version }}-imu${{ inputs.fastimu-version }}
+
+    - name: Install ESP32 core
+      shell: bash
+      run: |
+        arduino-cli config init --overwrite
+        arduino-cli config add board_manager.additional_urls \
+          https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+        arduino-cli core update-index
+        arduino-cli core install "esp32:esp32@${{ inputs.core-version }}"
+
+    - name: Install libraries
+      shell: bash
+      run: |
+        arduino-cli lib update-index
+        arduino-cli lib install "lvgl@${{ inputs.lvgl-version }}"
+        arduino-cli lib install "GFX Library for Arduino@${{ inputs.gfx-version }}"
+        arduino-cli lib install "FastIMU@${{ inputs.fastimu-version }}"
+
+    # LVGL 9.5 resolves its config in this order:
+    #   1. LV_CONF_PATH
+    #   2. lv_conf.h reachable via __has_include  (finds the sketch-folder copy)
+    #   3. ../../lv_conf.h                        (i.e. libraries/lv_conf.h)
+    # The sketch-folder copy at the repo root is what actually satisfies this
+    # (verified: removing it makes LVGL fall through to branch 3 and hard-error).
+    # Copying it to libraries/ makes branch 3 valid too, so the build is
+    # deterministic regardless of how includes get resolved.
+    - name: Install project lv_conf.h
+      shell: bash
+      run: |
+        test -f lv_conf.h || { echo "::error::lv_conf.h missing from repo root"; exit 1; }
+        mkdir -p "$HOME/Arduino/libraries"
+        cp lv_conf.h "$HOME/Arduino/libraries/lv_conf.h"
+
+    - name: Record toolchain
+      shell: bash
+      run: |
+        arduino-cli version
+        arduino-cli core list
+        arduino-cli lib list
+
+    - name: Compile
+      shell: bash
+      run: |
+        set -o pipefail
+        arduino-cli compile \
+          --fqbn "${{ inputs.fqbn }}" \
+          --warnings default \
+          --output-dir "${{ inputs.output-dir }}" \
+          . 2>&1 | tee "${{ inputs.log-file }}"

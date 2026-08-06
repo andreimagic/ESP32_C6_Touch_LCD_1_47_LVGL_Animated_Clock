@@ -38,19 +38,33 @@ jobs:
       - name: Check FW_VERSION
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           FW=".github/scripts/fw-version.sh"
           SKETCH="$(bash "$FW" sketch-name)"
 
           BASE_TIP="$(git rev-parse FETCH_HEAD)"
-          MERGE_BASE="$(git merge-base "$BASE_TIP" "$HEAD_SHA")"
 
-          # Only the files that actually end up in the firmware binary force a
-          # bump. A docs- or workflow-only PR shouldn't inflate the version.
-          CHANGED="$(git diff --name-only "$MERGE_BASE" "$HEAD_SHA")"
-          echo "Files changed in this PR:"
+          # On a pull_request event the checked-out HEAD is GitHub's merge
+          # commit, i.e. the actual result of merging this PR into the base
+          # branch. Sanity-check that, since everything below depends on it.
+          if [ "$(git rev-list --parents -n 1 HEAD | wc -w)" -ne 3 ]; then
+            echo "::warning::HEAD is not a two-parent merge commit — comparing against the branch tip instead of the merge result."
+          fi
+
+          # Diff the base tip against the merge result. That answers the only
+          # question worth asking: once this merges, does the firmware on the
+          # base branch actually change?
+          #
+          # A three-dot "what has this branch changed since it diverged" diff is
+          # wrong here — it also reports changes the base branch already made
+          # independently (same content, different SHA, as happens with a
+          # cherry-pick or the same fix landing on two branches), and would
+          # demand a version bump for a firmware delta of exactly nothing.
+          # Note this list can therefore differ from the PR's "Files changed"
+          # tab, which is three-dot.
+          CHANGED="$(git diff --name-only "$BASE_TIP" HEAD)"
+          echo "Files that change on $BASE_REF once this merges:"
           printf '%s\n' "$CHANGED" | sed 's/^/  /'
 
           if ! printf '%s\n' "$CHANGED" | grep -qE '\.(ino|c|cpp|h|hpp)$'; then
@@ -59,9 +73,11 @@ jobs:
             exit 0
           fi
 
-          # Compare against the CURRENT tip of the base branch, not the merge
-          # base, so a stale branch carrying an already-used version is caught.
-          HEAD_V="$(git show "$HEAD_SHA:$SKETCH" | bash "$FW" extract -)"
+          # Read the version from the merge result — that is the FW_VERSION the
+          # base branch will actually carry — and compare it against the base
+          # branch's current tip, so a stale branch reusing an already-shipped
+          # version is caught.
+          HEAD_V="$(git show "HEAD:$SKETCH" | bash "$FW" extract -)"
           BASE_V="$(git show "$BASE_TIP:$SKETCH" | bash "$FW" extract -)"
 
           bash "$FW" validate "$HEAD_V"

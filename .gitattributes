@@ -1,0 +1,5 @@
+# Shell scripts must reach the Linux CI runners with LF endings — a CRLF
+# shebang line fails with a confusing "bad interpreter" error.
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf

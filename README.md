@@ -138,7 +138,16 @@ Install all libraries through **Arduino IDE → Library Manager** unless noted o
 
 ## lv_conf.h Settings
 
-After installing LVGL, edit `Arduino/libraries/lvgl/src/lv_conf.h`:
+**Nothing to edit — `lv_conf.h` ships in this repository, in the sketch folder.**
+LVGL finds it there automatically (it checks the including file's own directory
+before the library's), so a fresh clone builds as-is.
+
+> Do **not** create a second copy inside `Arduino/libraries/lvgl/src/`. LVGL uses
+> the first one it finds, so a second copy silently overrides the repo's config
+> and is lost on the next library update. If you previously created one, delete it.
+
+CI compiles against this exact file, so the board and the build agree by
+construction. For reference, these are the settings the project depends on:
 
 ```c
 // Enable the file (first line of the file)
@@ -832,13 +841,14 @@ dates = 06-08-2017,20-08-1989,07-09-2017,21-03-1989
    | Upload Speed | `921600` |
    | JTAG Adapter | `Disabled` |
    | Zigbee Mode | `Disabled` |
+   | Core Debug Level | `None` |
 
    > **USB CDC On Boot must be Enabled** — without it the Serial Monitor will not receive any output and the device may not be recognised on the port.
    > **Flash Size and Partition Scheme must match** — the 3MB APP partition is required to fit the firmware with LVGL v9 and all libraries.
 
 5. Set the correct **Port** (e.g. `COM3` on Windows, `/dev/ttyUSB0` on Linux/macOS)
 6. Install all libraries listed in [Software Dependencies](#software-dependencies)
-7. Edit `lv_conf.h` as described in [lv_conf.h Settings](#lv_confh-settings)
+7. No `lv_conf.h` edit is needed — see [lv_conf.h Settings](#lv_confh-settings)
 8. Place all custom font `.c` files in the sketch folder (see [Custom Fonts](#custom-fonts))
 9. Prepare the SD card as described in [SD Card Setup](#sd-card-setup)
 10. Open `ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock.ino`, click **Upload**

@@ -2,6 +2,9 @@
 #
 # Stage 1 — compile validation.
 # Proves the sketch builds against a pinned toolchain and fits the 3MB APP partition.
+#
+# On pull requests it also compiles the base revision and comments the flash and
+# RAM delta, so the cost of a change is visible before it merges.
 
 name: Build
 
@@ -19,29 +22,24 @@ concurrency:
 
 permissions:
   contents: read
-
-env:
-  # Set these to match what your Arduino IDE has installed.
-  # Boards Manager -> esp32 -> the version shown there.
-  ESP32_CORE_VERSION: "3.3.11"
-  LVGL_VERSION: "9.5.0"
-  # Pinned so an upstream release can't silently change the binary. These are
-  # the versions currently installed on the development machine.
-  GFX_VERSION: "1.6.7"
-  FASTIMU_VERSION: "1.3.0"
+  pull-requests: write
 
 jobs:
   compile:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
+    # The experimental entry tracks upstream and must never block a PR.
+    continue-on-error: ${{ matrix.experimental == true }}
 
     strategy:
       fail-fast: false
       matrix:
         # A new hardware target is one new include: block — never a rewrite.
-        # Flash size is a per-entry property: a 4MB-flash variant cannot use
-        # PartitionScheme=default_8MB and needs its own partition choice.
+        # Versions live here rather than in env: because the env context is not
+        # available to strategy. Flash size is likewise a per-entry property: a
+        # 4MB-flash variant cannot use PartitionScheme=default_8MB and needs its
+        # own partition choice.
         include:
           - name: ESP32-C6 Touch LCD 1.47
             slug: esp32c6-lcd147
@@ -55,21 +53,43 @@ jobs:
             # builds with -- pinned here so the two can't drift apart silently.
             fqbn: >-
               esp32:esp32:esp32c6:JTAGAdapter=default,CDCOnBoot=cdc,PartitionScheme=default_8MB,CPUFreq=160,FlashMode=qio,FlashFreq=80,FlashSize=8M,ZigbeeMode=default,DebugLevel=none
+            core-version: "3.3.11"
+            lvgl-version: "9.5.0"
+            gfx-version: "1.6.7"
+            fastimu-version: "1.3.0"
+
+          # Free early warning: builds the same sketch against whatever upstream
+          # currently ships. Allowed to fail — a break here means a dependency
+          # moved, not that the PR is bad. Uncached, since a cache keyed on the
+          # string "latest" would freeze whatever was current when it was written.
+          - name: ESP32-C6 Touch LCD 1.47 (latest deps)
+            slug: esp32c6-lcd147-latest
+            experimental: true
+            fqbn: >-
+              esp32:esp32:esp32c6:JTAGAdapter=default,CDCOnBoot=cdc,PartitionScheme=default_8MB,CPUFreq=160,FlashMode=qio,FlashFreq=80,FlashSize=8M,ZigbeeMode=default,DebugLevel=none
+            core-version: latest
+            lvgl-version: latest
+            gfx-version: latest
+            fastimu-version: latest
 
     steps:
       # Checkout lands the repo at .../<repo-name>/, which matches the .ino
       # filename — so arduino-cli accepts it as a sketch folder unmodified.
+      # PRs need full history so the base revision can be built for the delta.
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
 
       - name: Build firmware
         uses: ./.github/actions/arduino-build
         with:
           fqbn: ${{ matrix.fqbn }}
-          core-version: ${{ env.ESP32_CORE_VERSION }}
-          lvgl-version: ${{ env.LVGL_VERSION }}
-          gfx-version: ${{ env.GFX_VERSION }}
-          fastimu-version: ${{ env.FASTIMU_VERSION }}
+          core-version: ${{ matrix.core-version }}
+          lvgl-version: ${{ matrix.lvgl-version }}
+          gfx-version: ${{ matrix.gfx-version }}
+          fastimu-version: ${{ matrix.fastimu-version }}
+          use-cache: ${{ matrix.experimental == true && 'false' || 'true' }}
           output-dir: build-out
 
       - name: Report size
@@ -95,10 +115,97 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+      # ---- Size delta (pull requests, pinned target only) -------------------
+      # On a pull_request event HEAD is GitHub's merge commit, whose first
+      # parent is the base branch tip — so the base revision is already in
+      # history and needs no extra fetch.
+      - name: Check whether firmware changed
+        id: fwdiff
+        if: github.event_name == 'pull_request' && matrix.experimental != true
+        run: |
+          set -euo pipefail
+          BASE="$(git rev-parse HEAD^1)"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          if git diff --name-only "$BASE" HEAD | grep -qE '\.(ino|c|cpp|h|hpp)$'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No firmware sources changed — skipping the size delta build."
+          fi
+
+      - name: Compile base revision
+        id: basebuild
+        if: steps.fwdiff.outputs.changed == 'true'
+        continue-on-error: true
+        env:
+          BASE_SHA: ${{ steps.fwdiff.outputs.base }}
+          FQBN: ${{ matrix.fqbn }}
+        run: |
+          set -euo pipefail
+          # arduino-cli requires the sketch folder name to match the .ino
+          # filename, so the worktree is created under a directory named for it.
+          SKETCH="$(bash .github/scripts/fw-version.sh sketch-name)"
+          SKETCH_DIR="$RUNNER_TEMP/base/${SKETCH%.ino}"
+          git worktree add --detach "$SKETCH_DIR" "$BASE_SHA"
+          set -o pipefail
+          arduino-cli compile \
+            --fqbn "$FQBN" \
+            --warnings none \
+            --output-dir "$RUNNER_TEMP/base-out" \
+            "$SKETCH_DIR" 2>&1 | tee base-compile.log
+
+      - name: Comment size delta
+        if: steps.basebuild.outcome == 'success' && hashFiles('base-compile.log') != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SLUG: ${{ matrix.slug }}
+          BOARD: ${{ matrix.name }}
+          BASE_SHA: ${{ steps.fwdiff.outputs.base }}
+        run: |
+          set -euo pipefail
+          eval "$(bash .github/scripts/parse-size.sh compile.log      | sed 's/^/head_/')"
+          eval "$(bash .github/scripts/parse-size.sh base-compile.log | sed 's/^/base_/')"
+
+          d_flash=$(( head_flash - base_flash ))
+          d_ram=$(( head_ram - base_ram ))
+
+          signed() { if [ "$1" -gt 0 ]; then printf '+%s' "$1"; else printf '%s' "$1"; fi; }
+          pct() { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.2f%%", 100*a/b}'; }
+
+          MARKER="<!-- fw-size-delta:${SLUG} -->"
+          BODY="$(cat <<EOF
+          $MARKER
+          ### Size delta — $BOARD
+
+          | | base | this PR | delta |
+          |---|---:|---:|---:|
+          | Flash | $base_flash ($(pct "$base_flash" "$base_flash_max")) | $head_flash ($(pct "$head_flash" "$head_flash_max")) | **$(signed "$d_flash") bytes** |
+          | RAM | $base_ram ($(pct "$base_ram" "$base_ram_max")) | $head_ram ($(pct "$head_ram" "$head_ram_max")) | **$(signed "$d_ram") bytes** |
+
+          Flash headroom remaining: **$(( head_flash_max - head_flash )) bytes** of $head_flash_max.
+          Base revision \`$(echo "$BASE_SHA" | cut -c1-7)\`.
+          EOF
+          )"
+
+          ID="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --paginate \
+                 --jq "[.[] | select(.body | startswith(\"$MARKER\"))] | .[0].id // empty")"
+          if [ -n "$ID" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$ID" -f body="$BODY" >/dev/null
+            echo "Updated existing comment $ID"
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -f body="$BODY" >/dev/null
+            echo "Created new comment"
+          fi
+
       - name: Upload compile log on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: compile-log-${{ matrix.slug }}
-          path: compile.log
+          path: |
+            compile.log
+            base-compile.log
           retention-days: 7
+          if-no-files-found: warn

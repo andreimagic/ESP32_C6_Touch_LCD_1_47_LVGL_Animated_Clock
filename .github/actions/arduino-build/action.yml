@@ -11,17 +11,19 @@ inputs:
     description: Fully-qualified board name, including every pinned menu option.
     required: true
   core-version:
-    description: esp32:esp32 core version, matching Boards Manager on the dev machine.
+    description: >-
+      esp32:esp32 core version, matching Boards Manager on the dev machine.
+      The literal "latest" installs whatever Boards Manager currently offers.
     required: true
   lvgl-version:
     required: true
-    description: lvgl library version.
+    description: lvgl library version, or "latest".
   gfx-version:
     required: true
-    description: "\"GFX Library for Arduino\" version."
+    description: "\"GFX Library for Arduino\" version, or \"latest\"."
   fastimu-version:
     required: true
-    description: FastIMU library version.
+    description: FastIMU library version, or "latest".
   arduino-cli-version:
     description: >-
       arduino-cli version. Pinned because the action's own default of "1.x"
@@ -30,6 +32,14 @@ inputs:
       with Arduino IDE 2.x on the development machine.
     required: false
     default: "1.5.1"
+  use-cache:
+    description: >-
+      Whether to restore the toolchain from the Actions cache. Must be "false"
+      for any target using "latest" versions: a cache keyed on the string
+      "latest" would pin whatever happened to be current when it was first
+      written, permanently defeating the point of tracking latest.
+    required: false
+    default: "true"
   output-dir:
     description: Directory to place the compiled binaries in.
     required: false
@@ -48,6 +58,7 @@ runs:
         version: ${{ inputs.arduino-cli-version }}
 
     - name: Restore Arduino cache
+      if: inputs.use-cache == 'true'
       uses: actions/cache@v6
       with:
         path: |
@@ -57,20 +68,37 @@ runs:
 
     - name: Install ESP32 core
       shell: bash
+      env:
+        CORE_VERSION: ${{ inputs.core-version }}
       run: |
         arduino-cli config init --overwrite
         arduino-cli config add board_manager.additional_urls \
           https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
         arduino-cli core update-index
-        arduino-cli core install "esp32:esp32@${{ inputs.core-version }}"
+        if [ "$CORE_VERSION" = "latest" ]; then
+          arduino-cli core install "esp32:esp32"
+        else
+          arduino-cli core install "esp32:esp32@${CORE_VERSION}"
+        fi
 
     - name: Install libraries
       shell: bash
+      env:
+        LVGL_VERSION: ${{ inputs.lvgl-version }}
+        GFX_VERSION: ${{ inputs.gfx-version }}
+        FASTIMU_VERSION: ${{ inputs.fastimu-version }}
       run: |
         arduino-cli lib update-index
-        arduino-cli lib install "lvgl@${{ inputs.lvgl-version }}"
-        arduino-cli lib install "GFX Library for Arduino@${{ inputs.gfx-version }}"
-        arduino-cli lib install "FastIMU@${{ inputs.fastimu-version }}"
+        install_lib() {
+          if [ "$2" = "latest" ]; then
+            arduino-cli lib install "$1"
+          else
+            arduino-cli lib install "$1@$2"
+          fi
+        }
+        install_lib "lvgl"                    "$LVGL_VERSION"
+        install_lib "GFX Library for Arduino" "$GFX_VERSION"
+        install_lib "FastIMU"                 "$FASTIMU_VERSION"
 
     # LVGL 9.5 resolves its config in this order:
     #   1. LV_CONF_PATH
@@ -80,6 +108,10 @@ runs:
     # (verified: removing it makes LVGL fall through to branch 3 and hard-error).
     # Copying it to libraries/ makes branch 3 valid too, so the build is
     # deterministic regardless of how includes get resolved.
+    #
+    # Note this copies the CURRENT checkout's lv_conf.h. When another revision is
+    # compiled from a worktree (the size-delta base build), that revision's own
+    # sketch-folder copy still wins, because branch 2 outranks branch 3.
     - name: Install project lv_conf.h
       shell: bash
       run: |
@@ -96,10 +128,14 @@ runs:
 
     - name: Compile
       shell: bash
+      env:
+        FQBN: ${{ inputs.fqbn }}
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+        LOG_FILE: ${{ inputs.log-file }}
       run: |
         set -o pipefail
         arduino-cli compile \
-          --fqbn "${{ inputs.fqbn }}" \
+          --fqbn "$FQBN" \
           --warnings default \
-          --output-dir "${{ inputs.output-dir }}" \
-          . 2>&1 | tee "${{ inputs.log-file }}"
+          --output-dir "$OUTPUT_DIR" \
+          . 2>&1 | tee "$LOG_FILE"

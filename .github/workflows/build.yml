@@ -25,6 +25,10 @@ env:
   # Boards Manager -> esp32 -> the version shown there.
   ESP32_CORE_VERSION: "3.3.11"
   LVGL_VERSION: "9.5.0"
+  # Pinned so an upstream release can't silently change the binary. These are
+  # the versions currently installed on the development machine.
+  GFX_VERSION: "1.6.7"
+  FASTIMU_VERSION: "1.3.0"
 
 jobs:
   compile:
@@ -43,8 +47,11 @@ jobs:
             #   Flash Size      = 8MB (64Mb)   -> FlashSize=8M
             #   Partition       = 8M w/ spiffs -> PartitionScheme=default_8MB  (3MB APP)
             #   CPU 160MHz / QIO / 80MHz / JTAG Disabled / Zigbee Disabled
+            # DebugLevel is build-affecting (sets CORE_DEBUG_LEVEL). The README
+            # doesn't mention it, so the IDE default 'none' is what everyone
+            # builds with -- pinned here so the two can't drift apart silently.
             fqbn: >-
-              esp32:esp32:esp32c6:JTAGAdapter=default,CDCOnBoot=cdc,PartitionScheme=default_8MB,CPUFreq=160,FlashMode=qio,FlashFreq=80,FlashSize=8M,ZigbeeMode=default
+              esp32:esp32:esp32c6:JTAGAdapter=default,CDCOnBoot=cdc,PartitionScheme=default_8MB,CPUFreq=160,FlashMode=qio,FlashFreq=80,FlashSize=8M,ZigbeeMode=default,DebugLevel=none
 
     steps:
       # Checkout lands the repo at .../<repo-name>/, which matches the .ino
@@ -61,7 +68,7 @@ jobs:
           path: |
             ~/.arduino15
             ~/Arduino/libraries
-          key: arduino-${{ runner.os }}-core${{ env.ESP32_CORE_VERSION }}-lvgl${{ env.LVGL_VERSION }}
+          key: arduino-${{ runner.os }}-core${{ env.ESP32_CORE_VERSION }}-lvgl${{ env.LVGL_VERSION }}-gfx${{ env.GFX_VERSION }}-imu${{ env.FASTIMU_VERSION }}
 
       - name: Install ESP32 core
         run: |
@@ -75,15 +82,17 @@ jobs:
         run: |
           arduino-cli lib update-index
           arduino-cli lib install "lvgl@${LVGL_VERSION}"
-          arduino-cli lib install "GFX Library for Arduino"
-          arduino-cli lib install "FastIMU"
+          arduino-cli lib install "GFX Library for Arduino@${GFX_VERSION}"
+          arduino-cli lib install "FastIMU@${FASTIMU_VERSION}"
 
       # LVGL 9.5 resolves its config in this order:
       #   1. LV_CONF_PATH
       #   2. lv_conf.h reachable via __has_include  (finds the sketch-folder copy)
       #   3. ../../lv_conf.h                        (i.e. libraries/lv_conf.h)
-      # Copying the repo file to libraries/ makes branch 3 valid too, so the
-      # build is deterministic regardless of how includes get resolved.
+      # The sketch-folder copy at the repo root is what actually satisfies this
+      # (verified: removing it makes LVGL fall through to branch 3 and error).
+      # Copying it to libraries/ makes branch 3 valid too, so the build is
+      # deterministic regardless of how includes get resolved.
       - name: Install project lv_conf.h
         run: |
           test -f lv_conf.h || { echo "::error::lv_conf.h missing from repo root"; exit 1; }

@@ -1,0 +1,83 @@
+# .github/workflows/version-check.yml
+#
+# Stage 2 — version guard.
+# Every PR that changes firmware sources must bump the FW_VERSION macro, so the
+# version that eventually lands on main is always ahead of what's already there
+# and Stage 3 has a fresh tag to cut.
+
+name: Version check
+
+on:
+  pull_request:
+    branches: [development]
+
+concurrency:
+  group: version-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: FW_VERSION bumped
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      # Full history plus tags: the guard compares against the current tip of
+      # the base branch and checks whether the new version is already tagged.
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Fetch base branch
+        run: git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
+
+      - name: Check FW_VERSION
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          FW=".github/scripts/fw-version.sh"
+          SKETCH="$(bash "$FW" sketch-name)"
+
+          BASE_TIP="$(git rev-parse FETCH_HEAD)"
+          MERGE_BASE="$(git merge-base "$BASE_TIP" "$HEAD_SHA")"
+
+          # Only the files that actually end up in the firmware binary force a
+          # bump. A docs- or workflow-only PR shouldn't inflate the version.
+          CHANGED="$(git diff --name-only "$MERGE_BASE" "$HEAD_SHA")"
+          echo "Files changed in this PR:"
+          printf '%s\n' "$CHANGED" | sed 's/^/  /'
+
+          if ! printf '%s\n' "$CHANGED" | grep -qE '\.(ino|c|cpp|h|hpp)$'; then
+            echo "::notice::No firmware sources changed — FW_VERSION bump not required."
+            echo "No firmware sources changed; bump not required." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Compare against the CURRENT tip of the base branch, not the merge
+          # base, so a stale branch carrying an already-used version is caught.
+          HEAD_V="$(git show "$HEAD_SHA:$SKETCH" | bash "$FW" extract -)"
+          BASE_V="$(git show "$BASE_TIP:$SKETCH" | bash "$FW" extract -)"
+
+          bash "$FW" validate "$HEAD_V"
+          bash "$FW" validate "$BASE_V"
+
+          if ! bash "$FW" is-newer "$HEAD_V" "$BASE_V"; then
+            echo "::error::FW_VERSION must be bumped — this PR has $HEAD_V but $BASE_REF is already at $BASE_V. Edit the FW_VERSION macro in $SKETCH."
+            exit 1
+          fi
+
+          # A version that is already tagged would make Stage 3 skip the release
+          # silently once this reaches main. Catch it here instead.
+          if git rev-parse -q --verify "refs/tags/$HEAD_V" >/dev/null; then
+            echo "::error::Tag $HEAD_V already exists — the release for this version has already been cut. Choose a higher FW_VERSION."
+            exit 1
+          fi
+
+          echo "::notice::FW_VERSION $BASE_V -> $HEAD_V"
+          echo "FW_VERSION bumped: \`$BASE_V\` -> \`$HEAD_V\`" >> "$GITHUB_STEP_SUMMARY"

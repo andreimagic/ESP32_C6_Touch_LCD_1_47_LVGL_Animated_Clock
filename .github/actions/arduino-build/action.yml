@@ -22,6 +22,14 @@ inputs:
   fastimu-version:
     required: true
     description: FastIMU library version.
+  arduino-cli-version:
+    description: >-
+      arduino-cli version. Pinned because the action's own default of "1.x"
+      resolves to the newest 1.x tag, which has already pulled a release
+      candidate (1.5.2-rc.1) into CI. This matches the stable version bundled
+      with Arduino IDE 2.x on the development machine.
+    required: false
+    default: "1.5.1"
   output-dir:
     description: Directory to place the compiled binaries in.
     required: false
@@ -36,6 +44,8 @@ runs:
   steps:
     - name: Install arduino-cli
       uses: arduino/setup-arduino-cli@v2
+      with:
+        version: ${{ inputs.arduino-cli-version }}
 
     - name: Restore Arduino cache
       uses: actions/cache@v6

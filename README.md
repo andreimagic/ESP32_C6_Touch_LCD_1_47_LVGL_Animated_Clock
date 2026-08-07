@@ -816,6 +816,50 @@ dates = 06-08-2017,20-08-1989,07-09-2017,21-03-1989
 
 ## Build & Flash
 
+There are two routes. Flashing a prebuilt release takes a couple of minutes and
+needs no toolchain; building from source is only necessary if you want to change
+the firmware.
+
+### Option A — Flash a prebuilt release (no toolchain)
+
+Every release ships `firmware-<version>-full.bin`, a complete image containing
+the bootloader, partition table and application.
+
+1. Download `firmware-<version>-full.bin` from
+   [Releases](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/releases).
+2. Open **[Espressif's ESP Launchpad](https://espressif.github.io/esp-launchpad/)**
+   in **Chrome or Edge**. It flashes over WebSerial, which Firefox and Safari do
+   not support.
+3. Open the **DIY** tab, connect the board over USB, click **Connect** and pick
+   its serial port.
+4. Select the `.bin` file and set the flash address to **`0x0`**.
+5. Click **Program**. The board reboots into the new firmware when it finishes.
+
+> **The address is `0x0`, not `0x1000`.** The ESP32-C6 places its bootloader at
+> zero; `0x1000` is the offset used by the older Xtensa parts, and using it
+> produces an image that will not boot.
+
+You do not need to erase the flash first — the image already spans it. Your
+settings are safe either way: they live on the SD card in `/config.ini`, not in
+flash.
+
+If you prefer a command line, the same image works with
+[esptool](https://github.com/espressif/esptool):
+
+```bash
+esptool --chip esp32c6 write-flash 0x0 firmware-<version>-full.bin
+```
+
+> Releases also contain `firmware-<version>-app.bin`, the application partition
+> on its own, for reflashing over an existing install at `0x10000`. **Use esptool
+> for that one, not a browser flasher** — esptool writes exactly the offset given
+> and erases only the sectors it touches, whereas a browser tool makes it easy to
+> erase the chip or write to the wrong address, either of which removes the
+> bootloader and leaves the board unable to boot. Recover by flashing
+> `firmware-<version>-full.bin` at `0x0` again.
+
+### Option B — Build from source
+
 1. Clone the repository:
    ```bash
    git clone https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock.git

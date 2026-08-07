@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: write   # also covers --generate-notes; that endpoint needs no more
 
 env:
   ESP32_CORE_VERSION: "3.3.11"
@@ -141,6 +141,46 @@ jobs:
           set -euo pipefail
 
           {
+            echo "## Flashing"
+            echo ""
+            echo "\`firmware-${VERSION}-full.bin\` is a complete image — bootloader, partition"
+            echo "table and app — written at offset \`0x0\`. Note \`0x0\`, not the \`0x1000\` used"
+            echo "by the older Xtensa chips; the ESP32-C6 places its bootloader at zero."
+            echo ""
+            echo "### Web flasher (no install)"
+            echo ""
+            echo "1. Open <https://espressif.github.io/esp-launchpad/> in Chrome or Edge."
+            echo "   It needs WebSerial, so Firefox and Safari will not work."
+            echo "2. Open the **DIY** tab."
+            echo "3. Connect the board over USB, click **Connect**, and pick its serial port."
+            echo "4. Select \`firmware-${VERSION}-full.bin\` and set the flash address to \`0x0\`."
+            echo "5. Click **Program**. The board reboots into the new firmware when it finishes."
+            echo ""
+            echo "Erasing the whole flash first is unnecessary — this image already replaces"
+            echo "the bootloader, partition table and app. Settings are not at risk either way:"
+            echo "they live on the SD card in \`/config.ini\`, not in flash."
+            echo ""
+            echo "### esptool"
+            echo ""
+            echo "\`\`\`"
+            echo "esptool --chip esp32c6 write-flash 0x0 firmware-${VERSION}-full.bin"
+            echo "\`\`\`"
+            echo ""
+            echo "### firmware-${VERSION}-app.bin"
+            echo ""
+            echo "The application partition alone, for OTA or for reflashing over an existing"
+            echo "install at \`0x10000\`. **Use esptool for this, not the web flasher** — it writes"
+            echo "exactly the offset given and erases only the sectors it touches, whereas a"
+            echo "browser tool makes it easy to erase the chip or write to the wrong address,"
+            echo "either of which removes the bootloader and leaves the board unable to boot."
+            echo "Only valid on a board already running this same 8MB / 3MB-APP partition"
+            echo "scheme; otherwise flash the full image. Recover from a bad app-only flash by"
+            echo "writing \`firmware-${VERSION}-full.bin\` at \`0x0\` again."
+            echo ""
+            echo "---"
+            echo ""
+            echo "## Build provenance"
+            echo ""
             echo "Built from \`${GITHUB_SHA}\` with the toolchain pinned in CI:"
             echo ""
             echo "- ESP32 core \`${ESP32_CORE_VERSION}\`"
@@ -150,19 +190,14 @@ jobs:
             echo "\`\`\`"
             cat flash-line.txt
             echo "\`\`\`"
-            echo ""
-            echo "### Flashing"
-            echo ""
-            echo "\`firmware-${VERSION}-full.bin\` is a complete image — bootloader, partition table and app — flashed at offset \`0x0\`:"
-            echo ""
-            echo "\`\`\`"
-            echo "esptool --chip esp32c6 write-flash 0x0 firmware-${VERSION}-full.bin"
-            echo "\`\`\`"
-            echo ""
-            echo "\`firmware-${VERSION}-app.bin\` is the application partition alone, for OTA or for reflashing over an existing install at \`0x10000\`."
           } > notes.md
 
-          FLAGS=(--title "$VERSION" --notes-file notes.md)
+          # --generate-notes has GitHub append its own "What's Changed" section:
+          # every PR merged since the previous tag, plus contributors and a
+          # compare link. That covers a release spanning several PRs, which
+          # reading the merge commit's own PR would not. notes.md is the body,
+          # so the generated changelog lands after it.
+          FLAGS=(--title "$VERSION" --notes-file notes.md --generate-notes)
           [ "$PRERELEASE" = "true" ] && FLAGS+=(--prerelease)
 
           gh release create "$VERSION" "${FLAGS[@]}" release/*

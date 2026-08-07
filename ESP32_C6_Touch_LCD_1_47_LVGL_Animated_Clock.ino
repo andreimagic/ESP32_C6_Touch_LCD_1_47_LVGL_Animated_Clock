@@ -56,7 +56,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v2.7.1"
+#define FW_VERSION      "v2.7.2"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -4154,21 +4154,118 @@ static void menu_tone(int freq, int ms)
   ledcChangeFrequency(BUZZER_PIN, 2000, 8);   // restore alarm freq
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  SHARED GAME SERVICES
+//  Owned by nothing in particular and used by the menu and every game. Defined
+//  here, ahead of the first consumer, so that nothing below has to reach into
+//  another game to borrow it.
+//
+//  These signatures deliberately take no custom types. The Arduino IDE
+//  auto-prototype injector emits prototypes at the top of the file, above these
+//  definitions, so a `Note *` in any signature would be forward-declared before
+//  `Note` exists and fail to compile.
+// ══════════════════════════════════════════════════════════════════════════════
+
+struct Note { uint16_t freq; uint16_t ms; };
+
+// One definition of each melody, shared by the blocking menu player and the
+// async in-game player below.
+static const Note SUCCESS_TUNE[] = {   // A5 B5 C5 B5 C5 D5 C5 D5 E5 D5 E5 E5
+  {880,100},{988,100},{523,100},{494,100},
+  {523,100},{587,100},{523,100},{587,100},
+  {659,100},{587,100},{659,100},{659,100}
+};
+static const Note FAILURE_TUNE[] = {
+  {NOTE_G4,250},{NOTE_C4,500}
+};
+#define SUCCESS_TUNE_LEN  (int)(sizeof(SUCCESS_TUNE) / sizeof(SUCCESS_TUNE[0]))
+#define FAILURE_TUNE_LEN  (int)(sizeof(FAILURE_TUNE) / sizeof(FAILURE_TUNE[0]))
+
+// Pixel offset of a game field's top-left within apps_cont. Every ASCII game
+// uses the same origin; only the row/column counts differ per game.
+#define FIELD_X  0
+#define FIELD_Y  0
+
+// ── Async tune player ─────────────────────────────────────────────────────────
+// Plays a sequence of {freq_hz, duration_ms} notes on an LVGL timer so game
+// timers keep ticking and play stays responsive. freq 0 = silent gap. Shares
+// the buzzer with the per-game beeps; a beep in flight is overridden, which is
+// acceptable since tunes fire on catch/complete/lose rather than during rapid
+// bounces.
+//
+// The timer handle is kept so a tune can actually be cancelled. It previously
+// was not: callers silenced a tune by clearing the note pointer alone, which
+// left the timer running and dereferencing it, and starting a tune while one
+// was playing left the first timer alive to fight over the buzzer.
+static const Note *tune_notes = nullptr;
+static int         tune_total = 0;
+static int         tune_step  = 0;
+static lv_timer_t *tune_timer = nullptr;
+
+static void tune_stop()
+{
+  if (tune_timer) { lv_timer_del(tune_timer); tune_timer = nullptr; }
+  tune_notes = nullptr;
+  tune_total = 0;
+  tune_step  = 0;
+  ledcWrite(BUZZER_PIN, 0);
+  ledcChangeFrequency(BUZZER_PIN, 2000, 8);   // restore alarm freq
+}
+
+static void tune_tick_cb(lv_timer_t *t)
+{
+  if (!tune_notes || tune_step >= tune_total) {
+    tune_stop();
+    return;
+  }
+  uint16_t freq = tune_notes[tune_step].freq;
+  uint16_t dur  = tune_notes[tune_step].ms;
+  if (freq == 0) {
+    ledcWrite(BUZZER_PIN, 0);
+  } else {
+    ledcChangeFrequency(BUZZER_PIN, freq, 8);
+    ledcWrite(BUZZER_PIN, 96);
+  }
+  lv_timer_set_period(t, dur);
+  tune_step++;
+}
+
+static void tune_play_success()
+{
+  if (!cfg.menu_sounds) return;
+  tune_stop();                       // cancel anything already playing
+  tune_notes = SUCCESS_TUNE;
+  tune_total = SUCCESS_TUNE_LEN;
+  tune_step  = 0;
+  tune_timer = lv_timer_create(tune_tick_cb, 1, nullptr);
+  lv_timer_set_repeat_count(tune_timer, -1);
+}
+
+static void tune_play_failure()
+{
+  if (!cfg.menu_sounds) return;
+  tune_stop();
+  tune_notes = FAILURE_TUNE;
+  tune_total = FAILURE_TUNE_LEN;
+  tune_step  = 0;
+  tune_timer = lv_timer_create(tune_tick_cb, 1, nullptr);
+  lv_timer_set_repeat_count(tune_timer, -1);
+}
+
+// ── Blocking menu players ─────────────────────────────────────────────────────
+// Deliberately still blocking: the menu has no timers that need to keep
+// running, and the pause is part of the feel. They read the shared tables so
+// the melodies exist in exactly one place.
 static void menu_play_success()
 {
   if (!cfg.menu_sounds) return;
-  // successMelody: A5 B5 C5 B5 C5 D5 C5 D5 E5 D5 E5 E5 @100ms each
-  static const int mel[] = {
-    880,988,523,494, 523,587,523,587, 659,587,659,659
-  };
-  for (int i = 0; i < 12; i++) menu_tone(mel[i], 100);
+  for (int i = 0; i < SUCCESS_TUNE_LEN; i++) menu_tone(SUCCESS_TUNE[i].freq, SUCCESS_TUNE[i].ms);
 }
 
 static void menu_play_failure()
 {
   if (!cfg.menu_sounds) return;
-  menu_tone(NOTE_G4, 250);
-  menu_tone(NOTE_C4, 500);
+  for (int i = 0; i < FAILURE_TUNE_LEN; i++) menu_tone(FAILURE_TUNE[i].freq, FAILURE_TUNE[i].ms);
 }
 
 static void menu_tone_beep() { menu_tone(NOTE_A4, 60); }
@@ -4254,11 +4351,11 @@ static void math_btn_cb(lv_event_t *e)
   if (math_cont) { lv_obj_del(math_cont); math_cont = nullptr; }
 
   if (chosen == math_answer) {
-    math_play_success();
+    tune_play_success();
     math_close_overlay();
     show_apps();
   } else {
-    math_play_failure();
+    tune_play_failure();
     // Wrong: show big white X for 3 s, then return to clock
     math_cont = lv_obj_create(lv_scr_act());
     lv_obj_set_size(math_cont, 320, 172);
@@ -5201,10 +5298,8 @@ static void app_screen_metronome()
 #define TL_ROWS         9     // character rows (ball area, no status bar)
 #define TL_GYRO_THRESH 0.25f   // same threshold as brightness tilt
 
-// Pixel offset of the game field top-left within apps_cont
+// Field origin is the shared FIELD_X / FIELD_Y (see Shared game services).
 // Field height: TL_ROWS * 16 = 144px. Status bar: ~16px. Total: ~160px (fits 172).
-#define TL_FIELD_X     0
-#define TL_FIELD_Y     0
 
 static int   tl_ball_x      = 0;   // ball column (0-based)
 static int   tl_ball_y      = 0;   // ball row    (0-based)
@@ -5224,24 +5319,6 @@ static lv_obj_t   *tl_field_lbl   = nullptr;   // main ASCII art label
 static lv_obj_t   *tl_score_lbl   = nullptr;   // score bar — left
 static lv_obj_t   *tl_hi_lbl      = nullptr;   // score bar — right
 static lv_obj_t   *tl_pause_pop   = nullptr;
-
-// ── Tune player types — defined here so the Arduino IDE auto-prototype
-//    injector sees TlNote before it generates prototypes for tl_play_success
-//    and tl_play_failure (neither of which uses TlNote in their signature,
-//    but tl_tune_notes pointer type depends on the struct being known).
-struct TlNote { uint16_t freq; uint16_t ms; };
-
-static const TlNote SUCCESS_TUNE[] = {   // success melody, same as menu_play_success
-  {880,100},{988,100},{523,100},{494,100},
-  {523,100},{587,100},{523,100},{587,100},
-  {659,100},{587,100},{659,100},{659,100}
-};
-static const TlNote FAILURE_TUNE[] = {   // failure melody, same as menu_play_failure
-  {392,250},{262,500}
-};
-static const TlNote *tl_tune_notes = nullptr;
-static int           tl_tune_total = 0;
-static int           tl_tune_step  = 0;
 
 // ── Render the game field into a char buffer and update the label ─────────────
 static void tl_render()
@@ -5312,79 +5389,8 @@ static void tl_beep()
   lv_timer_set_repeat_count(off, 1);
 }
 
-// ── Non-blocking tune player for Tennis ──────────────────────────────────────
-// Plays a sequence of {freq_hz, duration_ms} notes via LVGL one-shot timers
-// so the ball timer keeps ticking and the game stays responsive throughout.
-// freq=0 = silence gap.  Shares the buzzer with tl_beep; if a beep is in
-// flight it will be overridden (acceptable — tunes are only triggered on
-// catch/complete/lose, not during rapid bounces).
-// (TlNote struct, SUCCESS_TUNE/FAILURE_TUNE arrays and tl_tune_* state vars are
-//  declared with the Tennis globals above. tl_play_success/failure are kept
-//  as simple void() functions with no TlNote in their signatures so the
-//  Arduino IDE prototype injector never needs to forward-declare the type.)
-
-static void tl_tune_tick_cb(lv_timer_t *t)
-{
-  if (tl_tune_step >= tl_tune_total) {
-    // Sequence finished — silence and clean up
-    ledcWrite(BUZZER_PIN, 0);
-    ledcChangeFrequency(BUZZER_PIN, 2000, 8);
-    lv_timer_del(t);
-    tl_tune_notes = nullptr;
-    return;
-  }
-  uint16_t freq = tl_tune_notes[tl_tune_step].freq;
-  uint16_t dur  = tl_tune_notes[tl_tune_step].ms;
-  if (freq == 0) {
-    ledcWrite(BUZZER_PIN, 0);
-  } else {
-    ledcChangeFrequency(BUZZER_PIN, freq, 8);
-    ledcWrite(BUZZER_PIN, 96);
-  }
-  lv_timer_set_period(t, dur);
-  tl_tune_step++;
-}
-
-static void tl_play_success()
-{
-  if (!cfg.menu_sounds) return;
-  tl_tune_notes = SUCCESS_TUNE;
-  tl_tune_total = 12;
-  tl_tune_step  = 0;
-  lv_timer_t *t = lv_timer_create(tl_tune_tick_cb, 1, nullptr);
-  lv_timer_set_repeat_count(t, -1);
-}
-
-static void tl_play_failure()
-{
-  if (!cfg.menu_sounds) return;
-  tl_tune_notes = FAILURE_TUNE;
-  tl_tune_total = 2;
-  tl_tune_step  = 0;
-  lv_timer_t *t = lv_timer_create(tl_tune_tick_cb, 1, nullptr);
-  lv_timer_set_repeat_count(t, -1);
-}
-
-// ── Non-blocking math gateway tunes (reuse Tennis async engine) ───────────────
-static void math_play_success()
-{
-  if (!cfg.menu_sounds) return;
-  tl_tune_notes = SUCCESS_TUNE;
-  tl_tune_total = 12;
-  tl_tune_step  = 0;
-  lv_timer_t *t = lv_timer_create(tl_tune_tick_cb, 1, nullptr);
-  lv_timer_set_repeat_count(t, -1);
-}
-
-static void math_play_failure()
-{
-  if (!cfg.menu_sounds) return;
-  tl_tune_notes = FAILURE_TUNE;
-  tl_tune_total = 2;
-  tl_tune_step  = 0;
-  lv_timer_t *t = lv_timer_create(tl_tune_tick_cb, 1, nullptr);
-  lv_timer_set_repeat_count(t, -1);
-}
+// Tennis and the math gateway both play tunes through the shared async player
+// (tune_play_success / tune_play_failure, see Shared game services).
 
 static int tl_ball_speed_current_ms   = 0;
 static int tl_paddle_speed_current_ms = 0;
@@ -5633,9 +5639,9 @@ static void tl_ball_tick_cb(lv_timer_t * /*t*/)
         tl_beat_high = true;
         cfg.tennis_high_score = tl_score;
         save_config();
-        tl_play_success();    // winning tune for new high score
+        tune_play_success();    // winning tune for new high score
       } else if (completed_alphabet) {
-        tl_play_success();    // winning tune for completing alphabet
+        tune_play_success();    // winning tune for completing alphabet
       }
       // Advance letter
       tl_letter_idx = (tl_letter_idx + 1) % 26;
@@ -5667,9 +5673,9 @@ static void tl_ball_tick_cb(lv_timer_t * /*t*/)
         lv_timer_del(t);
         int alphabets = tl_score / 26;
         if (s_end_new_high || alphabets >= 1) {
-          tl_play_success();
+          tune_play_success();
         } else {
-          tl_play_failure();
+          tune_play_failure();
         }
         tl_show_popup(s_end_new_high);
       }, 500, nullptr);
@@ -5738,17 +5744,17 @@ static void tl_game_start()
   lv_obj_set_style_text_color(tl_field_lbl, lv_color_white(), 0);
   lv_obj_set_style_text_align(tl_field_lbl, LV_TEXT_ALIGN_LEFT, 0);
   lv_label_set_long_mode(tl_field_lbl, LV_LABEL_LONG_CLIP);
-  lv_obj_set_pos(tl_field_lbl, TL_FIELD_X, TL_FIELD_Y);
+  lv_obj_set_pos(tl_field_lbl, FIELD_X, FIELD_Y);
   lv_obj_set_size(tl_field_lbl, 320, TL_ROWS * 16 + 4);
 
   // Status bar — two labels, left and right anchored, one line below the field
-  int status_y = TL_FIELD_Y + TL_ROWS * 16 + 4;
+  int status_y = FIELD_Y + TL_ROWS * 16 + 4;
 
   tl_score_lbl = lv_label_create(apps_cont);
   lv_obj_set_style_text_font(tl_score_lbl, &dejavu_mono_14, 0);
   lv_obj_set_style_text_color(tl_score_lbl, lv_color_make(180, 180, 100), 0);
   lv_obj_set_style_text_align(tl_score_lbl, LV_TEXT_ALIGN_LEFT, 0);
-  lv_obj_set_pos(tl_score_lbl, TL_FIELD_X + 2, status_y);
+  lv_obj_set_pos(tl_score_lbl, FIELD_X + 2, status_y);
   lv_obj_set_size(tl_score_lbl, 160, 16);
 
   tl_hi_lbl = lv_label_create(apps_cont);
@@ -5779,10 +5785,7 @@ static void tl_stop()
 {
   tl_running = false;
   tl_stop_timers();
-  // Silence any tune that may still be playing
-  tl_tune_notes = nullptr;
-  ledcWrite(BUZZER_PIN, 0);
-  ledcChangeFrequency(BUZZER_PIN, 2000, 8);
+  tune_stop();   // cancel any tune still playing and silence the buzzer
   tl_field_lbl  = nullptr;
   tl_score_lbl  = nullptr;
   tl_hi_lbl     = nullptr;
@@ -6092,26 +6095,7 @@ static void lr_spawn_modifier_wave()
   lr_mod_delay_ticks = -1;  // modifier wave done, nothing more to spawn this cycle
 }
 
-// ── Beep helpers (reuse Tennis async engine: tl_tune_notes / tl_tune_tick_cb) ─
-static void lr_play_success()
-{
-  if (!cfg.menu_sounds) return;
-  tl_tune_notes = SUCCESS_TUNE;
-  tl_tune_total = 12;
-  tl_tune_step  = 0;
-  lv_timer_t *t = lv_timer_create(tl_tune_tick_cb, 1, nullptr);
-  lv_timer_set_repeat_count(t, -1);
-}
-
-static void lr_play_failure()
-{
-  if (!cfg.menu_sounds) return;
-  tl_tune_notes = FAILURE_TUNE;
-  tl_tune_total = 2;
-  tl_tune_step  = 0;
-  lv_timer_t *t = lv_timer_create(tl_tune_tick_cb, 1, nullptr);
-  lv_timer_set_repeat_count(t, -1);
-}
+// Tunes play through the shared async player (see Shared game services).
 
 static void lr_beep()
 {
@@ -6188,7 +6172,7 @@ static void lr_fall_tick_cb(lv_timer_t * /*t*/)
           lr_render();
           lv_timer_t *end_t = lv_timer_create([](lv_timer_t *t2){
             lv_timer_del(t2);
-            lr_play_success();
+            tune_play_success();
             lr_show_popup(true);
           }, 500, nullptr);
           lv_timer_set_repeat_count(end_t, 1);
@@ -6234,7 +6218,7 @@ static void lr_fall_tick_cb(lv_timer_t * /*t*/)
         lr_render();
         lv_timer_t *end_t = lv_timer_create([](lv_timer_t *t2){
           lv_timer_del(t2);
-          lr_play_failure();
+          tune_play_failure();
           lr_show_popup(false);
         }, 500, nullptr);
         lv_timer_set_repeat_count(end_t, 1);
@@ -6453,17 +6437,17 @@ static void lr_game_start()
   lv_obj_set_style_text_color(lr_field_lbl, lv_color_white(), 0);
   lv_obj_set_style_text_align(lr_field_lbl, LV_TEXT_ALIGN_LEFT, 0);
   lv_label_set_long_mode(lr_field_lbl, LV_LABEL_LONG_CLIP);
-  lv_obj_set_pos(lr_field_lbl, TL_FIELD_X, TL_FIELD_Y);
+  lv_obj_set_pos(lr_field_lbl, FIELD_X, FIELD_Y);
   lv_obj_set_size(lr_field_lbl, 320, LR_ROWS * 16 + 4);
 
   // Status bar: three labels — Score (left), Target letter (centre), Last (right)
-  int status_y = TL_FIELD_Y + LR_ROWS * 16 + 4;
+  int status_y = FIELD_Y + LR_ROWS * 16 + 4;
 
   lr_score_lbl = lv_label_create(apps_cont);
   lv_obj_set_style_text_font(lr_score_lbl, &dejavu_mono_14, 0);
   lv_obj_set_style_text_color(lr_score_lbl, lv_color_make(180, 180, 100), 0);
   lv_obj_set_style_text_align(lr_score_lbl, LV_TEXT_ALIGN_LEFT, 0);
-  lv_obj_set_pos(lr_score_lbl, TL_FIELD_X + 2, status_y);
+  lv_obj_set_pos(lr_score_lbl, FIELD_X + 2, status_y);
   lv_obj_set_size(lr_score_lbl, 120, 16);
 
   lr_target_lbl = lv_label_create(apps_cont);
@@ -6506,9 +6490,7 @@ static void lr_stop()
 {
   lr_running = false;
   lr_stop_timers();
-  tl_tune_notes = nullptr;  // silence any shared tune playing
-  ledcWrite(BUZZER_PIN, 0);
-  ledcChangeFrequency(BUZZER_PIN, 2000, 8);
+  tune_stop();   // cancel any tune still playing and silence the buzzer
   lr_field_lbl  = nullptr;
   lr_score_lbl  = nullptr;
   lr_target_lbl = nullptr;
@@ -6824,26 +6806,6 @@ static void sn_beep()
 }
 
 // ── Async tune helpers (reuse Tennis Letters engine) ──────────────────────────
-static void sn_play_success()
-{
-  if (!cfg.menu_sounds) return;
-  tl_tune_notes = SUCCESS_TUNE;
-  tl_tune_total = 12;
-  tl_tune_step  = 0;
-  lv_timer_t *t = lv_timer_create(tl_tune_tick_cb, 1, nullptr);
-  lv_timer_set_repeat_count(t, -1);
-}
-
-static void sn_play_failure()
-{
-  if (!cfg.menu_sounds) return;
-  tl_tune_notes = FAILURE_TUNE;
-  tl_tune_total = 2;
-  tl_tune_step  = 0;
-  lv_timer_t *t = lv_timer_create(tl_tune_tick_cb, 1, nullptr);
-  lv_timer_set_repeat_count(t, -1);
-}
-
 // ── Stop all timers ───────────────────────────────────────────────────────────
 static void sn_stop_timers()
 {
@@ -6858,9 +6820,7 @@ static void sn_stop()
 {
   sn_running = false;
   sn_stop_timers();
-  tl_tune_notes = nullptr;
-  ledcWrite(BUZZER_PIN, 0);
-  ledcChangeFrequency(BUZZER_PIN, 2000, 8);
+  tune_stop();   // cancel any tune still playing and silence the buzzer
   sn_field_lbl  = nullptr;
   sn_score_lbl  = nullptr;
   sn_target_lbl = nullptr;
@@ -7101,17 +7061,17 @@ static void sn_game_start()
   lv_obj_set_style_text_color(sn_field_lbl, lv_color_white(), 0);
   lv_obj_set_style_text_align(sn_field_lbl, LV_TEXT_ALIGN_LEFT, 0);
   lv_label_set_long_mode(sn_field_lbl, LV_LABEL_LONG_CLIP);
-  lv_obj_set_pos(sn_field_lbl, TL_FIELD_X, TL_FIELD_Y);
+  lv_obj_set_pos(sn_field_lbl, FIELD_X, FIELD_Y);
   lv_obj_set_size(sn_field_lbl, 320, SN_ROWS * 16 + 4);
 
   // Status bar: Score (left) | target char (centre) | Best (right)
-  int status_y = TL_FIELD_Y + SN_ROWS * 16 + 4;
+  int status_y = FIELD_Y + SN_ROWS * 16 + 4;
 
   sn_score_lbl = lv_label_create(apps_cont);
   lv_obj_set_style_text_font(sn_score_lbl, &dejavu_mono_14, 0);
   lv_obj_set_style_text_color(sn_score_lbl, lv_color_make(180, 180, 100), 0);
   lv_obj_set_style_text_align(sn_score_lbl, LV_TEXT_ALIGN_LEFT, 0);
-  lv_obj_set_pos(sn_score_lbl, TL_FIELD_X + 2, status_y);
+  lv_obj_set_pos(sn_score_lbl, FIELD_X + 2, status_y);
   lv_obj_set_size(sn_score_lbl, 120, 16);
 
   sn_target_lbl = lv_label_create(apps_cont);
@@ -7238,11 +7198,11 @@ static void sn_end_game()
   lv_timer_t *et = lv_timer_create([](lv_timer_t *t) {
     lv_timer_del(t);
     if (s_sn_beat_high) {
-      sn_play_success();          // winning tune for new high score
+      tune_play_success();          // winning tune for new high score
     } else if (s_sn_completed_alpha) {
-      sn_play_success();          // winning tune for completing alphabet
+      tune_play_success();          // winning tune for completing alphabet
     } else {
-      sn_play_failure();
+      tune_play_failure();
     }
     sn_show_popup(s_sn_won);
   }, 500, nullptr);
@@ -7357,7 +7317,7 @@ static void sn_move_tick_cb(lv_timer_t * /*t*/)
         cfg.sn_high_score = sn_score;
         save_config();
       }
-      sn_play_success();     // async win tune — no separate beep
+      tune_play_success();     // async win tune — no separate beep
     } else {
       sn_beep();             // normal catch beep
     }
@@ -7474,7 +7434,7 @@ static void bn_anim_tick_cb(lv_timer_t *t)
     lv_timer_del(t);
     bn_anim_timer = nullptr;
     bn_animating  = false;
-    if (bn_count >= BN_TOTAL) tl_play_success();          // full house — reuse Tennis's tune engine
+    if (bn_count >= BN_TOTAL) tune_play_success();          // full house
   }
 }
 

@@ -20,8 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
-  pull-requests: read   # to pull the merged PR's title and body into the notes
+  contents: write   # also covers --generate-notes; that endpoint needs no more
 
 env:
   ESP32_CORE_VERSION: "3.3.11"
@@ -73,40 +72,6 @@ jobs:
 
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "sketch=$SKETCH" >> "$GITHUB_OUTPUT"
-
-      # The PR whose merge produced this push to main. Its title and body head
-      # the release notes, so the release says what actually changed rather than
-      # only how it was built. Runs before the build and before the tag so that
-      # a token or permission problem surfaces while nothing irreversible has
-      # happened yet. Writes a ready-made markdown fragment rather than step
-      # outputs, which keeps arbitrary PR text out of shell interpolation.
-      # Empty when the push had no associated PR — the notes then simply start
-      # at the flashing section.
-      - name: Summarise merged pull request
-        if: steps.version.outputs.should-release == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -uo pipefail
-          : > pr-section.md
-
-          if ! gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" > pr.json 2>/dev/null; then
-            echo "::notice::Could not query pull requests for ${GITHUB_SHA}; notes will omit the summary."
-            exit 0
-          fi
-
-          NUM="$(jq -r '.[0].number // empty' pr.json)"
-          if [ -z "$NUM" ]; then
-            echo "::notice::No pull request associated with ${GITHUB_SHA}; notes will omit the summary."
-            exit 0
-          fi
-
-          {
-            printf '## %s\n\n' "$(jq -r '.[0].title // ""' pr.json)"
-            jq -r '.[0].body // ""' pr.json
-            printf '\n_Merged in #%s._\n\n---\n\n' "$NUM"
-          } > pr-section.md
-          echo "::notice::Release notes will include PR #${NUM}."
 
       - name: Build firmware
         if: steps.version.outputs.should-release == 'true'
@@ -176,8 +141,6 @@ jobs:
           set -euo pipefail
 
           {
-            cat pr-section.md          # empty when the push had no PR
-
             echo "## Flashing"
             echo ""
             echo "\`firmware-${VERSION}-full.bin\` is a complete image — bootloader, partition"
@@ -229,7 +192,12 @@ jobs:
             echo "\`\`\`"
           } > notes.md
 
-          FLAGS=(--title "$VERSION" --notes-file notes.md)
+          # --generate-notes has GitHub append its own "What's Changed" section:
+          # every PR merged since the previous tag, plus contributors and a
+          # compare link. That covers a release spanning several PRs, which
+          # reading the merge commit's own PR would not. notes.md is the body,
+          # so the generated changelog lands after it.
+          FLAGS=(--title "$VERSION" --notes-file notes.md --generate-notes)
           [ "$PRERELEASE" = "true" ] && FLAGS+=(--prerelease)
 
           gh release create "$VERSION" "${FLAGS[@]}" release/*

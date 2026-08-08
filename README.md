@@ -7,6 +7,8 @@
 # ESP32-C6 Touch LCD 1.47" — LVGL Animated Clock
 
 [![GitHub](https://img.shields.io/badge/github-andreimagic%2FESP32__C6__Touch__LCD__1__47__LVGL__Animated__Clock-blue?logo=github)](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock)
+[![Build](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock)](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/releases/latest)
 
 A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47"** board, driven by **LVGL v9**. Displays the time in a large custom font, plays animated GIF emotions on a schedule, sounds configurable buzzer alarms, runs a countdown timer, manages brightness via device tilt, hosts a full apps menu with ASCII mini-games, and supports deep-sleep power-off — all configured from a plain `config.ini` on the SD card, no recompile needed.
 

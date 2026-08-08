@@ -1,0 +1,36 @@
+# Keeps the GitHub Actions we depend on current.
+#
+# Scope note: Dependabot only tracks `uses:` refs. The ESP32 core, LVGL, GFX and
+# FastIMU versions are plain env and matrix values in the workflows, so they are
+# invisible here — upstream-check.yml covers those instead. The two are
+# complementary and do not overlap.
+
+version: 2
+
+updates:
+  - package-ecosystem: "github-actions"
+    # "/" scans .github/workflows only. The composite action has to be listed
+    # separately, and it is not optional: arduino/setup-arduino-cli and
+    # actions/cache are pinned *only* there, so a root-only config would never
+    # see two of the four actions this repo uses.
+    directories:
+      - "/"
+      - "/.github/actions/arduino-build"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    # Dependabot targets the default branch unless told otherwise. That would
+    # open bot PRs straight against main, whose ruleset allows merge commits
+    # only, skipping development entirely. These belong in the normal flow.
+    #
+    # They pass the version guard without intervention: a workflow-only diff
+    # touches no firmware sources, so version-check.yml takes its exemption
+    # path rather than demanding a FW_VERSION bump.
+    target-branch: "development"
+    # Five actions across five files. Ungrouped, a busy week is five PRs and
+    # five full compile runs; grouped, it is one.
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"

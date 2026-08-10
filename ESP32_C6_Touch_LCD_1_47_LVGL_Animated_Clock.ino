@@ -7,10 +7,15 @@
  * sounds a buzzer alarm, and controls brightness via tilt.
  * All user settings live in /config.ini on the SD card — no recompile needed.
  *
- * Board  : ESP32-C6 Dev Module
- * Display: ST7789 172×320 (landscape) via Arduino_GFX
+ * Boards : ESP32-C6 Dev Module  (ESP32-C6-Touch-LCD-1.47)
+ *          ESP32S3 Dev Module  (ESP32-S3-Touch-LCD-1.47)
+ *          Pins and capabilities are selected in board_config.h.
+ * Display: JD9853 172×320 (landscape), ST7789 command set, via Arduino_GFX
  * Touch  : AXS5106L (I²C)
- * IMU    : QMI8658 (I²C, shared bus with touch)
+ * IMU    : QMI8658 (I²C, shared bus with touch) — C6 ONLY.
+ *          The S3 board has no accelerometer, so tilt-to-brightness and the
+ *          three tilt-steered games (Tennis Letters, Letters Rain, Snake
+ *          Letters) are hidden from the apps carousel on that target.
  *
  * lv_conf.h requirements:
  *   LV_USE_GIF             = 1
@@ -36,6 +41,7 @@
 #include <SD.h>
 #include <SPI.h>
 #include <WiFi.h>
+#include <esp_mac.h>
 // WiFiMulti removed in v2.8.0 — WiFiMulti::run() performs a *blocking* full
 // channel scan (~1.5-3 s) on every call while disconnected, which stalled LVGL
 // and kept the radio+CPU busy whenever the SSID was absent or the password
@@ -56,7 +62,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v2.7.2"
+#define FW_VERSION      "v2.7.3-beta"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -117,21 +123,13 @@ struct AppConfig {
   int  birthday_count         = 2;   // number of parsed birthday entries
 } cfg;
 
-// ─── Pin definitions ─────────────────────────────────────────────────────────
-#define ROTATION        1
-#define GFX_BL          23
-#define BUZZER_PIN      5    // Passive buzzer — connect between GPIO5 and GND
-#define SD_CS           4
-#define SD_SCK          1
-#define SD_MOSI         2
-#define SD_MISO         3
-
-#define Touch_I2C_SDA   18
-#define Touch_I2C_SCL   19
-#define Touch_RST       20
-#define Touch_INT       21
-
-#define BAT_PIN         0
+// ─── Board configuration ─────────────────────────────────────────────────────
+// Every pin assignment and per-board capability flag lives in board_config.h,
+// which selects on CONFIG_IDF_TARGET_*. Supported targets:
+//   ESP32-C6-Touch-LCD-1.47   (8MB flash, QMI8658 IMU)
+//   ESP32-S3-Touch-LCD-1.47   (16MB flash + 8MB PSRAM, no IMU)
+// Selecting any other board is a deliberate compile error.
+#include "board_config.h"
 
 // ─── GIF paths — SD card root is mapped to LVGL drive letter "S" ──────────────
 #define GIF_SMILE_PATH    "S:/cruzr_emotions/cruzr_smile.gif"
@@ -171,11 +169,11 @@ static void generate_ap_pin(void);
 
 
 // ─── Display ─────────────────────────────────────────────────────────────────
-Arduino_DataBus *bus = new Arduino_HWSPI(15 /* DC */, 14 /* CS */, 1 /* SCK */, 2 /* MOSI */);
+Arduino_DataBus *bus = BOARD_NEW_LCD_BUS();
 Arduino_GFX    *gfx = new Arduino_ST7789(
-  bus, 22 /* RST */, 0 /* rotation */, false /* IPS */,
-  172 /* width */, 320 /* height */,
-  34, 0, 34, 0);
+  bus, LCD_RST, 0 /* rotation */, false /* IPS */,
+  LCD_H_RES /* width */, LCD_V_RES /* height */,
+  LCD_COL_OFFSET, LCD_ROW_OFFSET, LCD_COL_OFFSET, LCD_ROW_OFFSET);
 
 // ─── LVGL display dimensions ─────────────────────────────────────────────────
 // Set after gfx->begin(); used by the display driver and GIF size checks.
@@ -1369,11 +1367,14 @@ static void start_ap_mode()
   // Name the hotspot after the radio's own MAC so several units in one house
   // stay tellable apart, e.g. "ESP32-Clock-8AF8A5". The suffix is the same three
   // bytes the IDF uses for its own "ESP_xxxxxx" default name.
-  String apmac = WiFi.softAPmacAddress();     // "8A:F8:A5:12:34:56"
-  apmac.replace(":", "");
-  if (apmac.length() >= 6)
-    snprintf(ap_ssid, sizeof(ap_ssid), "ESP32-Clock-%s",
-             apmac.substring(apmac.length() - 6).c_str());
+  // Read the MAC from eFuse rather than the AP interface: softAPmacAddress()
+  // queries a netif that does not exist until softAP() runs a few lines below,
+  // and returns all zeros before then. esp_read_mac() is independent of WiFi
+  // state and yields the same three bytes the IDF uses for "ESP_xxxxxx".
+  uint8_t apmac[6] = {0};
+  if (esp_read_mac(apmac, ESP_MAC_WIFI_SOFTAP) == ESP_OK)
+    snprintf(ap_ssid, sizeof(ap_ssid), "ESP32-Clock-%02X%02X%02X",
+             apmac[3], apmac[4], apmac[5]);
 
   // Deliberately OPEN — no WPA2 passphrase. Joining the hotspot is meant to be
   // frictionless; ap_pin is not a WiFi key, it authorises the mutating web
@@ -4274,6 +4275,38 @@ static void menu_tone_hi()   { menu_tone(NOTE_HI, 80); }
 // ── Apps state ────────────────────────────────────────────────────────────────
 // apps_cont declared globally above wifi_poll_cb
 static int         apps_idx       = 0;   // 0=RPS 1=Dice 2=Coin 3=Metro 4=Tennis 5=Rain 6=Snake 7=Bingo 8=Sound
+#define APPS_COUNT 9
+
+// ── Gyro-dependent apps ──────────────────────────────────────────────────────
+// Tennis Letters (4), Letters Rain (5) and Snake Letters (6) steer entirely by
+// tilt: their field tap opens the pause popup, it does not move anything. With
+// no accelerometer they are unplayable, so they are dropped from the carousel
+// rather than shipped as dead entries.
+//
+// Deliberately NOT hidden:
+//   RPS (0) / Dice (1) — tap-driven; the gyro is only a shake-to-reroll extra.
+//   Bingo (7)          — bn_tap_cb calls numbers on tap; tilt is the alternate.
+//
+// The test is runtime (imuReady), not compile-time, so it also covers a C6
+// whose QMI8658 fails to answer at boot. On the S3 the IMU code is compiled
+// out and imuReady is permanently false, so the effect is the same.
+static inline bool app_needs_imu(int idx)
+{ return idx == 4 || idx == 5 || idx == 6; }
+
+static inline bool app_is_available(int idx)
+{ return imuReady || !app_needs_imu(idx); }
+
+// Step the carousel by `dir`, skipping anything unavailable on this hardware.
+// Falls back to the current index if nothing else is selectable.
+static int apps_step(int from, int dir)
+{
+  int i = from;
+  for (int n = 0; n < APPS_COUNT; n++) {
+    i = (i + dir + APPS_COUNT) % APPS_COUNT;
+    if (app_is_available(i)) return i;
+  }
+  return from;
+}
 static int         app_subphase   = 0;   // 0=carousel  1=game
 static lv_timer_t *app_anim_timer = nullptr;
 static lv_timer_t *app_gyro_timer = nullptr;  // shake/tilt watcher for RPS & Dice
@@ -4473,9 +4506,9 @@ static void apps_longpress_cb(lv_event_t *e)
 }
 
 static void apps_left_cb(lv_event_t *e)
-{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+8)%9;apps_carousel_build();} }
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=apps_step(apps_idx,-1);apps_carousel_build();} }
 static void apps_right_cb(lv_event_t *e)
-{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+1)%9;apps_carousel_build();} }
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=apps_step(apps_idx,+1);apps_carousel_build();} }
 
 // Transparent full-screen tap zone helper for game screens
 static lv_obj_t *app_tapzone(lv_obj_t *p, lv_event_cb_t cb)
@@ -7724,6 +7757,11 @@ static void apps_tap_enter_cb(lv_event_t *e)
 // ── Apps carousel builder ─────────────────────────────────────────────────────
 static void apps_carousel_build()
 {
+  // Single choke point for every path into the carousel. If apps_idx is
+  // parked on a gyro-only app (persisted from a previous session, or the IMU
+  // dropped out), slide to the next available one before drawing.
+  if (!app_is_available(apps_idx)) apps_idx = apps_step(apps_idx, +1);
+
   metro_clear_ui();  // null UI refs before lv_obj_clean frees them
   lv_obj_clean(apps_cont);
   app_subphase = 0;
@@ -8253,6 +8291,7 @@ void setup()
   Serial.begin(115200);
   delay(500);  // give serial monitor time to connect
   Serial.println("\n\n========== BOOT ==========");
+  Serial.printf("[BOOT] %s  fw %s\n", BOARD_NAME, FW_VERSION);
   Serial.printf("[BOOT] Wake cause: %s\n",
     wakeup_cause == ESP_SLEEP_WAKEUP_TIMER     ? "TIMER — alarm auto-wake" :
     wakeup_cause == ESP_SLEEP_WAKEUP_UNDEFINED ? "cold boot / RESET button" : "other");
@@ -8264,14 +8303,17 @@ void setup()
   // This prevents any device from misinterpreting the SPI init sequence.
   Serial.println("[1] Pulling CS pins HIGH...");
   pinMode(SD_CS,  OUTPUT); digitalWrite(SD_CS,  HIGH);
-  pinMode(14,     OUTPUT); digitalWrite(14,     HIGH);  // display CS
+  pinMode(LCD_CS, OUTPUT); digitalWrite(LCD_CS, HIGH);  // display CS
   Serial.println("    Done.");
 
-  // ── Step 2: Start the shared SPI bus ONCE with all four pins ──────────────
-  // gfx->begin() would call SPI.begin() internally, but only with SCK/MOSI.
-  // By calling it here first with MISO included, both display and SD share
-  // the already-configured peripheral. On ESP32-C6 a second SPI.begin() on
-  // the same bus is a no-op, so this must come before gfx->begin().
+  // ── Step 2: Start the SPI bus that carries the TF card ────────────────────
+  // C6: display and card SHARE this bus (GPIO1/2). gfx->begin() would call
+  //     SPI.begin() itself but only with SCK/MOSI, so we begin it here first
+  //     with MISO included and both devices then share the peripheral. A
+  //     second SPI.begin() on the same bus is a no-op, so this must come
+  //     before gfx->begin().
+  // S3: the card has dedicated pins and the panel runs on HSPI, so this bus
+  //     belongs to the card alone. Same call, different pins, no contention.
   Serial.printf("[2] SPI.begin(SCK=%d, MISO=%d, MOSI=%d, CS=%d)...\n",
                 SD_SCK, SD_MISO, SD_MOSI, SD_CS);
   SPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
@@ -8302,7 +8344,11 @@ void setup()
   Serial.println("    Touch ready.");
 
   // ── IMU (QMI8658) — shares the I2C bus already started for touch ─────────
-  Serial.println("[4b] Initialising IMU...");  
+  // Boards with no IMU (ESP32-S3-Touch-LCD-1.47) compile this out entirely.
+  // Every tilt call site is already gated on imuReady, so leaving it false
+  // cleanly disables tilt-to-brightness, tilt-to-call and gyro game controls.
+#if BOARD_HAS_IMU
+  Serial.println("[4b] Initialising IMU...");
   int imuErr = imu.init(imuCalib, IMU_ADDRESS);
   if (imuErr != 0) {
     Serial.printf("    IMU init failed (err=%d) — tilt control disabled\n", imuErr);
@@ -8311,6 +8357,10 @@ void setup()
     Serial.println("    IMU ready.");
     imuReady = true;
   }
+#else
+  Serial.println("[4b] No IMU on this board — tilt control disabled.");
+  imuReady = false;
+#endif
 
   // ── Step 5: SD card ───────────────────────────────────────────────────────
   // SPI bus is already up (Step 2). We pass the same SPI instance and a safe

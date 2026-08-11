@@ -22,13 +22,13 @@
  *       BAT_ADC). Display pins additionally confirmed against Waveshare's own
  *       01_gfx_helloworld Arduino demo.
  *
- *   !! ONE KNOWN CONFLICT — LCD_RST on the S3 !!
+ *   !! LCD_RST on the S3 — SETTLED at 40; Waveshare's own demo is wrong !!
  *   The schematic nets say  IO40 = LCD_RST  and  IO47 = TP_RST.
- *   Waveshare's Arduino demo passes 47 as the ST7789 reset pin, which is the
- *   TOUCH reset line. We follow the schematic (40) because it is authoritative.
- *   If the panel stays black on the S3, try S3_LCD_RST = 47 before anything
- *   else: the demo may "work" only because the JD9853 self-resets at power-on
- *   while pin 47 incidentally resets the touch chip.
+ *   Waveshare's Arduino demo passes 47 as the panel reset pin, which is in fact
+ *   the TOUCH reset line. Their example is buggy: it appears to work only
+ *   because the JD9853 self-resets at power-on, so driving the wrong pin does no
+ *   visible harm. 40 is confirmed working on hardware, and 47 stays where it
+ *   belongs, on Touch_RST. Do not "fix" this by copying the demo.
  * ---------------------------------------------------------------------------
  */
 
@@ -67,6 +67,11 @@
   #define BOARD_HAS_IMU     1     // QMI8658A at 0x6B, shares I2C with touch
   #define BOARD_SD_SHARES_LCD_BUS 1
 
+  // PartitionScheme=default_8MB leaves 1.5MB of SPIFFS, not FAT, and the two
+  // 3.19MB OTA slots leave no room to grow one. So there is no internal
+  // filesystem to fall back to here: an SD card is required.
+  #define BOARD_HAS_INTERNAL_FS   0
+
   // The C6 has only one general-purpose SPI host, shared by LCD and SD.
   // Arduino_HWSPI rides the global `SPI` object that setup() already begins.
   #define BOARD_NEW_LCD_BUS() \
@@ -84,7 +89,8 @@
   #define LCD_MOSI          39
   #define LCD_CS            21
   #define LCD_DC            45
-  #define LCD_RST           40    // schematic net LCD_RST; see conflict note above
+  #define LCD_RST           40    // schematic net LCD_RST; confirmed on hardware
+                                  // (NOT 47 — that is Touch_RST; see header note)
   #define GFX_BL            46    // drives LEDK through the 8050 transistor
 
   // TF card — dedicated pins. The slot is wired for BOTH SDMMC and SPI mode
@@ -107,6 +113,11 @@
 
   #define BOARD_HAS_IMU     0     // no IMU on this board — tilt features self-disable
   #define BOARD_SD_SHARES_LCD_BUS 0
+
+  // PartitionScheme=app3M_fat9M_16MB provides a 9.9MB 'ffat' partition, so the
+  // firmware can run with no card at all. STORAGE falls back to it when no SD
+  // is mounted; FFat.begin(true) formats it once on a virgin board.
+  #define BOARD_HAS_INTERNAL_FS   1
 
   // The S3 has two free SPI hosts. Arduino's global `SPI` defaults to FSPI
   // (SPI2) and we keep that for the TF card, so the panel is given HSPI (SPI3)

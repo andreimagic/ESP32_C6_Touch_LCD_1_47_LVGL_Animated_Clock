@@ -5,7 +5,9 @@
  * A smart animated clock for kids built on the ESP32-C6, driven by LVGL v9.
  * Displays the time in large digits, plays GIF animations on a schedule,
  * sounds a buzzer alarm, and controls brightness via tilt.
- * All user settings live in /config.ini on the SD card — no recompile needed.
+ * All user settings live in /config.ini, read from whichever filesystem
+ * mounted at boot: SD card if one is present, otherwise the internal FAT
+ * partition on boards that have one. No recompile needed either way.
  *
  * Boards : ESP32-C6 Dev Module  (ESP32-C6-Touch-LCD-1.47)
  *          ESP32S3 Dev Module  (ESP32-S3-Touch-LCD-1.47)
@@ -39,6 +41,7 @@
 #include "esp_lcd_touch_axs5106l.h"
 #include <Arduino_GFX_Library.h>
 #include <SD.h>
+#include <FFat.h>          // internal-flash fallback (see STORAGE below)
 #include <SPI.h>
 #include <WiFi.h>
 #include <esp_mac.h>
@@ -62,7 +65,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v2.7.3-beta"
+#define FW_VERSION      "v3.0.0"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -79,7 +82,10 @@ struct AppConfig {
   char wifi_password[64]             = "changeme";       // [wifi] password
   char ntp_server[64]                = "pool.ntp.org";   // [clock] ntp_server
   char tz_string[48]                 = "CET-1CEST,M3.5.0,M10.5.0/3"; // [clock] tz (POSIX — set once, handles DST forever)
-  uint8_t wifi_mode                  = WCFG_WIFI; // [wifi] mode (wifi|ap|off)
+  uint8_t wifi_mode                  = WCFG_AP;   // [wifi] mode (wifi|ap|off)
+                                                  // AP by default: with no config there are no
+                                                  // real credentials either, and the web UI is
+                                                  // the only way to set them on internal flash.
   bool alarm_enabled                 = false;   // [alarm] enabled
   int  alarm_hour                    = 7;       // [alarm] time HH
   int  alarm_minute                  = 0;       // [alarm] time MM
@@ -249,7 +255,29 @@ lv_timer_t *wifi_timer     = nullptr;
 lv_obj_t   *home_bell_lbl  = nullptr;  // bell icon shown on home when alarm ON
 lv_obj_t   *alarm_cont     = nullptr;  // alarm editor screen
 
-bool sdCardAvailable  = false;
+bool sdCardAvailable  = false;   // literally: a card is mounted
+
+// ── Storage backend ──────────────────────────────────────────────────────────
+// GIFs and config.ini are reached through STORAGE, which points at whichever
+// filesystem mounted at boot. Precedence is SD first, internal flash second,
+// so inserting a card always wins and you can never be silently served a
+// stale internal copy. Exactly ONE backend is live at a time, never both.
+//
+// The runtime log (/last_seen.txt) is deliberately NOT routed through STORAGE.
+// It grows without bound, so it stays on the card only. Note the consequence:
+// restore_time_from_log() reads that same file, so RTC recovery after power
+// loss is unavailable when running from internal flash. Route the log through
+// STORAGE too if you would rather have the clock restore than the size cap.
+fs::FS *STORAGE           = nullptr;
+bool    storageAvailable  = false;   // some filesystem is mounted
+bool    storageIsInternal = false;   // true when that filesystem is FFat
+
+static inline const char *storage_label()
+{
+  return !storageAvailable  ? "none"
+       :  storageIsInternal ? "Internal flash (FFat)"
+                            : "SD card";
+}
 bool boot_from_sleep      = false;  // true when waking from deep sleep via BOOT btn
 uint32_t boot_millis       = 0;     // millis() captured at start of setup()
 bool     alarm_ntp_pending = false; // alarm held waiting for NTP sync after wake
@@ -282,6 +310,11 @@ bool      imuReady  = false;
 // ─── Brightness + tilt timer handles — valid only while Status screen is open ─
 lv_obj_t   *label_brightness = nullptr;
 lv_timer_t *tilt_timer         = nullptr;
+// Set when a left/right swipe has just adjusted the brightness. LVGL still
+// delivers LV_EVENT_CLICKED on release after a gesture (the overlay is not
+// scrollable, so nothing suppresses the click), which would close the status
+// screen mid-adjust. overlay_close_event_cb() consumes this flag instead.
+bool        swipe_consumed_tap = false;
 bool        emotion_tilt_active = false;   // true while UL smile GIF is open
 const char *emotion_current_gif = nullptr; // tracks which GIF is showing
 lv_timer_t *buzzer_timer      = nullptr;  // alarm beep pattern timer
@@ -303,17 +336,30 @@ lv_obj_t   *home_timer_lbl  = nullptr;  // small label bottom-left when running
 
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  SD ↔ LVGL FILESYSTEM BRIDGE  (drive letter "S")
+//  STORAGE ↔ LVGL FILESYSTEM BRIDGE  (drive letter "S")
 //  Registers 6 callbacks (open/close/read/write/seek/tell) so that LVGL
-//  widgets (lv_gif, lv_img, lv_font_load) can open SD files transparently.
+//  widgets (lv_gif, lv_img, lv_font_load) can open files transparently.
+//  This is the single chokepoint for every GIF path: swapping STORAGE swaps
+//  the backing filesystem for all of them at once. The drive letter stays
+//  "S" whichever backend is live, so no GIF_*_PATH macro ever changes.
 // ══════════════════════════════════════════════════════════════════════════════
 struct LvSdFile { File f; };
+
+// LVGL paths carry the drive letter ("S:/dir/file.gif"); STORAGE does not.
+// Strip it so a path can be probed with STORAGE->exists() before handing it
+// to a widget, since lv_gif_set_src() fails silently on a missing file and
+// leaves nothing but an empty overlay on screen.
+static inline const char *storage_path(const char *lv_path)
+{
+  return (lv_path && lv_path[0] && lv_path[1] == ':') ? lv_path + 2 : lv_path;
+}
 
 static void *lvgl_sd_open(lv_fs_drv_t * /*drv*/, const char *path, lv_fs_mode_t mode)
 {
   const char *sdMode = (mode == LV_FS_MODE_WR) ? FILE_WRITE : FILE_READ;
+  if (!STORAGE) return nullptr;
   LvSdFile *fp = new LvSdFile();
-  fp->f = SD.open(path, sdMode);
+  fp->f = STORAGE->open(path, sdMode);
   if (!fp->f) { delete fp; return nullptr; }
   return (void *)fp;
 }
@@ -498,6 +544,19 @@ void backlight_init()
   Serial.printf("[BL] Backlight init at %d%% (PWM=%d)\n", brightnessPercent, pwm);
 }
 
+// Status-screen brightness row. Both the initial draw and every later update go
+// through here so the two cannot drift apart — they previously did, and the
+// "(tilt to adjust)" hint disappeared the moment the value first changed.
+// Tilt is only advertised when an IMU actually answered at boot; swipe works on
+// every board.
+static void brightness_label_refresh(int percent)
+{
+  if (!label_brightness) return;
+  lv_label_set_text_fmt(label_brightness,
+                        LV_SYMBOL_IMAGE "  Brightness: %d%%  (%s)",
+                        percent, imuReady ? "tilt or swipe" : "swipe to adjust");
+}
+
 void set_brightness(int percent)
 {
   if (percent < 1)   percent = 1;
@@ -507,9 +566,7 @@ void set_brightness(int percent)
   ledcWrite(GFX_BL, pwm);
   Serial.printf("[BL] Brightness %d%% (PWM=%d)\n", percent, pwm);
   // Update label if status screen is open
-  if (label_brightness) {
-    lv_label_set_text_fmt(label_brightness, LV_SYMBOL_IMAGE "  Brightness: %d%%", percent);
-  }
+  brightness_label_refresh(percent);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -565,11 +622,128 @@ static char *ini_trim(char *s)
   return s;
 }
 
+// ── Default config.ini ───────────────────────────────────────────────────────
+// Written verbatim on first boot when the active storage has no config.ini.
+// Every value below matches the AppConfig struct defaults exactly, so a device
+// behaves identically whether or not the file exists. That includes [wifi]
+// mode = ap: with no config there are no real credentials either, so the
+// device should come up reachable rather than chase a placeholder SSID.
+//
+// Keys and sections here are exactly those load_config() accepts; adding a key
+// the parser does not know is harmless but silently ignored.
+static const char DEFAULT_CONFIG_INI[] PROGMEM =
+R"INI(# ============================================================
+#  ESP32 Animated Clock — configuration
+#  Edit here or through the web UI, then reboot for [wifi] changes.
+#  Lines starting with # are comments and are preserved on save.
+# ============================================================
+
+[clock]
+# NTP is only used in wifi mode. tz is a POSIX string: set once, DST forever.
+ntp_server = pool.ntp.org
+tz = CET-1CEST,M3.5.0,M10.5.0/3
+
+[wifi]
+# mode: wifi = join the network below | ap = own hotspot | off = radio down
+mode = ap
+ssid = myhomewifi
+password = changeme
+
+[alarm]
+enabled = false
+time = 07:00
+# beep_sequences: 0 = keep beeping until touched
+beep_sequences = 5
+
+[timer]
+# duration is HH:MM
+duration = 00:00
+beep_sequences = 3
+
+[animation]
+# Play an emotion GIF on the hour. duration is seconds (3-60).
+schedule = true
+duration = 10
+
+[menu]
+sounds = true
+
+[birthdays]
+# Up to 8 entries, DD-MM-YYYY, comma separated. Only day and month are matched.
+dates = 01-01-1970,06-08-2017
+
+[tennis]
+high_score = 0
+paddle_size = 6
+ball_speed_ms = 500
+ball_speed_min_ms = 200
+ball_speed_change_ms = 10
+paddle_speed_ms = 250
+paddle_speed_min_ms = 100
+paddle_speed_change_ms = 5
+
+[letter_rain]
+last_score = 0
+paddle_size = 6
+max_entities = 5
+fall_speed_ms = 850
+fall_speed_min_ms = 600
+fall_speed_change_ms = 10
+paddle_speed_ms = 150
+paddle_speed_min_ms = 50
+paddle_speed_change_ms = 5
+
+[snake]
+high_score = 0
+snake_size = 3
+snake_speed_ms = 600
+snake_speed_min_ms = 200
+snake_speed_change_ms = 5
+vertical_walls = true
+horizontal_walls = false
+distractions = 3
+next_level_score = 10
+)INI";
+
+// ── Create config.ini when the active storage has none ───────────────────────
+// A blank SD card used to mean "user forgot the file", and save_config() would
+// eventually produce one. On a freshly formatted FFat partition that is simply
+// the normal first-boot state, and save_config() only rewrites the sections it
+// manages -- [clock], [animation] and [birthdays] would never appear. So write
+// the full template up front instead, before load_config() reads it.
+//
+// Returns true only when a file was actually created.
+static bool bootstrap_config()
+{
+  if (!storageAvailable || !STORAGE)      return false;
+  if (STORAGE->exists("/config.ini"))     return false;
+
+  File f = STORAGE->open("/config.ini", FILE_WRITE);
+  if (!f) {
+    Serial.printf("[CFG] bootstrap: cannot create config.ini on %s\n", storage_label());
+    return false;
+  }
+  // PROGMEM on ESP32 is ordinary flash-mapped rodata, so this reads directly.
+  const size_t len = strlen(DEFAULT_CONFIG_INI);
+  const size_t written = f.write((const uint8_t *)DEFAULT_CONFIG_INI, len);
+  f.close();
+
+  if (written != len) {
+    Serial.printf("[CFG] bootstrap: short write (%u/%u bytes)\n",
+                  (unsigned)written, (unsigned)len);
+    return false;
+  }
+  Serial.printf("[CFG] No config.ini on %s — wrote defaults (%u bytes).\n",
+                storage_label(), (unsigned)len);
+  return true;
+}
+
 static void load_config()
 {
   Serial.println("[CFG] Loading /config.ini...");
 
-  File f = SD.open("/config.ini", FILE_READ);
+  if (!STORAGE) { Serial.println("[CFG] no storage mounted — using defaults."); return; }
+  File f = STORAGE->open("/config.ini", FILE_READ);
   if (!f) {
     Serial.println("[CFG] config.ini not found — using defaults.");
     return;
@@ -628,9 +802,12 @@ static void load_config()
       else if (strcmp(key, "mode") == 0) {
         // Anything unrecognised falls back to WiFi rather than silently
         // leaving the clock offline because of a typo.
-        if      (strcmp(val, "off") == 0 || strcmp(val, "OFF") == 0) cfg.wifi_mode = WCFG_OFF;
-        else if (strcmp(val, "ap")  == 0 || strcmp(val, "AP")  == 0) cfg.wifi_mode = WCFG_AP;
-        else                                                         cfg.wifi_mode = WCFG_WIFI;
+        if      (strcmp(val, "off")  == 0 || strcmp(val, "OFF")  == 0) cfg.wifi_mode = WCFG_OFF;
+        else if (strcmp(val, "wifi") == 0 || strcmp(val, "WIFI") == 0) cfg.wifi_mode = WCFG_WIFI;
+        else                                                           cfg.wifi_mode = WCFG_AP;
+        // Note the fallback is AP, not STA: an unrecognised value (typo, or a
+        // key we no longer understand) should leave the device reachable
+        // rather than chasing a network it was never told about correctly.
         wifi_mode_seen = true;
         Serial.printf("[CFG]   wifi.mode          = %s\n", wifi_cfg_mode_name());
       }
@@ -877,6 +1054,7 @@ static void load_config()
 }
 
 static void restore_time_from_log() {
+  // SD-only by design: the log lives on the card, so RTC recovery does too.
   if (!sdCardAvailable) return;
 
   File f = SD.open("/last_seen.txt", FILE_READ);
@@ -962,7 +1140,9 @@ static void log_last_seen() {
            t.tm_hour, t.tm_min, t.tm_sec, voltage);
 
   // 4. Append Mode: Write to last_seen.txt
-  // FILE_WRITE on ESP32 SD library defaults to appending/creating if it exists.
+  // Card-only by design — the log grows without bound, so it is never routed
+  // through STORAGE onto the internal flash partition.
+  if (!sdCardAvailable) return;
   File logFile = SD.open("/last_seen.txt", FILE_APPEND);
   if (logFile) {
     logFile.print(log_buf);
@@ -988,7 +1168,8 @@ static void save_config()
   int  lineCount = 0;
   bool inManaged = false;
 
-  File fr = SD.open(path, FILE_READ);
+  if (!STORAGE) { Serial.println("[CFG] save_config: no storage mounted"); return; }
+  File fr = STORAGE->open(path, FILE_READ);
   if (fr) {
     while (fr.available() && lineCount < 30) {
       int len = 0;
@@ -1023,8 +1204,12 @@ static void save_config()
     fr.close();
   }
 
-  File fw = SD.open(path, FILE_WRITE);
-  if (!fw) { Serial.println("[CFG] save_config: cannot open for write"); return; }
+  // Write to a temp file and swap it in, rather than truncating the live one.
+  // On a card a bad write is recoverable by re-imaging; on internal flash it
+  // is not, so never leave config.ini in a half-written state.
+  const char *tmp = "/config.tmp";
+  File fw = STORAGE->open(tmp, FILE_WRITE);
+  if (!fw) { Serial.println("[CFG] save_config: cannot open temp for write"); return; }
 
   // Preserved lines (clock / animation / birthdays / user comments).
   // fw.print + "\n" instead of fw.println to avoid the extra \r that
@@ -1086,7 +1271,14 @@ static void save_config()
 
   fw.close();
 
-  Serial.println("[CFG] Saved wifi/alarm/timer/menu/tennis/letter_rain/snake.");
+  STORAGE->remove(path);
+  if (!STORAGE->rename(tmp, path)) {
+    Serial.println("[CFG] save_config: rename failed — config.tmp left in place");
+    return;
+  }
+
+  Serial.printf("[CFG] Saved to %s (wifi/alarm/timer/menu/tennis/letter_rain/snake).\n",
+                storage_label());
   
   // Save the current timestamp to the log file as well
   log_last_seen();
@@ -1098,10 +1290,10 @@ static void save_config()
 // web UI always shows all tennis settings from the very first power-on.
 static void seed_tennis_config()
 {
-  if (!sdCardAvailable) return;
+  if (!storageAvailable || !STORAGE) return;
 
   // Check whether [tennis] is already in the file
-  File fr = SD.open("/config.ini", FILE_READ);
+  File fr = STORAGE->open("/config.ini", FILE_READ);
   if (!fr) return;  // no file at all — save_config() will create it later
   bool found = false;
   char line[64];
@@ -1126,7 +1318,7 @@ static void seed_tennis_config()
   }
 
   // Append the section with current (default) values
-  File fa = SD.open("/config.ini", FILE_APPEND);
+  File fa = STORAGE->open("/config.ini", FILE_APPEND);
   if (!fa) { Serial.println("[CFG] seed_tennis_config: cannot open for append"); return; }
   fa.println();
   fa.println("[tennis]");
@@ -1148,9 +1340,9 @@ static void seed_tennis_config()
 // web UI always shows all letter_rain settings from the very first power-on.
 static void seed_letter_rain_config()
 {
-  if (!sdCardAvailable) return;
+  if (!storageAvailable || !STORAGE) return;
 
-  File fr = SD.open("/config.ini", FILE_READ);
+  File fr = STORAGE->open("/config.ini", FILE_READ);
   if (!fr) return;  // no file at all — save_config() will create it later
   bool found = false;
   char line[64];
@@ -1175,7 +1367,7 @@ static void seed_letter_rain_config()
   }
 
   // Append the section with current (default) values
-  File fa = SD.open("/config.ini", FILE_APPEND);
+  File fa = STORAGE->open("/config.ini", FILE_APPEND);
   if (!fa) { Serial.println("[CFG] seed_letter_rain_config: cannot open for append"); return; }
   fa.println();
   fa.println("[letter_rain]");
@@ -1198,9 +1390,9 @@ static void seed_letter_rain_config()
 // web UI always shows all snake settings from the very first power-on.
 static void seed_snake_config()
 {
-  if (!sdCardAvailable) return;
+  if (!storageAvailable || !STORAGE) return;
 
-  File fr = SD.open("/config.ini", FILE_READ);
+  File fr = STORAGE->open("/config.ini", FILE_READ);
   if (!fr) return;  // no file at all — save_config() will create it later
   bool found = false;
   char line[64];
@@ -1225,7 +1417,7 @@ static void seed_snake_config()
   }
 
   // Append the section with current (default) values
-  File fa = SD.open("/config.ini", FILE_APPEND);
+  File fa = STORAGE->open("/config.ini", FILE_APPEND);
   if (!fa) { Serial.println("[CFG] seed_snake_config: cannot open for append"); return; }
   fa.println();
   fa.println("[snake]");
@@ -1581,10 +1773,12 @@ static void start_web_server()
   // ── GET / — config editor page ───────────────────────────────────────────
   web_server.on("/", HTTP_GET, []() {
 
-    // Read config.ini from SD
+    // Read config.ini from whichever backend mounted at boot
     String cfg_text;
-    File f = SD.open("/config.ini", FILE_READ);
-    if (f) { while (f.available()) cfg_text += (char)f.read(); f.close(); }
+    if (STORAGE) {
+      File f = STORAGE->open("/config.ini", FILE_READ);
+      if (f) { while (f.available()) cfg_text += (char)f.read(); f.close(); }
+    }
 
     // ── Mask the wifi password line before sending to browser ───────────────
     // Replace "password = <anything>" with a fixed placeholder so the real
@@ -1683,6 +1877,9 @@ static void start_web_server()
         // ── config.ini editor ─────────────────────────────────────────────
         "<div class='card'>"
         "<label>config.ini &mdash; edit and tap Save to apply</label>"
+        "<div style='font-size:12px;opacity:.7;margin:-6px 0 6px'>stored on: ");
+    html += storage_label();
+    html += F("</div>"
         "<textarea id='cfg'>");
     html += cfg_display;
     html += F("</textarea>"
@@ -1812,11 +2009,18 @@ static void start_web_server()
     body.replace("\r\n", "\n");
     body.replace("\r",   "\n");
 
-    SD.remove("/config.ini");
-    File fw = SD.open("/config.ini", FILE_WRITE);
-    if (!fw) { web_server.send(500, "text/plain", "SD write failed."); return; }
+    if (!STORAGE) { web_server.send(503, "text/plain", "No storage mounted."); return; }
+
+    // Temp-then-swap, same reasoning as save_config(): never leave the live
+    // config half-written, because on internal flash that is unrecoverable.
+    File fw = STORAGE->open("/config.tmp", FILE_WRITE);
+    if (!fw) { web_server.send(500, "text/plain", "Storage write failed."); return; }
     fw.print(body);
     fw.close();
+    STORAGE->remove("/config.ini");
+    if (!STORAGE->rename("/config.tmp", "/config.ini")) {
+      web_server.send(500, "text/plain", "Storage rename failed."); return;
+    }
 
     // Reload cfg from the new file and apply settings that don't need a reboot
     load_config();
@@ -1878,6 +2082,12 @@ static void start_web_server()
 
   // ── GET /log — download last_seen.txt (no PIN required — read-only) ──────
   web_server.on("/log", HTTP_GET, []() {
+    // Always SD: the log is card-only by design, never on internal flash.
+    if (!sdCardAvailable) {
+      web_server.send(404, "text/plain",
+                      "No SD card — the run log is only kept on a card.");
+      return;
+    }
     File f = SD.open("/last_seen.txt", FILE_READ);
     if (!f) { web_server.send(404, "text/plain", "Log not found"); return; }
     web_server.sendHeader("Content-Disposition", "attachment; filename=\"last_seen.txt\"");
@@ -2601,7 +2811,7 @@ static void close_scheduled_gif()
 static void run_scheduled_animation(int hour)
 {
   if (!cfg.anim_schedule_enabled) return;
-  if (!sdCardAvailable)           return;
+  if (!storageAvailable)          return;
   if (overlay_cont)               return;  // another screen already open
   if (apps_cont)                  return;  // apps menu open (incl. metronome)
   if (!home_time_lbl)             return;  // clock face not visible yet
@@ -2835,6 +3045,9 @@ static void clock_tick_cb(lv_timer_t * /*t*/)
 static void overlay_close_event_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  // A swipe releases inside this full-screen overlay, so LVGL follows the
+  // gesture with a CLICKED on the same object. That is not "tap to return".
+  if (swipe_consumed_tap) { swipe_consumed_tap = false; return; }
   if (overlay_cont) {
     label_adc_raw = nullptr;
     label_voltage = nullptr;
@@ -2869,6 +3082,10 @@ static void overlay_close_event_cb(lv_event_t *e)
 
 static lv_obj_t *make_overlay(lv_color_t bg_color)
 {
+  // Cleared here rather than only on consumption: if an overlay is ever torn
+  // down by a timer between the gesture and the release, the pending flag would
+  // otherwise swallow the first tap on whatever screen opens next.
+  swipe_consumed_tap = false;
   lv_obj_t *cont = lv_obj_create(lv_scr_act());
   lv_obj_set_size(cont, LV_PCT(100), LV_PCT(100));
   lv_obj_align(cont, LV_ALIGN_CENTER, 0, 0);
@@ -2902,27 +3119,53 @@ static void show_gif_fullscreen(const char *path)
   if (overlay_cont) return;
   overlay_cont = make_overlay(lv_color_black());
 #if LV_USE_GIF
-  if (sdCardAvailable) {
+  if (storageAvailable) {
     uint32_t free_b  = heap_caps_get_free_size(MALLOC_CAP_8BIT);
     uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     Serial.printf("[GIF] heap free=%u  largest=%u\n", free_b, largest);
 
-    // ── RAM requirement ───────────────────────────────────────────────────────
-    // LVGL v9 GIF decoder allocates an ARGB8888 canvas = width × height × 4 bytes
-    //   320×172 px → 220 160 bytes — DOES NOT FIT on ESP32-C6 (max ~77 KB free)
-    //   160× 86 px →  54 880 bytes — fits easily
+    // ── RAM requirement — MEASURED on hardware, not estimated ─────────────────
+    // The LVGL v9 GIF decoder allocates an ARGB8888 canvas of width × height × 4
+    // plus decoder state. A 160×86 decode costs 84 056 bytes end to end
+    // (canvas 55 040 + ~29 KB of state), measured identically on both boards via
+    // the free/largest print above.
     //
-    // !! YOU MUST RESIZE BOTH GIF FILES ON THE SD CARD TO 160×86 PIXELS !!
+    // ESP32-C6 largest free block at this point, measured:
+    //   wifi.mode = ap   (web server up)   238 944 free / 221 172 largest
+    //   wifi.mode = off                    277 296 free / 229 364 largest
+    // So a 160×86 GIF has ~137 KB of headroom on the C6 — not the ~2 KB that an
+    // earlier version of this comment implied by claiming "max ~77 KB free".
+    // That figure was simply wrong; do not reintroduce it.
+    //
+    // !! YOU MUST STILL RESIZE BOTH GIF FILES ON THE SD CARD TO 160×86 PIXELS !!
+    // Full panel resolution genuinely does not fit on the C6, for the real
+    // reason: a 320×172 canvas is 220 160 bytes, and with decoder state that is
+    // ~249 KB against the 221 KB largest block — short by roughly 28 KB.
     //    Tool: https://ezgif.com/resize
     //    Steps: Upload GIF → Width=160, Height=86, Resize → Download
     //    Save back to SD card overwriting the original filename.
     //
     // The widget is then scaled 2× by LVGL to fill the 320×172 screen.
+    //
+    // On the S3 the guard below never trips: PSRAM lives inside MALLOC_CAP_8BIT,
+    // so `largest` is ~8 MB and the canvas is allocated there. Native-resolution
+    // GIFs would fit on that board, but the assets are shared, so they stay
+    // 160×86 for both.
     // ─────────────────────────────────────────────────────────────────────────
 
-    // 160×86×4 = 54880 bytes canvas + ~20KB decoder overhead = ~75KB needed
-    if (largest < 75000) {
-      Serial.printf("[GIF] need 75KB, only %u available\n", largest);
+    // Measured need is 84 056; the threshold carries a small margin above it.
+    if (!STORAGE->exists(storage_path(path))) {
+      // lv_gif_set_src() only logs a warning and renders nothing, which looks
+      // like a hung black screen. Say what is actually wrong instead.
+      Serial.printf("[GIF] not found: %s (on %s)\n", storage_path(path), storage_label());
+      lv_obj_t *err = lv_label_create(overlay_cont);
+      lv_label_set_text_fmt(err, LV_SYMBOL_WARNING "  GIF not found on %s", storage_label());
+      lv_obj_set_style_text_color(err, lv_color_white(), 0);
+      lv_label_set_long_mode(err, LV_LABEL_LONG_WRAP);
+      lv_obj_set_width(err, screenWidth - 20);
+      lv_obj_align(err, LV_ALIGN_CENTER, 0, 0);
+    } else if (largest < 90000) {
+      Serial.printf("[GIF] need ~84KB, only %u available\n", largest);
       lv_obj_t *err = lv_label_create(overlay_cont);
       lv_label_set_text(err, LV_SYMBOL_WARNING "  Not enough RAM — resize GIF to 160x86");
       lv_obj_set_style_text_color(err, lv_color_white(), 0);
@@ -2948,7 +3191,7 @@ static void show_gif_fullscreen(const char *path)
     }
   } else {
     lv_obj_t *err = lv_label_create(overlay_cont);
-    lv_label_set_text(err, LV_SYMBOL_WARNING "  SD card not available");
+    lv_label_set_text(err, LV_SYMBOL_WARNING "  No storage available");
     lv_obj_set_style_text_color(err, lv_color_white(), 0);
     lv_obj_align(err, LV_ALIGN_CENTER, 0, 0);
   }
@@ -3013,6 +3256,23 @@ static void tilt_poll_cb(lv_timer_t * /*t*/)
     if      (y >  0.5f) set_brightness(brightnessPercent - 10);
     else if (y < -0.5f) set_brightness(brightnessPercent + 10);
   }
+}
+
+// ── Swipe left/right on the status screen: brightness ∓10% ───────────────────
+// Same step and clamping as the tilt path above, deliberately: the two are meant
+// to be interchangeable. Swipe works on every board, so this is the only
+// brightness control on the S3, which has no IMU to tilt.
+//
+// LVGL sends at most one LV_EVENT_GESTURE per press (indev sets gesture_sent),
+// so one swipe is one 10% step — swipe again for the next.
+static void brightness_swipe_cb(lv_event_t * /*e*/)
+{
+  switch (lv_indev_get_gesture_dir(lv_indev_get_act())) {
+    case LV_DIR_LEFT:  set_brightness(brightnessPercent - 10); break;
+    case LV_DIR_RIGHT: set_brightness(brightnessPercent + 10); break;
+    default: return;   // vertical swipe: leave it to the tap-to-return handler
+  }
+  swipe_consumed_tap = true;   // suppress the CLICKED that follows this gesture
 }
 
 // ── WiFi / NTP / Date status (lower-left) ────────────────────────────────────
@@ -3133,15 +3393,28 @@ static void show_status_screen(void)
 
   // ── Row 3: Brightness  (y = +28 from mid = ~114px from top) ──────────────
   label_brightness = lv_label_create(overlay_cont);
-  lv_label_set_text_fmt(label_brightness,
-    LV_SYMBOL_IMAGE "  Brightness: %d%%  (tilt to adjust)",
-    brightnessPercent);
+  brightness_label_refresh(brightnessPercent);
   lv_obj_set_style_text_color(label_brightness, lv_color_make(200, 200, 100), 0);
   lv_obj_align(label_brightness, LV_ALIGN_LEFT_MID, 20, 28);
   lv_obj_add_flag(label_brightness, LV_OBJ_FLAG_IGNORE_LAYOUT);
 
-  // Start tilt poll timer — 400 ms, runs while this screen is open
-  tilt_timer = lv_timer_create(tilt_poll_cb, 400, nullptr);
+  // Swipe left/right to adjust brightness — available on both boards.
+  //
+  // GESTURE_BUBBLE must be cleared here or this callback never runs. LVGL sets
+  // that flag on every object created with a parent (lv_obj.c), and
+  // indev_gesture() walks *up* from the pressed object for as long as it is set —
+  // so with it left on, the walk passes straight over this overlay and delivers
+  // the event to the screen, whose parent is NULL. Clearing it makes the overlay
+  // the end of the walk, which also means a gesture starting on a child (the
+  // separator is clickable, being an lv_obj) still lands here.
+  lv_obj_clear_flag(overlay_cont, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_event_cb(overlay_cont, brightness_swipe_cb, LV_EVENT_GESTURE, nullptr);
+
+  // Start tilt poll timer — 400 ms, runs while this screen is open. Skipped
+  // without an IMU, matching the guarded path at the emotion overlay;
+  // tilt_poll_cb() would early-return anyway.
+  if (imuReady && !tilt_timer)
+    tilt_timer = lv_timer_create(tilt_poll_cb, 400, nullptr);
 
   add_back_hint(overlay_cont);
 }
@@ -7959,13 +8232,22 @@ static void apps_carousel_build()
   lv_obj_set_style_text_opa(hint, LV_OPA_60, 0);
   lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -18);
 
-  // 9 position dots  (9 × 14 px = 126 px; start at x=97 to centre on 320 px screen)
-  for (int i = 0; i < 9; i++) {
+  // Position dots — one per app that is actually reachable on this hardware.
+  // apps_step() skips anything app_is_available() rejects, so drawing a dot per
+  // raw index would leave unreachable dots that can never light up (3 of them
+  // with no IMU). Count the row first, then centre it on its own width at the
+  // 14 px pitch: 9 dots land back on x=97, as before.
+  int dot_n = 0;
+  for (int i = 0; i < APPS_COUNT; i++) if (app_is_available(i)) dot_n++;
+  int dot_x0 = ((int)screenWidth - dot_n * 14) / 2;
+  for (int i = 0, slot = 0; i < APPS_COUNT; i++) {
+    if (!app_is_available(i)) continue;
     lv_obj_t *dot = lv_label_create(apps_cont);
     lv_obj_set_style_text_font(dot, &dejavu_mono_14, 0);
     lv_label_set_text(dot, i==apps_idx ? "\xe2\x97\x8f" : "\xe2\x97\x8b");
     lv_obj_set_style_text_color(dot, i==apps_idx ? lv_color_white() : lv_color_make(80,80,100), 0);
-    lv_obj_set_pos(dot, 97 + i * 14, 156);
+    lv_obj_set_pos(dot, dot_x0 + slot * 14, 156);
+    slot++;
   }
 }
 
@@ -8292,6 +8574,9 @@ void setup()
   delay(500);  // give serial monitor time to connect
   Serial.println("\n\n========== BOOT ==========");
   Serial.printf("[BOOT] %s  fw %s\n", BOARD_NAME, FW_VERSION);
+  Serial.printf("[BOOT] PSRAM %s  internal FS %s\n",
+                psramFound() ? "yes" : "no",
+                BOARD_HAS_INTERNAL_FS ? "yes (FFat)" : "no");
   Serial.printf("[BOOT] Wake cause: %s\n",
     wakeup_cause == ESP_SLEEP_WAKEUP_TIMER     ? "TIMER — alarm auto-wake" :
     wakeup_cause == ESP_SLEEP_WAKEUP_UNDEFINED ? "cold boot / RESET button" : "other");
@@ -8362,11 +8647,12 @@ void setup()
   imuReady = false;
 #endif
 
-  // ── Step 5: SD card ───────────────────────────────────────────────────────
-  // SPI bus is already up (Step 2). We pass the same SPI instance and a safe
-  // 4 MHz clock. The display runs faster but SD is more sensitive to speed.
-  Serial.println("[5] Mounting SD card...");
-  Serial.printf("    CS=%d  SCK=%d  MISO=%d  MOSI=%d  speed=4MHz\n",
+  // ── Step 5: Storage ───────────────────────────────────────────────────────
+  // Precedence is SD first, internal flash second. A card always wins, so
+  // inserting one can never leave you silently reading a stale internal copy.
+  // Exactly one backend ends up live in STORAGE — never both.
+  Serial.println("[5] Mounting storage...");
+  Serial.printf("    SD: CS=%d  SCK=%d  MISO=%d  MOSI=%d  speed=4MHz\n",
                 SD_CS, SD_SCK, SD_MISO, SD_MOSI);
 
   bool mounted = SD.begin(SD_CS, SPI, 4000000);
@@ -8381,11 +8667,7 @@ void setup()
     Serial.printf("    Retry returned: %s\n", mounted ? "true" : "false");
   }
 
-  if (!mounted) {
-    Serial.println("    ERROR: SD card mount failed!");
-    Serial.println("    Check: card inserted? FAT32 formatted? wiring correct?");
-    sdCardAvailable = false;
-  } else {
+  if (mounted) {
     uint8_t  cardType = SD.cardType();
     uint64_t cardSize = SD.cardSize() / (1024 * 1024);
     Serial.printf("    SD mounted OK — type: %s  size: %llu MB\n",
@@ -8393,41 +8675,79 @@ void setup()
                   cardType == CARD_SD   ? "SD"   :
                   cardType == CARD_SDHC ? "SDHC" : "UNKNOWN",
                   cardSize);
-    sdCardAvailable = true;
+    sdCardAvailable   = true;
+    STORAGE           = &SD;
+    storageIsInternal = false;
+    storageAvailable  = true;
+  } else {
+    Serial.println("    No SD card (not inserted, unformatted, or wiring).");
+    sdCardAvailable = false;
+    SD.end();
 
+#if BOARD_HAS_INTERNAL_FS
+    // Fall back to the on-chip FAT partition. begin(true) formats it on first
+    // use, which costs a few seconds exactly once on a virgin board.
+    Serial.println("    Falling back to internal flash (FFat)...");
+    if (FFat.begin(true)) {
+      STORAGE           = &FFat;
+      storageIsInternal = true;
+      storageAvailable  = true;
+      Serial.printf("    FFat mounted OK — %u KB total, %u KB free\n",
+                    (unsigned)(FFat.totalBytes() / 1024),
+                    (unsigned)(FFat.freeBytes()  / 1024));
+    } else {
+      Serial.println("    ERROR: FFat mount/format failed.");
+    }
+#else
+    Serial.println("    This board has no internal FAT partition "
+                   "(BOARD_HAS_INTERNAL_FS=0) — an SD card is required.");
+#endif
+  }
+
+  Serial.printf("    Active storage: %s\n", storage_label());
+
+  if (storageAvailable) {
     // ── Load config.ini ──────────────────────────────────────────────────
+    // Create it first if the backend is empty, so load_config() always has a
+    // complete file and the web editor is never blank on a virgin device.
+    bootstrap_config();
     load_config();
-    seed_tennis_config();  // append [tennis] section if not yet present
+    seed_tennis_config();       // append [tennis] section if not yet present
     seed_letter_rain_config();  // append [letter_rain] section if not yet present
     seed_snake_config();        // append [snake] section if not yet present
 
-    // BUG FIX: Only restore time from log if NOT waking from a scheduled alarm
+    // RTC recovery reads /last_seen.txt, which is card-only — so this is a
+    // no-op when running from internal flash. Skip it on an alarm wake so a
+    // stale file cannot drag a freshly-synced RTC backwards.
     if (!boot_from_sleep) {
       restore_time_from_log();
     } else {
       Serial.println("    [TIME] Wakeup from alarm: skipping file restore to keep RTC sync.");
     }
 
-    // Verify GIF file exists
+    // Verify the emotion GIFs are actually present on whichever backend won
     Serial.printf("    Checking for GIF at: %s\n", "/cruzr_emotions/cruzr_smile.gif");
-    File chk = SD.open("/cruzr_emotions/cruzr_smile.gif", FILE_READ);
+    File chk = STORAGE->open("/cruzr_emotions/cruzr_smile.gif", FILE_READ);
     if (chk) {
       Serial.printf("    GIF found — %u bytes\n", (unsigned)chk.size());
       chk.close();
     } else {
-      Serial.println("    WARNING: GIF not found! Check path and filename exactly.");
-      // List root directory to help diagnose path issues
-      Serial.println("    SD root contents:");
-      File root = SD.open("/");
-      File entry = root.openNextFile();
-      while (entry) {
-        Serial.printf("      %s %s (%u bytes)\n",
-                      entry.isDirectory() ? "[DIR]" : "     ",
-                      entry.name(), (unsigned)entry.size());
-        entry = root.openNextFile();
+      Serial.printf("    WARNING: GIF not found on %s.\n", storage_label());
+      Serial.println("    Root contents:");
+      File root = STORAGE->open("/");
+      if (root) {
+        File entry = root.openNextFile();
+        while (entry) {
+          Serial.printf("      %s %s (%u bytes)\n",
+                        entry.isDirectory() ? "[DIR]" : "     ",
+                        entry.name(), (unsigned)entry.size());
+          entry = root.openNextFile();
+        }
+        root.close();
       }
-      root.close();
     }
+  } else {
+    Serial.println("    ERROR: no storage mounted — GIFs and config.ini unavailable.");
   }
 
   // ── Step 6: LVGL ──────────────────────────────────────────────────────────
@@ -8459,7 +8779,7 @@ void setup()
   lv_indev_set_read_cb(indev, touchpad_read_cb);
 
   // ── Step 7: Register SD → LVGL filesystem drive 'S' ──────────────────────
-  Serial.println("[7] Registering LVGL SD filesystem driver...");
+  Serial.println("[7] Registering LVGL storage filesystem driver...");
   lvgl_sd_fs_init();
   // ── Step 7b: WiFi + NTP ───────────────────────────────────────────────────
   // WiFi.begin() only queues the association; the result is picked up by

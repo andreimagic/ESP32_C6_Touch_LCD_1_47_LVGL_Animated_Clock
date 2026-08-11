@@ -964,14 +964,19 @@ the firmware.
 
 ### Option A — Flash a prebuilt release (no toolchain)
 
-Every release ships `firmware-<version>-full.bin`, a complete image containing
-the bootloader, partition table and application.
+Every release ships a complete image per board — bootloader, partition table and
+application in one file:
 
-> **Prebuilt releases are currently ESP32-C6 only.** The binary is chip-specific
-> and will not run on an S3. Until the release pipeline builds both targets, S3
-> owners should use [Option B](#option-b--build-from-source).
+| Board | Full image |
+|---|---|
+| ESP32-C6 Touch LCD 1.47 | `firmware-<version>-esp32c6-full.bin` |
+| ESP32-S3 Touch LCD 1.47 | `firmware-<version>-esp32s3-full.bin` |
 
-1. Download `firmware-<version>-full.bin` from
+> **The images are chip-specific and not interchangeable.** Flashing the C6 image
+> to an S3 (or the reverse) produces a board that does not boot. Check the `esp32c6`
+> / `esp32s3` in the filename before you flash.
+
+1. Download the `-full.bin` **for your board** from
    [Releases](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/releases).
 2. Open **[Espressif's ESP Launchpad](https://espressif.github.io/esp-launchpad/)**
    in **Chrome or Edge**. It flashes over WebSerial, which Firefox and Safari do
@@ -997,26 +1002,26 @@ outside flash entirely, and on the S3's internal FFat partition they sit at
 > Bootloader**. A `merge_bin` image must also avoid `--fill-flash-size`, which
 > pads the image across the whole chip.
 
-If you prefer a command line, the same image works with
-[esptool](https://github.com/espressif/esptool):
+If you prefer a command line, the same images work with
+[esptool](https://github.com/espressif/esptool). Only the `--chip` argument and
+the filename change; the address is `0x0` for both:
 
 ```bash
-esptool --chip esp32c6 write-flash 0x0 firmware-<version>-full.bin
+esptool --chip esp32c6 write-flash 0x0 firmware-<version>-esp32c6-full.bin
 ```
-
-For a self-built S3 image the chip argument changes, the address does not:
 
 ```bash
-esptool --chip esp32s3 write-flash 0x0 firmware-<version>-full.bin
+esptool --chip esp32s3 write-flash 0x0 firmware-<version>-esp32s3-full.bin
 ```
 
-> Releases also contain `firmware-<version>-app.bin`, the application partition
-> on its own, for reflashing over an existing install at `0x10000`. **Use esptool
-> for that one, not a browser flasher** — esptool writes exactly the offset given
-> and erases only the sectors it touches, whereas a browser tool makes it easy to
-> erase the chip or write to the wrong address, either of which removes the
-> bootloader and leaves the board unable to boot. Recover by flashing
-> `firmware-<version>-full.bin` at `0x0` again.
+> Releases also contain `firmware-<version>-<chip>-app.bin`, the application
+> partition on its own, for reflashing over an existing install at `0x10000`.
+> **Use esptool for that one, not a browser flasher** — esptool writes exactly the
+> offset given and erases only the sectors it touches, whereas a browser tool
+> makes it easy to erase the chip or write to the wrong address, either of which
+> removes the bootloader and leaves the board unable to boot. It is only valid on
+> a board already running that same partition scheme. Recover by flashing the
+> matching `-full.bin` at `0x0` again.
 
 ### Option B — Build from source
 
@@ -1080,6 +1085,28 @@ esptool --chip esp32s3 write-flash 0x0 firmware-<version>-full.bin
 9. Prepare the SD card as described in [SD Card Setup](#sd-card-setup)
 10. Open `ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock.ino`, click **Upload**
 11. Open Serial Monitor at **115200 baud** to watch the boot log
+
+### Continuous integration and releases
+
+Three workflows, all driven from one shared target list:
+
+| File | Trigger | Does |
+|---|---|---|
+| [`board-targets.json`](.github/board-targets.json) | — | **The single source of truth.** One object per board: FQBN, chip, and pinned library versions |
+| `build.yml` | PR / push to `development`, `main` | Compiles every target and reports flash + RAM usage per board |
+| `version-check.yml` | PR | Fails the PR unless `FW_VERSION` is bumped above the base branch |
+| `release.yml` | push to `main` | If `FW_VERSION` isn't tagged yet: builds every target, tags, and publishes one release carrying a binary set per board |
+
+Both `build.yml` and `release.yml` read their matrix from `board-targets.json`
+via `fromJSON`, so a board cannot be validated by CI with one set of settings and
+then released with another. **Adding a board is one JSON object** — no workflow
+edits, matching the one `#elif` block it takes in `board_config.h`.
+
+`release.yml` creates the tag only after *every* board has compiled
+(`fail-fast: true`, and the tag lives in a job that `needs` all of them), so a
+failure on one board can never leave a tag with no release attached. A final
+guard counts the collected `-full.bin` images against the number of entries in
+`board-targets.json` before publishing.
 
 ### Expected Boot Log
 
@@ -1258,10 +1285,8 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v2.6.1 | ✅ released | Bugfix: Clock editor touch zones re-derived from drawn geometry, fixing dead strips and drift between the HH/mm/date fields; Metronome BPM label right-aligned so digits grow without overlapping the "BPM" unit or the slider |
 | v2.7.0 | ✅ released | Bingo! — on-device 1–90 number caller (tap/tilt to draw, cycle-and-reveal animation, call-history popup); web-served printable UK/housie ticket sheets at `/bingo`, linked from the Web Configuration page; same generator mirrored on the docs site at `/bingo.html` |
 | v2.7.1 | ✅ released | WiFi configuration redesign — three-way `[wifi] mode = wifi\|ap\|off` (replaces the old on/off toggle) with a carousel sub-screen selector; non-blocking connect state machine with credential-rejection → automatic AP rescue and exponential backoff for unreachable networks (`WiFiMulti` removed); AP hotspot is now **open** and named `ESP32-Clock-XXXXXX` per device — the PIN authorises only the web UI's mutating actions; alarm always fires with a drift-warning overlay instead of the GIF when no time-sync source is available (AP/Off mode, or NTP timeout), and the 5-minute early-wake margin is skipped entirely outside WiFi mode |
-| v3.0.0 | 🚀 new | **ESP32-S3 support** — one sketch, two boards, all hardware differences in `board_config.h`; storage abstraction that falls back from SD card to the S3's internal FFat partition (with a generated default `config.ini` on a virgin device); tilt-only games and emotion cycling hidden at runtime where no IMU answers; **swipe left/right to adjust brightness** on every board; atomic config writes (temp file + rename); AP SSID MAC read from eFuse instead of the not-yet-created softAP netif; missing-GIF paths reported instead of rendering a blank screen |
+| v3.0.0 | 🚀 new | **ESP32-S3 support** — one sketch, two boards, all hardware differences in `board_config.h`; storage abstraction that falls back from SD card to the S3's internal FFat partition (with a generated default `config.ini` on a virgin device); tilt-only games and emotion cycling hidden at runtime where no IMU answers; **swipe left/right to adjust brightness** on every board; atomic config writes (temp file + rename); AP SSID MAC read from eFuse instead of the not-yet-created softAP netif; missing-GIF paths reported instead of rendering a blank screen; **dual-target CI and releases** — every release ships a binary set per board, built from one shared target definition |
 | — | 🔭 planned | **Internal-flash provisioning** — copy GIFs to FFat on first boot when a card is present, plus a web upload endpoint, so a cardless S3 is fully usable |
-| — | 🔭 planned | **Tap-to-cycle emotion GIFs** — restores all four emotions on boards with no IMU, using input both boards have |
-| — | 🔭 planned | **Dual-target releases** — prebuilt binaries for both boards (currently C6 only) |
 
 ## License
 

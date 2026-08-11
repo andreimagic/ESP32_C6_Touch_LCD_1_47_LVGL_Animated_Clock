@@ -357,9 +357,9 @@ duration = 10
             <p>Flashing a prebuilt release takes a couple of minutes and needs no toolchain. Building from source is only necessary if you want to change the firmware.</p>
 
             <h3>Option A — Flash a prebuilt release (no toolchain)</h3>
-            <p>Every release ships <code class="code-inline">firmware-&lt;version&gt;-full.bin</code>, a complete image containing the bootloader, partition table and application.</p>
+            <p>Every release ships <code class="code-inline">firmware-&lt;version&gt;-esp32c6-full.bin</code>, a complete image containing the bootloader, partition table and application.</p>
             <ol>
-                <li>Download <code class="code-inline">firmware-&lt;version&gt;-full.bin</code> from <a href="https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/releases" target="_blank">Releases</a>.</li>
+                <li>Download <code class="code-inline">firmware-&lt;version&gt;-esp32c6-full.bin</code> from <a href="https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/releases" target="_blank">Releases</a>.</li>
                 <li>Open <a href="https://espressif.github.io/esp-launchpad/" target="_blank">Espressif's ESP Launchpad</a> in <strong>Chrome or Edge</strong> — it flashes over WebSerial, which Firefox and Safari do not support.</li>
                 <li>Open the <strong>DIY</strong> tab, connect the board over USB, click <strong>Connect</strong> and pick its serial port.</li>
                 <li>Select the <code class="code-inline">.bin</code> file and set the flash address to <strong><code class="code-inline">0x0</code></strong>.</li>
@@ -368,8 +368,8 @@ duration = 10
             <p><strong>The address is <code class="code-inline">0x0</code>, not <code class="code-inline">0x1000</code>.</strong> The ESP32-C6 places its bootloader at zero; <code class="code-inline">0x1000</code> is the offset used by the older Xtensa parts, and using it produces an image that will not boot.</p>
             <p>You do not need to erase the flash first — the image already spans it. Your settings are safe either way: they live on the SD card in <code class="code-inline">/config.ini</code>, not in flash.</p>
             <p>If you prefer a command line, the same image works with <a href="https://github.com/espressif/esptool" target="_blank">esptool</a>:</p>
-            <pre><code>esptool --chip esp32c6 write-flash 0x0 firmware-&lt;version&gt;-full.bin</code></pre>
-            <p>Releases also contain <code class="code-inline">firmware-&lt;version&gt;-app.bin</code>, the application partition on its own, for reflashing over an existing install at <code class="code-inline">0x10000</code>. <strong>Use esptool for that one, not a browser flasher</strong> — esptool writes exactly the offset given and erases only the sectors it touches, whereas a browser tool makes it easy to erase the chip or write to the wrong address, either of which removes the bootloader and leaves the board unable to boot. Recover by flashing <code class="code-inline">firmware-&lt;version&gt;-full.bin</code> at <code class="code-inline">0x0</code> again.</p>
+            <pre><code>esptool --chip esp32c6 write-flash 0x0 firmware-&lt;version&gt;-esp32c6-full.bin</code></pre>
+            <p>Releases also contain <code class="code-inline">firmware-&lt;version&gt;-esp32c6-app.bin</code>, the application partition on its own, for reflashing over an existing install at <code class="code-inline">0x10000</code>. <strong>Use esptool for that one, not a browser flasher</strong> — esptool writes exactly the offset given and erases only the sectors it touches, whereas a browser tool makes it easy to erase the chip or write to the wrong address, either of which removes the bootloader and leaves the board unable to boot. Recover by flashing <code class="code-inline">firmware-&lt;version&gt;-esp32c6-full.bin</code> at <code class="code-inline">0x0</code> again.</p>
 
             <h3>Option B — Build from source</h3>
             <ol>

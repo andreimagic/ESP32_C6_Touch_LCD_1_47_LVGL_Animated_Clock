@@ -1,0 +1,22 @@
+[
+  {
+    "name": "ESP32-C6 Touch LCD 1.47",
+    "slug": "esp32c6-lcd147",
+    "chip": "esp32c6",
+    "fqbn": "esp32:esp32:esp32c6:JTAGAdapter=default,CDCOnBoot=cdc,PartitionScheme=default_8MB,CPUFreq=160,FlashMode=qio,FlashFreq=80,FlashSize=8M,ZigbeeMode=default,DebugLevel=none",
+    "core-version": "3.3.11",
+    "lvgl-version": "9.5.0",
+    "gfx-version": "1.6.7",
+    "fastimu-version": "1.3.0"
+  },
+  {
+    "name": "ESP32-S3 Touch LCD 1.47",
+    "slug": "esp32s3-lcd147",
+    "chip": "esp32s3",
+    "fqbn": "esp32:esp32:esp32s3:JTAGAdapter=default,PSRAM=opi,CDCOnBoot=cdc,USBMode=default,PartitionScheme=app3M_fat9M_16MB,CPUFreq=240,FlashMode=qio,FlashSize=16M,ZigbeeMode=default,DebugLevel=none",
+    "core-version": "3.3.11",
+    "lvgl-version": "9.5.0",
+    "gfx-version": "1.6.7",
+    "fastimu-version": "1.3.0"
+  }
+]

@@ -146,6 +146,10 @@ struct AppConfig {
 #define GIF_TIMER_PATH    "S:/cruzr_emotions/timer_animation.gif"
 #define GIF_BIRTHDAY_PATH "S:/cruzr_emotions/happybirthday.gif"
 
+// Same directory as the paths above, without the LVGL drive letter — filesystem
+// calls (SD./FFat./STORAGE->) never take one.
+#define GIF_DIR_FS        "/cruzr_emotions"
+
 // ─── Forward declarations ─────────────────────────────────────────────────────
 static void home_screen_init(void);
 static void clock_face_show(lv_timer_t *t);
@@ -271,6 +275,10 @@ bool sdCardAvailable  = false;   // literally: a card is mounted
 fs::FS *STORAGE           = nullptr;
 bool    storageAvailable  = false;   // some filesystem is mounted
 bool    storageIsInternal = false;   // true when that filesystem is FFat
+// FFat is mounted. Not the same as storageIsInternal: when a card wins, FFat is
+// still mounted alongside it so provision_internal_flash() can mirror the card
+// across, while STORAGE keeps pointing at the card.
+bool    ffatMounted       = false;
 
 static inline const char *storage_label()
 {
@@ -737,6 +745,206 @@ static bool bootstrap_config()
                 storage_label(), (unsigned)len);
   return true;
 }
+
+#if BOARD_HAS_INTERNAL_FS
+// ══════════════════════════════════════════════════════════════════════════════
+//  INTERNAL-FLASH PROVISIONING
+//  Mirrors the card's animations and config.ini onto the on-chip FAT partition,
+//  so the board keeps working once the card is removed: insert a card once, run
+//  cardless afterwards.
+//
+//  Runs with BOTH filesystems mounted — which is why the mount block begins FFat
+//  even when a card wins. STORAGE still points at the card throughout; every
+//  write here goes through FFat explicitly, never through STORAGE, so the copy
+//  direction can never be ambiguous.
+//
+//  While a card is inserted it is the master copy. A GIF is skipped when name and
+//  size already match, which makes this idempotent and near-free on every later
+//  boot, and re-copies only what actually changed. config.ini is always refreshed
+//  instead of size-compared: a text edit easily preserves the byte count.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// One file, copied in chunks through a temp name that is renamed into place only
+// after a complete write. A power cut mid-copy therefore leaves no truncated GIF
+// behind — which would otherwise render as exactly the blank screen the rest of
+// this firmware works to avoid.
+static bool provision_copy_file(const char *path, size_t *done, size_t total,
+                                lv_obj_t *pct_label)
+{
+  File src = SD.open(path, FILE_READ);
+  if (!src) { Serial.printf("[PROV] cannot read %s from card\n", path); return false; }
+
+  char tmp[80];
+  snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+  FFat.remove(tmp);                       // stale temp from an aborted run
+
+  File dst = FFat.open(tmp, FILE_WRITE);
+  if (!dst) {
+    Serial.printf("[PROV] cannot create %s on flash\n", tmp);
+    src.close();
+    return false;
+  }
+
+  // static, not stack: 4KB of stack here would be a real risk in setup().
+  static uint8_t buf[4096];
+  bool ok = true;
+  while (src.available()) {
+    size_t n = src.read(buf, sizeof(buf));
+    if (n == 0) break;
+    if (dst.write(buf, n) != n) { ok = false; break; }   // flash full
+    *done += n;
+    if (pct_label && total)
+      lv_label_set_text_fmt(pct_label, "%u%%", (unsigned)((*done * 100) / total));
+    lv_timer_handler();                   // keep the progress screen repainting
+  }
+  dst.close();
+  src.close();
+
+  if (!ok) {
+    Serial.printf("[PROV] write failed for %s — flash full?\n", path);
+    FFat.remove(tmp);
+    return false;
+  }
+  FFat.remove(path);                      // rename() will not overwrite
+  if (!FFat.rename(tmp, path)) {
+    Serial.printf("[PROV] rename failed for %s\n", path);
+    FFat.remove(tmp);
+    return false;
+  }
+  return true;
+}
+
+static void provision_internal_flash()
+{
+  if (!sdCardAvailable || !ffatMounted) return;
+
+  // ── Work out what needs copying before writing anything ───────────────────
+  struct { char name[48]; size_t size; } todo[16];
+  int    todo_n = 0;
+  size_t total  = 0;
+
+  File dir = SD.open(GIF_DIR_FS);
+  if (dir && dir.isDirectory()) {
+    File e = dir.openNextFile();
+    while (e && todo_n < (int)(sizeof(todo) / sizeof(todo[0]))) {
+      // name() is the basename on core 3.x; path() would carry the directory.
+      const char *bn  = e.name();
+      size_t      len = bn ? strlen(bn) : 0;
+      if (!e.isDirectory() && len > 4 && len < sizeof(todo[0].name) &&
+          strcasecmp(bn + len - 4, ".gif") == 0) {
+        char full[80];
+        snprintf(full, sizeof(full), "%s/%s", GIF_DIR_FS, bn);
+        File have = FFat.open(full, FILE_READ);
+        bool same = have && (size_t)have.size() == (size_t)e.size();
+        if (have) have.close();
+        if (!same) {
+          snprintf(todo[todo_n].name, sizeof(todo[todo_n].name), "%s", bn);
+          todo[todo_n].size = e.size();
+          total += e.size();
+          todo_n++;
+        }
+      }
+      e = dir.openNextFile();
+    }
+    dir.close();
+  } else {
+    Serial.printf("[PROV] no %s on card — nothing to mirror\n", GIF_DIR_FS);
+  }
+
+  // config.ini is always refreshed while a card is present (see header note).
+  File cfg_src = SD.open("/config.ini", FILE_READ);
+  size_t cfg_size = cfg_src ? cfg_src.size() : 0;
+  if (cfg_src) cfg_src.close();
+  total += cfg_size;
+
+  if (todo_n == 0 && cfg_size == 0) {
+    Serial.println("[PROV] internal flash already matches the card.");
+    return;
+  }
+
+  // ── Refuse rather than half-fill the partition ─────────────────────────────
+  size_t freeb = FFat.freeBytes();
+  if (total + 32768 > freeb) {          // 32KB margin for FAT metadata
+    Serial.printf("[PROV] need %u bytes, only %u free on flash — skipping.\n",
+                  (unsigned)total, (unsigned)freeb);
+    return;
+  }
+
+  if (!FFat.exists(GIF_DIR_FS) && !FFat.mkdir(GIF_DIR_FS)) {
+    Serial.printf("[PROV] cannot create %s on flash — skipping.\n", GIF_DIR_FS);
+    return;
+  }
+
+  Serial.printf("[PROV] mirroring %d GIF(s)%s to internal flash — %u KB\n",
+                todo_n, cfg_size ? " + config.ini" : "", (unsigned)(total / 1024));
+
+  // ── Progress screen ───────────────────────────────────────────────────────
+  // Built by hand rather than via make_overlay(): that attaches a tap-to-close
+  // handler and is meant for the interactive UI, which does not exist yet.
+  lv_obj_t *scr = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(scr, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_style_bg_color(scr, lv_color_make(10, 14, 26), 0);
+  lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(scr, 0, 0);
+  lv_obj_set_style_radius(scr, 0, 0);
+  lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *title = lv_label_create(scr);
+  lv_label_set_text(title, LV_SYMBOL_DOWNLOAD "  Copying to internal flash");
+  lv_obj_set_style_text_color(title, lv_color_white(), 0);
+  lv_obj_align(title, LV_ALIGN_CENTER, 0, -30);
+
+  lv_obj_t *what = lv_label_create(scr);
+  lv_label_set_text(what, "");
+  lv_obj_set_style_text_color(what, lv_color_make(150, 160, 200), 0);
+  lv_obj_set_width(what, screenWidth - 20);
+  lv_label_set_long_mode(what, LV_LABEL_LONG_DOT);
+  lv_obj_set_style_text_align(what, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(what, LV_ALIGN_CENTER, 0, 0);
+
+  lv_obj_t *pct = lv_label_create(scr);
+  lv_label_set_text(pct, "0%");
+  lv_obj_set_style_text_color(pct, lv_color_make(120, 220, 140), 0);
+  lv_obj_align(pct, LV_ALIGN_CENTER, 0, 28);
+
+  lv_obj_t *note = lv_label_create(scr);
+  lv_label_set_text(note, "one-off — do not power off");
+  lv_obj_set_style_text_color(note, lv_color_make(110, 110, 130), 0);
+  lv_obj_align(note, LV_ALIGN_BOTTOM_MID, 0, -8);
+  lv_timer_handler();
+
+  // ── Copy ──────────────────────────────────────────────────────────────────
+  size_t done = 0;
+  int    okn = 0, failn = 0;
+
+  for (int i = 0; i < todo_n; i++) {
+    char full[80];
+    snprintf(full, sizeof(full), "%s/%s", GIF_DIR_FS, todo[i].name);
+    lv_label_set_text(what, todo[i].name);
+    lv_timer_handler();
+    if (provision_copy_file(full, &done, total, pct)) {
+      okn++;
+      Serial.printf("[PROV]   %s (%u bytes)\n", todo[i].name, (unsigned)todo[i].size);
+    } else {
+      failn++;
+      done += todo[i].size;               // keep the percentage monotonic
+    }
+  }
+
+  if (cfg_size) {
+    lv_label_set_text(what, "config.ini");
+    lv_timer_handler();
+    if (provision_copy_file("/config.ini", &done, total, pct)) okn++;
+    else                                                       failn++;
+  }
+
+  lv_obj_del(scr);
+  lv_timer_handler();
+
+  Serial.printf("[PROV] done — %d copied, %d failed. Flash now %u KB free.\n",
+                okn, failn, (unsigned)(FFat.freeBytes() / 1024));
+}
+#endif  // BOARD_HAS_INTERNAL_FS
 
 static void load_config()
 {
@@ -8679,6 +8887,19 @@ void setup()
     STORAGE           = &SD;
     storageIsInternal = false;
     storageAvailable  = true;
+
+#if BOARD_HAS_INTERNAL_FS
+    // Mount the internal partition *alongside* the card rather than instead of
+    // it, so provision_internal_flash() can mirror one onto the other later in
+    // setup(). STORAGE deliberately stays on the card — a card always wins.
+    if (FFat.begin(true)) {
+      ffatMounted = true;
+      Serial.printf("    FFat also mounted for mirroring — %u KB free\n",
+                    (unsigned)(FFat.freeBytes() / 1024));
+    } else {
+      Serial.println("    FFat mount failed — cannot mirror to internal flash.");
+    }
+#endif
   } else {
     Serial.println("    No SD card (not inserted, unformatted, or wiring).");
     sdCardAvailable = false;
@@ -8692,6 +8913,7 @@ void setup()
       STORAGE           = &FFat;
       storageIsInternal = true;
       storageAvailable  = true;
+      ffatMounted       = true;
       Serial.printf("    FFat mounted OK — %u KB total, %u KB free\n",
                     (unsigned)(FFat.totalBytes() / 1024),
                     (unsigned)(FFat.freeBytes()  / 1024));
@@ -8781,6 +9003,18 @@ void setup()
   // ── Step 7: Register SD → LVGL filesystem drive 'S' ──────────────────────
   Serial.println("[7] Registering LVGL storage filesystem driver...");
   lvgl_sd_fs_init();
+
+#if BOARD_HAS_INTERNAL_FS
+  // ── Step 7a: Mirror the card onto internal flash ──────────────────────────
+  // Deliberately placed here: LVGL exists (so there is a progress screen) but
+  // the radio is still down, which keeps the most contiguous RAM free and stops
+  // a reconnect from competing for SPI. It also completes before the clock UI is
+  // built, so provisioning reads as a distinct one-off step rather than an
+  // interruption. No-ops in well under a millisecond once flash matches the card.
+  Serial.println("[7a] Checking internal flash against card...");
+  provision_internal_flash();
+#endif
+
   // ── Step 7b: WiFi + NTP ───────────────────────────────────────────────────
   // WiFi.begin() only queues the association; the result is picked up by
   // wifi_poll_cb() (an LVGL timer) so setup() is never blocked.

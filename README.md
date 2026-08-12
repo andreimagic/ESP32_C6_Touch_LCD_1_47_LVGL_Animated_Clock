@@ -598,7 +598,47 @@ The dark-themed page has several panels:
 | **Bingo Cards** | Opens `/bingo` in a new tab — a printable sheet of tickets for the on-device [Bingo!](#bingo) caller. No PIN needed (read-only, nothing is saved to SD). |
 | **Set date & time** | A `datetime-local` picker pre-filled with the current device time. Tap **Apply Time** to set the RTC immediately via `settimeofday()` — no reboot needed. |
 | **Reboot** | Reboots the device remotely after PIN confirmation. |
+| **Manage Files** | Opens `/files` — browse, download, delete and upload anything on the active storage. See [File manager](#file-manager). |
 | **Download Log** | Downloads `/last_seen.txt` — no PIN needed (read-only). |
+
+### File manager
+
+`/files` lists **everything on whichever backend mounted at boot**, so it manages
+an SD card and internal flash identically. The listing is flat and recursive —
+full paths rather than browsable folders, since the tree is only `config.ini`
+plus one GIF directory.
+
+| Element | Behaviour |
+|---|---|
+| Storage meter | Active backend, file count, used and free KB, plus a usage bar |
+| ⬇ per file | Downloads it. **PIN required** |
+| ✖ per file | Deletes it, after a browser confirm. **PIN required** |
+| Upload | Pick an existing folder and a file. Overwrites same-name files. **PIN required** |
+
+**Free space is guarded three times:** the browser refuses a file bigger than
+the reported free space; the server rejects the request up front if
+`Content-Length` exceeds free space minus a 16 KB margin; and a running check
+aborts mid-stream, closing and **deleting the partial file**. The third layer
+exists because `Content-Length` describes the whole multipart body, so it is an
+upper bound on the file rather than its size.
+
+Two deliberate restrictions:
+
+- **Folders are never created**, and directories cannot be deleted. Upload
+  targets are chosen from a dropdown of folders that already exist, because
+  FFat does not create parent directories on write.
+- **Deleting and uploading are refused while a screen is open on the device**
+  (HTTP 409). The GIF decoder may still hold that file open, and unlinking it
+  underneath FAT risks corrupting the filesystem. Tap back to the clock first.
+
+Nothing is protected by name — with the PIN you can delete `config.ini`. That is
+recoverable: `bootstrap_config()` writes a fresh default on the next boot, though
+on a cardless S3 you would have to re-enter WiFi credentials over the AP.
+
+> **Uploading to internal flash stalls the CPU.** Writing FFat means writing the
+> same SPI flash the firmware executes from, which briefly disables the
+> instruction cache. Expect the display to stutter during an S3 upload. Uploads
+> to an SD card are unaffected.
 
 ### Printable Bingo Tickets
 
@@ -615,9 +655,12 @@ The exact same generator (same ticket algorithm, ported to `docs/bingo.js`) is a
 
 - The AP hotspot is **deliberately open** (no WPA2 passphrase) — joining it is meant to be frictionless, since it exists purely to reach the web UI, not to protect a network
 - The PIN's job is narrower and different: it authorises the web UI's *mutating* actions only, not joining the hotspot
-- The PIN is never stored, never sent over the wire in cleartext, and never logged to serial
-- The WiFi password is never transmitted to the browser (masked on GET, re-injected server-side on POST if unchanged)
-- All mutating routes (`POST /config`, `POST /settime`, `POST /reboot`) return HTTP 403 if the PIN is wrong or absent
+- The PIN is not persisted — it is regenerated at every boot and never written to storage
+- **The PIN is not a secret in transit.** The web UI is plain HTTP, so it travels in cleartext; it is also printed to serial at boot (`[AP] PIN generated:`) and shown on the device's status screen by design. It gates casual tampering by someone within WiFi range, and nothing stronger
+- Downloads and uploads carry the PIN in the **query string**, so it also lands in browser history. This is forced rather than chosen: a download is a plain link, and for uploads the multipart body is not parsed into `arg()` until after the whole file has streamed — a form-field PIN could only be checked once the file was already written to flash
+- The WiFi password is never transmitted to the browser (masked on GET, re-injected server-side on POST if unchanged). **Downloading `config.ini` from the file manager bypasses that masking**, which is exactly why downloads require the PIN
+- All mutating routes (`POST /config`, `POST /settime`, `POST /reboot`, `POST /files/delete`, `POST /files/upload`) and `GET /files/get` return HTTP 403 if the PIN is wrong or absent
+- Every web-supplied path is validated before touching the filesystem — anything containing `..`, a backslash, `//`, a quote or a control character is rejected, and paths must be rooted at `/`. This is the file manager's only security boundary, so it deliberately errs strict
 - A fresh PIN on every boot means stealing a previous PIN is useless
 - Anyone on the open hotspot can still read the config page unauthenticated (as before, over the LAN, and only reachable by being physically close enough to see the AP), but cannot change anything without the PIN shown on the device screen
 
@@ -1286,7 +1329,7 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v2.7.0 | ✅ released | Bingo! — on-device 1–90 number caller (tap/tilt to draw, cycle-and-reveal animation, call-history popup); web-served printable UK/housie ticket sheets at `/bingo`, linked from the Web Configuration page; same generator mirrored on the docs site at `/bingo.html` |
 | v2.7.1 | ✅ released | WiFi configuration redesign — three-way `[wifi] mode = wifi\|ap\|off` (replaces the old on/off toggle) with a carousel sub-screen selector; non-blocking connect state machine with credential-rejection → automatic AP rescue and exponential backoff for unreachable networks (`WiFiMulti` removed); AP hotspot is now **open** and named `ESP32-Clock-XXXXXX` per device — the PIN authorises only the web UI's mutating actions; alarm always fires with a drift-warning overlay instead of the GIF when no time-sync source is available (AP/Off mode, or NTP timeout), and the 5-minute early-wake margin is skipped entirely outside WiFi mode |
 | v2.7.2 | ✅ released | Three-stage CI/CD pipeline — compile validation against a pinned toolchain, an `FW_VERSION` guard that fails any PR reusing a released version, and automatic tag-and-release on `main` — plus a weekly canary that rebuilds against the latest upstream core and libraries. One shared tune engine now backs the apps menu and every game, fixing two tune bugs |
-| v3.0.0 | 🚀 new | **ESP32-S3 support** — one sketch, two boards, all hardware differences in `board_config.h`; storage abstraction that falls back from SD card to the S3's internal FFat partition (with a generated default `config.ini` on a virgin device); tilt-only games and emotion cycling hidden at runtime where no IMU answers; **swipe left/right to adjust brightness** on every board; atomic config writes (temp file + rename); AP SSID MAC read from eFuse instead of the not-yet-created softAP netif; missing-GIF paths reported instead of rendering a blank screen; **dual-target CI and releases** — every release ships a binary set per board, built from one shared target definition |
+| v3.0.0 | 🚀 new | **ESP32-S3 support** — one sketch, two boards, all hardware differences in `board_config.h`; storage abstraction that falls back from SD card to the S3's internal FFat partition (with a generated default `config.ini` on a virgin device); tilt-only games and emotion cycling hidden at runtime where no IMU answers; **swipe left/right to adjust brightness** on every board; atomic config writes (temp file + rename); AP SSID MAC read from eFuse instead of the not-yet-created softAP netif; missing-GIF paths reported instead of rendering a blank screen; **web file manager** at `/files` — browse, download, delete and upload on either storage backend, with a three-layer free-space guard; **dual-target CI and releases** — every release ships a binary set per board, built from one shared target definition |
 | — | 🔭 planned | **Internal-flash provisioning** — copy GIFs to FFat on first boot when a card is present, plus a web upload endpoint, so a cardless S3 is fully usable |
 
 ## License

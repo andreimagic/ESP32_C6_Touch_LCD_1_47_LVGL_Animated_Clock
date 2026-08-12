@@ -286,6 +286,66 @@ static inline const char *storage_label()
        :  storageIsInternal ? "Internal flash (FFat)"
                             : "SD card";
 }
+
+// ── Storage capacity ─────────────────────────────────────────────────────────
+// freeBytes() exists only on FFat. SD has no equivalent, so it is derived from
+// totalBytes()/usedBytes(). Both are whole-filesystem figures, and neither is
+// reachable through the fs::FS base class that STORAGE points at — hence the
+// branch on storageIsInternal rather than a virtual call.
+//
+// uint64_t throughout because SD reports 64-bit sizes while FFat is size_t
+// (32-bit here); mixing them truncates silently on a large card.
+static uint64_t storage_total_bytes()
+{
+  if (!storageAvailable) return 0;
+  return storageIsInternal ? (uint64_t)FFat.totalBytes() : SD.totalBytes();
+}
+
+static uint64_t storage_free_bytes()
+{
+  if (!storageAvailable) return 0;
+  if (storageIsInternal) return (uint64_t)FFat.freeBytes();
+  uint64_t t = SD.totalBytes(), u = SD.usedBytes();
+  return t > u ? t - u : 0;
+}
+
+// ── Path validation — the file manager's only security boundary ──────────────
+// Every web-supplied path is checked here before it reaches the filesystem.
+// Rejecting ".." is what stops a crafted request reading or deleting outside
+// the tree; rejecting control characters and quotes keeps the same string safe
+// to interpolate into the Content-Disposition header and into HTML attributes.
+static bool path_is_safe(const String &p)
+{
+  if (p.length() < 2 || p.length() > 96) return false;
+  if (p[0] != '/')                       return false;
+  if (p.indexOf("..")  >= 0)             return false;
+  if (p.indexOf('\\')  >= 0)             return false;
+  if (p.indexOf("//")  >= 0)             return false;
+  if (p.indexOf('"')   >= 0)             return false;
+  for (unsigned i = 0; i < p.length(); i++) {
+    uint8_t c = (uint8_t)p[i];
+    if (c < 0x20 || c == 0x7f) return false;
+  }
+  return true;
+}
+
+// Escape for HTML text and single-quoted attributes. Filenames come off the
+// filesystem, not from path_is_safe(), so they are escaped rather than trusted.
+static String html_escape(const String &s)
+{
+  String o;
+  o.reserve(s.length() + 12);
+  for (unsigned i = 0; i < s.length(); i++) {
+    char c = s[i];
+    if      (c == '&')  o += F("&amp;");
+    else if (c == '<')  o += F("&lt;");
+    else if (c == '>')  o += F("&gt;");
+    else if (c == '"')  o += F("&quot;");
+    else if (c == '\'') o += F("&#39;");
+    else                o += c;
+  }
+  return o;
+}
 bool boot_from_sleep      = false;  // true when waking from deep sleep via BOOT btn
 uint32_t boot_millis       = 0;     // millis() captured at start of setup()
 bool     alarm_ntp_pending = false; // alarm held waiting for NTP sync after wake
@@ -1968,6 +2028,170 @@ function build(){
 build();
 </script></body></html>)HTML";
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  WEB FILE MANAGER
+//  Flat recursive listing with download / delete / upload, all on STORAGE, so
+//  it works the same on an SD card and on internal flash.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// One table row per file, plus a <option> per directory for the upload target.
+// File::name() is only the basename in core 3.x, so path() is what gets shown
+// and round-tripped back as ?path=. Depth is capped so a corrupt directory
+// chain cannot recurse forever.
+static void files_walk(const String &dir, int depth,
+                       String &rows, String &dirOpts,
+                       uint32_t &count, uint64_t &bytes)
+{
+  if (!STORAGE || depth > 4) return;
+
+  File d = STORAGE->open(dir.c_str());
+  if (!d) return;
+  if (!d.isDirectory()) { d.close(); return; }
+
+  File f = d.openNextFile();
+  while (f) {
+    String full = f.path() ? String(f.path()) : String();
+    bool   isdir = f.isDirectory();
+    uint32_t sz = isdir ? 0 : (uint32_t)f.size();
+    f.close();
+
+    if (full.length()) {
+      if (isdir) {
+        dirOpts += F("<option value='");
+        dirOpts += html_escape(full);
+        dirOpts += F("'>");
+        dirOpts += html_escape(full);
+        dirOpts += F("</option>");
+        files_walk(full, depth + 1, rows, dirOpts, count, bytes);
+      } else {
+        count++;
+        bytes += sz;
+        String esc = html_escape(full);
+        rows += F("<tr><td class='fn'>");
+        rows += esc;
+        rows += F("</td><td class='sz'>");
+        rows += String(sz);
+        rows += F("</td><td class='ac'>"
+                  "<button class='mini dl' data-p='");
+        rows += esc;
+        rows += F("'>&#x2B07;</button>"
+                  "<button class='mini rm' data-p='");
+        rows += esc;
+        rows += F("'>&#x2716;</button></td></tr>");
+      }
+    }
+    f = d.openNextFile();
+  }
+  d.close();
+}
+
+// ── Upload state ─────────────────────────────────────────────────────────────
+// The upload handler is called repeatedly as the body streams, so its progress
+// has to live outside the callback. Reset on every UPLOAD_FILE_START.
+static File     up_file;
+static String   up_path;
+static String   up_error;
+static bool     up_failed  = false;
+static int      up_code    = 400;
+static uint64_t up_written = 0;
+static uint64_t up_budget  = 0;
+
+static void files_upload_handler()
+{
+  HTTPUpload &u = web_server.upload();
+
+  if (u.status == UPLOAD_FILE_START) {
+    up_failed = false; up_error = ""; up_path = ""; up_written = 0; up_code = 400;
+
+    // The PIN is checked HERE, before a single byte is written, and it must
+    // arrive as a QUERY argument. Multipart form fields are not visible to
+    // arg() until the entire body has been parsed (WebServer Parsing.cpp
+    // rebuilds _currentArgs from _postArgs only at the end), which would mean
+    // writing the whole file to flash before discovering the PIN was wrong.
+    if (web_server.arg("pin") != String(ap_pin)) {
+      up_failed = true; up_code = 403; up_error = F("Wrong PIN."); return;
+    }
+    if (!storageAvailable) {
+      up_failed = true; up_error = F("No storage mounted."); return;
+    }
+    // Writing over a file the GIF decoder may still hold open risks corrupting
+    // the FAT. Cheap to avoid: refuse while any overlay is on screen.
+    if (overlay_cont) {
+      up_failed = true; up_error = F("Close the screen on the device first."); return;
+    }
+
+    String dir = web_server.hasArg("dir") ? web_server.arg("dir") : String("/");
+    if (dir.length() == 0) dir = "/";
+    if (dir.length() > 1 && dir.endsWith("/")) dir.remove(dir.length() - 1);
+
+    // Only the basename is honoured — some browsers send a full client path.
+    String base = u.filename;
+    int s1 = base.lastIndexOf('/'), s2 = base.lastIndexOf('\\');
+    int cut = s1 > s2 ? s1 : s2;
+    if (cut >= 0) base = base.substring(cut + 1);
+    if (base.length() == 0) {
+      up_failed = true; up_error = F("No filename."); return;
+    }
+
+    up_path = (dir == "/") ? ("/" + base) : (dir + "/" + base);
+    if (!path_is_safe(up_path)) {
+      up_failed = true; up_error = F("Unsafe path."); return;
+    }
+
+    // Content-Length covers the whole multipart body, so it is an upper bound
+    // on the file rather than its size — good enough to refuse an obviously
+    // oversized upload up front. The running check below is the real guard.
+    const uint64_t MARGIN = 16 * 1024;   // leave headroom for FAT metadata
+    uint64_t freeb = storage_free_bytes();
+    up_budget = freeb > MARGIN ? freeb - MARGIN : 0;
+
+    uint64_t clen = (uint64_t)web_server.header("Content-Length").toInt();
+    if (clen && clen > up_budget) {
+      up_failed = true;
+      up_error  = F("Not enough free space for that file.");
+      return;
+    }
+
+    // FFat does not create parent directories on write, so the folder must
+    // already exist. FILE_WRITE truncates, which is what an overwrite wants.
+    up_file = STORAGE->open(up_path.c_str(), FILE_WRITE);
+    if (!up_file) {
+      up_failed = true;
+      up_error  = F("Cannot create file — does that folder exist?");
+    }
+  }
+
+  else if (u.status == UPLOAD_FILE_WRITE) {
+    if (up_failed || !up_file) return;
+    if (up_written + u.currentSize > up_budget) {
+      up_file.close();
+      STORAGE->remove(up_path.c_str());
+      up_failed = true;
+      up_error  = F("Ran out of space — partial file removed.");
+      return;
+    }
+    if (up_file.write(u.buf, u.currentSize) != u.currentSize) {
+      up_file.close();
+      STORAGE->remove(up_path.c_str());
+      up_failed = true;
+      up_error  = F("Write failed — partial file removed.");
+      return;
+    }
+    up_written += u.currentSize;
+  }
+
+  else if (u.status == UPLOAD_FILE_END) {
+    if (up_file) up_file.close();
+  }
+
+  else if (u.status == UPLOAD_FILE_ABORTED) {
+    if (up_file) up_file.close();
+    if (!up_failed && up_path.length()) STORAGE->remove(up_path.c_str());
+    up_failed = true;
+    up_error  = F("Upload aborted.");
+  }
+}
+
 static void start_web_server()
 {
   if (webServerRunning) return;
@@ -2061,6 +2285,7 @@ static void start_web_server()
         ".log{background:#1f6feb;color:#fff}"
         ".time-btn{background:#6e40c9;color:#fff}"
         ".bingo{background:#1a7f64;color:#fff}"
+        ".files{background:#8957e5;color:#fff}"
         ".note{font-size:11px;color:#8b949e;margin-top:8px}"
         ".err{color:#f85149;font-size:12px;margin-top:6px;display:none}"
         "hr{border:none;border-top:1px solid #30363d;margin:10px 0}"
@@ -2114,6 +2339,16 @@ static void start_web_server()
         "<p class='note'>Opens a printable sheet of 3&times;9 tickets (1&ndash;90) to pair"
         " with the Bingo! app. Choose 4, 6 or 8 per page, then use your browser's"
         " Share &rarr; Print.</p>"
+        "</div>"
+
+        // ── File manager ──────────────────────────────────────────────────
+        "<div class='card'>"
+        "<label>&#x1F5C2; Files &mdash; view, download, delete and upload</label>"
+        "<div class='row'>"
+        "<a class='btn files' href='/files'>&#x1F4C1; Manage Files</a>"
+        "</div>"
+        "<p class='note'>Browse everything on the active storage. Uploads are"
+        " refused if the file will not fit.</p>"
         "</div>"
 
         // ── Date / time setter ────────────────────────────────────────────
@@ -2308,6 +2543,249 @@ static void start_web_server()
   web_server.on("/bingo", HTTP_GET, []() {
     web_server.send_P(200, "text/html", BINGO_PAGE);
   });
+
+  // ── GET /files — flat recursive listing + storage meter ──────────────────
+  // Unauthenticated, matching GET / : it reveals names and sizes only. Reading
+  // or changing anything below needs the PIN.
+  web_server.on("/files", HTTP_GET, []() {
+    String rows, dirOpts;
+    uint32_t count = 0;
+    uint64_t bytes = 0;
+    if (storageAvailable) files_walk("/", 0, rows, dirOpts, count, bytes);
+    if (rows.length() == 0)
+      rows = F("<tr><td colspan='3' class='empty'>No files.</td></tr>");
+
+    uint64_t freeb = storage_free_bytes();
+    uint64_t total = storage_total_bytes();
+
+    String html =
+      F("<!DOCTYPE html><html><head>"
+        "<meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>ESP32 Clock &mdash; Files</title>"
+        "<style>"
+        "*{box-sizing:border-box;margin:0;padding:0}"
+        "body{font:14px/1.5 sans-serif;background:#0d1117;color:#c9d1d9;"
+             "padding:16px;max-width:520px;margin:0 auto}"
+        "h2{color:#79c0ff;margin-bottom:10px;font-size:17px}"
+        ".info{background:#161b22;border:1px solid #30363d;border-radius:6px;"
+              "padding:8px 12px;margin-bottom:10px;font-size:12px;color:#8b949e}"
+        ".info b{color:#79c0ff}"
+        ".card{background:#161b22;border:1px solid #30363d;border-radius:8px;"
+              "padding:12px;margin-bottom:10px}"
+        "label{font-size:11px;color:#8b949e;display:block;margin-bottom:4px}"
+        "input[type=password],input[type=file],select{"
+          "width:100%;padding:8px 10px;background:#0d1117;color:#c9d1d9;"
+          "border:1px solid #30363d;border-radius:6px;font-size:13px;"
+          "margin-bottom:8px}"
+        "input[type=password]{letter-spacing:2px}"
+        "table{width:100%;border-collapse:collapse;font-size:12px}"
+        "th{text-align:left;color:#8b949e;font-weight:600;padding:4px 2px;"
+           "border-bottom:1px solid #30363d}"
+        "td{padding:4px 2px;border-bottom:1px solid #21262d;vertical-align:middle}"
+        ".fn{font-family:monospace;color:#7ee787;word-break:break-all}"
+        ".sz{text-align:right;color:#8b949e;white-space:nowrap}"
+        ".ac{text-align:right;white-space:nowrap}"
+        ".empty{color:#8b949e;text-align:center;padding:10px}"
+        ".mini{border:none;border-radius:5px;padding:4px 7px;margin-left:4px;"
+              "cursor:pointer;font-size:12px;color:#fff}"
+        ".dl{background:#1f6feb}.rm{background:#b62324}"
+        ".row{display:flex;gap:8px;margin-top:10px}"
+        ".btn{flex:1;padding:10px;border:none;border-radius:6px;font-size:14px;"
+             "cursor:pointer;font-weight:600;text-align:center;text-decoration:none;"
+             "display:flex;align-items:center;justify-content:center}"
+        ".up{background:#238636;color:#fff}"
+        ".back{background:#30363d;color:#c9d1d9}"
+        ".note{font-size:11px;color:#8b949e;margin-top:8px}"
+        ".msg{font-size:12px;margin-top:8px;min-height:16px}"
+        ".bar{height:6px;background:#0d1117;border:1px solid #30363d;"
+             "border-radius:4px;overflow:hidden;margin-top:6px}"
+        ".bar>i{display:block;height:100%;background:#1f6feb}"
+        "</style></head><body>"
+        "<h2>&#x1F5C2; Files</h2>"
+        "<div class='info'><b>Storage:</b> ");
+    html += storage_label();
+    html += F(" &nbsp; <b>Files:</b> ");
+    html += String(count);
+    html += F(" &nbsp; <b>Used:</b> ");
+    html += String((uint32_t)(bytes / 1024));
+    html += F(" KB &nbsp; <b>Free:</b> ");
+    html += String((uint32_t)(freeb / 1024));
+    html += F(" KB");
+    if (total) {
+      uint32_t pct = (uint32_t)(((total - freeb) * 100) / total);
+      html += F("<div class='bar'><i style='width:");
+      html += String(pct);
+      html += F("%'></i></div>");
+    }
+    html += F("</div>"
+
+        "<div class='card'>"
+        "<label>&#x1F511; Device PIN &mdash; needed to download, delete or upload</label>"
+        "<input type='password' id='pin' inputmode='numeric' maxlength='6'"
+               " placeholder='6-digit PIN' autocomplete='off'>"
+        "</div>"
+
+        "<div class='card'>"
+        "<label>Stored files &mdash; &#x2B07; download, &#x2716; delete</label>"
+        "<table><tr><th>Path</th><th class='sz'>Bytes</th><th></th></tr>");
+    html += rows;
+    html += F("</table>"
+        "<p class='note'>Deleting a GIF the clock is scheduled to play leaves a"
+        " &quot;GIF not found&quot; message until you upload a replacement.</p>"
+        "</div>"
+
+        "<div class='card'>"
+        "<label>&#x2B06; Upload &mdash; overwrites a file of the same name</label>"
+        "<select id='dir'><option value='/'>/</option>");
+    html += dirOpts;
+    html += F("</select>"
+        "<input type='file' id='f'>"
+        "<div class='row'>"
+        "<button class='btn up' onclick='doUp()'>&#x2B06; Upload</button>"
+        "<a class='btn back' href='/'>&#x2190; Back</a>"
+        "</div>"
+        "<p class='note'>Folders are not created automatically &mdash; pick an"
+        " existing one. GIFs must already be 160&times;86 px.</p>"
+        "</div>"
+        "<p class='msg' id='msg'></p>"
+
+        "<script>"
+        "var FREE=");
+    html += String((uint32_t)freeb);
+    html += F(";"
+        "function pin(){return document.getElementById('pin').value.trim();}"
+        "function msg(t,ok){var e=document.getElementById('msg');"
+        "  e.textContent=t;e.style.color=ok?'#7ee787':'#f85149';}"
+        "function needPin(){var p=pin();"
+        "  if(p.length!==6){msg('Enter the 6-digit PIN first.');return '';}return p;}"
+
+        // Download and delete are wired by delegation so the path can live in a
+        // data attribute — safer than interpolating it into an onclick string.
+        "document.addEventListener('click',function(e){"
+        "  var b=e.target.closest?e.target.closest('button[data-p]'):null;"
+        "  if(!b)return;"
+        "  var p=b.getAttribute('data-p');"
+        "  if(b.classList.contains('dl'))dl(p);else rm(p);});"
+
+        "function dl(p){var q=needPin();if(!q)return;"
+        "  window.location='/files/get?pin='+encodeURIComponent(q)"
+        "    +'&path='+encodeURIComponent(p);}"
+
+        "function rm(p){var q=needPin();if(!q)return;"
+        "  if(!confirm('Delete '+p+' ?'))return;"
+        "  var fd=new FormData();fd.append('pin',q);fd.append('path',p);"
+        "  fetch('/files/delete',{method:'POST',body:fd})"
+        "  .then(function(r){return r.text().then(function(t){"
+        "    if(r.ok){location.reload();}else{msg(t);}});})"
+        "  .catch(function(){msg('Network error.');});}"
+
+        "function doUp(){var q=needPin();if(!q)return;"
+        "  var i=document.getElementById('f');"
+        "  if(!i.files.length){msg('Choose a file first.');return;}"
+        "  var f=i.files[0];"
+        "  if(f.size>FREE){msg('That file is larger than the free space.');return;}"
+        "  var d=document.getElementById('dir').value;"
+        "  var fd=new FormData();fd.append('file',f,f.name);"
+        "  msg('Uploading '+f.name+'\\u2026',true);"
+        "  fetch('/files/upload?pin='+encodeURIComponent(q)"
+        "        +'&dir='+encodeURIComponent(d),{method:'POST',body:fd})"
+        "  .then(function(r){return r.text().then(function(t){"
+        "    if(r.ok){location.reload();}else{msg(t);}});})"
+        "  .catch(function(){msg('Network error.');});}"
+        "</script>"
+        "</body></html>");
+
+    web_server.send(200, "text/html", html);
+  });
+
+  // ── GET /files/get — download one file ───────────────────────────────────
+  // PIN rides in the query string because this is a plain link. Note that puts
+  // it in browser history; on an open AP where form posts are already cleartext
+  // that changes little, but it is a real difference.
+  web_server.on("/files/get", HTTP_GET, []() {
+    if (!web_server.hasArg("pin") || web_server.arg("pin") != String(ap_pin)) {
+      web_server.send(403, "text/plain", "Wrong PIN."); return;
+    }
+    if (!storageAvailable) {
+      web_server.send(404, "text/plain", "No storage mounted."); return;
+    }
+    String path = web_server.arg("path");
+    if (!path_is_safe(path)) {
+      web_server.send(400, "text/plain", "Unsafe path."); return;
+    }
+    File f = STORAGE->open(path.c_str(), FILE_READ);
+    if (!f) { web_server.send(404, "text/plain", "Not found."); return; }
+    if (f.isDirectory()) {
+      f.close();
+      web_server.send(400, "text/plain", "That is a directory."); return;
+    }
+    String base = path.substring(path.lastIndexOf('/') + 1);
+    web_server.sendHeader("Content-Disposition",
+                          "attachment; filename=\"" + base + "\"");
+    web_server.streamFile(f, "application/octet-stream");
+    f.close();
+  });
+
+  // ── POST /files/delete ───────────────────────────────────────────────────
+  web_server.on("/files/delete", HTTP_POST, []() {
+    if (!web_server.hasArg("pin") || web_server.arg("pin") != String(ap_pin)) {
+      web_server.send(403, "text/plain", "Wrong PIN."); return;
+    }
+    if (!storageAvailable) {
+      web_server.send(404, "text/plain", "No storage mounted."); return;
+    }
+    // Same reasoning as the upload guard: the GIF decoder may hold this file
+    // open, and unlinking it underneath FAT is not worth the risk.
+    if (overlay_cont) {
+      web_server.send(409, "text/plain",
+                      "Close the screen on the device first."); return;
+    }
+    String path = web_server.arg("path");
+    if (!path_is_safe(path)) {
+      web_server.send(400, "text/plain", "Unsafe path."); return;
+    }
+    File f = STORAGE->open(path.c_str(), FILE_READ);
+    if (!f) { web_server.send(404, "text/plain", "Not found."); return; }
+    bool isdir = f.isDirectory();
+    f.close();
+    if (isdir) {
+      web_server.send(400, "text/plain",
+                      "Refusing to delete a folder."); return;
+    }
+    if (!STORAGE->remove(path.c_str())) {
+      web_server.send(500, "text/plain", "Delete failed."); return;
+    }
+    Serial.printf("[WEB] deleted %s from %s\n", path.c_str(), storage_label());
+    web_server.send(200, "text/plain", "Deleted.");
+  });
+
+  // ── POST /files/upload ───────────────────────────────────────────────────
+  // Two handlers: the second streams the body (and does the PIN check before
+  // writing anything), the first runs once it has finished and reports.
+  web_server.on("/files/upload", HTTP_POST,
+    []() {
+      if (up_failed) {
+        web_server.send(up_code, "text/plain", up_error);
+        return;
+      }
+      Serial.printf("[WEB] uploaded %s (%u bytes) to %s\n",
+                    up_path.c_str(), (unsigned)up_written, storage_label());
+      String m = F("Uploaded ");
+      m += up_path;
+      m += F(" (");
+      m += String((uint32_t)up_written);
+      m += F(" bytes).");
+      web_server.send(200, "text/plain", m);
+    },
+    files_upload_handler);
+
+  // Content-Length is needed by the upload guard, and WebServer only keeps
+  // headers it was explicitly told to collect.
+  {
+    static const char *kHeaders[] = { "Content-Length" };
+    web_server.collectHeaders(kHeaders, 1);
+  }
 
   webRoutesRegistered = true;
   web_server.begin();

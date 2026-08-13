@@ -142,14 +142,40 @@ jobs:
           mkdir -p dist
 
           MERGED="build-out/${SKETCH}.merged.bin"
-          if [ ! -f "$MERGED" ]; then
-            echo "::error::Expected merged image '$MERGED' was not produced. Files in build-out:"
+          APP="build-out/${SKETCH}.bin"
+          if [ ! -f "$MERGED" ] || [ ! -f "$APP" ]; then
+            echo "::error::Expected build output missing. Files in build-out:"
             ls -la build-out >&2
             exit 1
           fi
 
-          cp "$MERGED"                 "dist/firmware-${VERSION}-${CHIP}-full.bin"
-          cp "build-out/${SKETCH}.bin" "dist/firmware-${VERSION}-${CHIP}-app.bin"
+          # ── Trim the whole-chip padding ────────────────────────────────────
+          # The core builds merged.bin with `--pad-to-size {build.flash_size}`
+          # (platform.txt), so the file spans the ENTIRE flash and everything
+          # above the app is 0xFF. Published as-is, flashing it at 0x0 blanks
+          # every partition above the app — including the S3's 9.9MB ffat at
+          # 0x610000, which on a cardless board holds config.ini and all the
+          # GIFs. A firmware update would silently wipe them.
+          #
+          # Cutting at the end of the app leaves an image that writes only the
+          # bootloader, partition table and app, and is ~10x smaller.
+          APP_END=$(( 0x10000 + $(stat -c%s "$APP") ))
+          CUT=$(( (APP_END + 4095) / 4096 * 4096 ))      # round to a 4KB sector
+
+          # Only safe while the tail really is erase-value padding. If a future
+          # core version starts placing real data up there, fail loudly rather
+          # than ship a truncated image.
+          STRAY=$(tail -c "+$(( CUT + 1 ))" "$MERGED" | tr -d '\377' | wc -c)
+          if [ "$STRAY" -ne 0 ]; then
+            echo "::error::$STRAY non-0xFF bytes above offset $CUT in $MERGED — refusing to truncate."
+            exit 1
+          fi
+
+          head -c "$CUT" "$MERGED" > "dist/firmware-${VERSION}-${CHIP}-full.bin"
+          echo "full image: $(stat -c%s "dist/firmware-${VERSION}-${CHIP}-full.bin") bytes" \
+               "(trimmed from $(stat -c%s "$MERGED"))"
+
+          cp "$APP"                    "dist/firmware-${VERSION}-${CHIP}-app.bin"
           cp "build-out/${SKETCH}.elf" "dist/firmware-${VERSION}-${CHIP}.elf"
 
           # Not a release asset — collected by `publish` for the notes. The
@@ -255,13 +281,16 @@ jobs:
             echo "4. Select your board's \`-full.bin\` and set the flash address to \`0x0\`."
             echo "5. Click **Program**. The board reboots into the new firmware when it finishes."
             echo ""
-            echo "Erasing the whole flash first is unnecessary — this image already replaces"
-            echo "the bootloader, partition table and app."
+            echo "Erasing the whole flash first is unnecessary — this image replaces the"
+            echo "bootloader, partition table and app in one write, and deliberately ends"
+            echo "there instead of spanning the whole chip."
             echo ""
             echo "> **ESP32-S3 owners:** if you run without an SD card, your \`config.ini\` and"
-            echo "> GIFs live on the internal FFat partition at \`0x610000\`. A normal flash of"
-            echo "> the image above stops well short of it, but an explicit *erase all flash*"
-            echo "> wipes it. On the C6, settings are on the SD card and are never at risk."
+            echo "> GIFs live on the internal FFat partition at \`0x610000\` — above everything"
+            echo "> this image writes, so an update keeps them. An explicit *erase all flash*"
+            echo "> still wipes them, as does flashing a raw \`merged.bin\` from a local build,"
+            echo "> which the ESP32 core pads out across the entire flash. On the C6, settings"
+            echo "> live on the SD card and are never at risk."
             echo ""
             echo "### esptool"
             echo ""

@@ -622,8 +622,16 @@ aborts mid-stream, closing and **deleting the partial file**. The third layer
 exists because `Content-Length` describes the whole multipart body, so it is an
 upper bound on the file rather than its size.
 
-Two deliberate restrictions:
+Three deliberate restrictions:
 
+- **The listing reaches the root plus two folder levels.** That covers
+  `/config.ini` and `/cruzr_emotions/*.gif` with a level to spare. The limit is a
+  file-handle budget, not an arbitrary number: the walk holds one directory
+  handle open per level, plus one for the file being read and one more if a GIF
+  is playing on the device, against the SD library's five. Raising that limit
+  would cost about 4 KB of heap per extra slot — each carries its own sector
+  cache — which the C6 cannot spare. Anything nested deeper is reported in the
+  page rather than silently omitted.
 - **Folders are never created**, and directories cannot be deleted. Upload
   targets are chosen from a dropdown of folders that already exist, because
   FFat does not create parent directories on write.
@@ -1035,15 +1043,24 @@ application in one file:
 > **not** an Xtensa-versus-RISC-V distinction, as the S3 is Xtensa and still uses
 > `0x0`.
 
-You do not need to erase the flash first — the image already spans it. Your
-settings survive a normal upload either way: on a card they live in `/config.ini`
-outside flash entirely, and on the S3's internal FFat partition they sit at
-`0x610000`, well past the ~`0x1a8fff` an upload reaches.
+You do not need to erase the flash first — the image replaces the bootloader,
+partition table and app in a single write.
 
-> **Two things do erase FFat**, taking a cardless S3's config and GIFs with them:
-> **Erase All Flash Before Sketch Upload** (keep it *Disabled*) and **Burn
-> Bootloader**. A `merge_bin` image must also avoid `--fill-flash-size`, which
-> pads the image across the whole chip.
+Your settings survive it. On a card they live in `/config.ini`, outside flash
+entirely. On a cardless S3 they sit on the internal FFat partition at
+`0x610000`, and the release image deliberately **ends just after the app**
+(around `0x1ba000`), so nothing above that offset is touched.
+
+> **What does still erase FFat**, taking a cardless S3's config and GIFs with it:
+> **Erase All Flash Before Sketch Upload** (keep it *Disabled*), **Burn
+> Bootloader**, and any image that spans the whole chip.
+>
+> That last one is a live trap for anyone building locally: the ESP32 core pads
+> its own `merged.bin` out to the full flash size with `--pad-to-size`, filling
+> everything above the app with `0xFF`. Flashing that file at `0x0` blanks the
+> FFat partition. The release pipeline trims it at the end of the app before
+> publishing, which is why the published `-full.bin` is safe and a raw local
+> `merged.bin` is not.
 
 If you prefer a command line, the same images work with
 [esptool](https://github.com/espressif/esptool). Only the `--chip` argument and

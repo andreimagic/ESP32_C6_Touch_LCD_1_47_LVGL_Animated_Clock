@@ -781,6 +781,32 @@ next_level_score = 10
 // the full template up front instead, before load_config() reads it.
 //
 // Returns true only when a file was actually created.
+// FAT cannot atomically replace an existing file, so save_config() and the web
+// editor both remove config.ini and then rename config.tmp over it. Lose power
+// between those two calls and the device comes up with no config.ini at all and
+// an orphan config.tmp holding the real settings — which bootstrap_config()
+// would then paper over with defaults, silently discarding WiFi credentials.
+// On internal flash there is no card to restore from, so recover it here.
+//
+// Must run BEFORE bootstrap_config(). If both files exist the swap completed
+// and the temp is simply stale, so it is cleaned up rather than promoted.
+static void recover_interrupted_config()
+{
+  if (!storageAvailable || !STORAGE)    return;
+  if (!STORAGE->exists("/config.tmp"))  return;
+
+  if (STORAGE->exists("/config.ini")) {
+    STORAGE->remove("/config.tmp");
+    Serial.println("[CFG] removed a stale config.tmp left by an earlier save");
+    return;
+  }
+
+  if (STORAGE->rename("/config.tmp", "/config.ini"))
+    Serial.println("[CFG] recovered config.ini from an interrupted save");
+  else
+    Serial.println("[CFG] found config.tmp but could not rename it into place");
+}
+
 static bool bootstrap_config()
 {
   if (!storageAvailable || !STORAGE)      return false;
@@ -1535,9 +1561,39 @@ static void save_config()
   fw.printf("vertical_walls = %s\n",       cfg.sn_vertical_walls   ? "true" : "false");
   fw.printf("horizontal_walls = %s\n",     cfg.sn_horizontal_walls ? "true" : "false");
   fw.printf("distractions = %d\n",         cfg.sn_distractions);
-  fw.printf("next_level_score = %d\n",     cfg.sn_next_level_score);
-
+  // ── Verify before swapping ────────────────────────────────────────────────
+  // The print()/printf() calls above are unchecked individually — there are
+  // around fifty and testing each would drown the function. Instead the final
+  // line is written explicitly and verified: a filesystem that filled at any
+  // point stays full for the rest of this function, so if anything was lost
+  // this last write fails too. File::write() does not set Print's write-error
+  // flag, so getWriteError() cannot be used for this.
+  //
+  // Without the check the swap below happily promotes a truncated temp file
+  // over a good config.ini — precisely the failure temp-then-swap exists to
+  // prevent, and unrecoverable on a board running from internal flash.
+  char tail[48];
+  const int  tail_len = snprintf(tail, sizeof(tail), "next_level_score = %d\n",
+                                 cfg.sn_next_level_score);
+  const bool tail_ok  = tail_len > 0 &&
+                        fw.write((const uint8_t *)tail, (size_t)tail_len) == (size_t)tail_len;
+  const size_t claimed = fw.position();
   fw.close();
+
+  // Re-stat rather than trust the handle: this is the size that survived.
+  File chk = STORAGE->open(tmp, FILE_READ);
+  const size_t actual = chk ? (size_t)chk.size() : 0;
+  if (chk) chk.close();
+
+  // The managed sections alone run to several hundred bytes, so anything this
+  // small is a fragment rather than a legitimately terse config.
+  if (!tail_ok || actual != claimed || actual < 256) {
+    Serial.printf("[CFG] save_config: temp file incomplete (%u on disk, %u written)"
+                  " — keeping the existing config.ini\n",
+                  (unsigned)actual, (unsigned)claimed);
+    STORAGE->remove(tmp);
+    return;
+  }
 
   STORAGE->remove(path);
   if (!STORAGE->rename(tmp, path)) {
@@ -2038,11 +2094,28 @@ build();
 // File::name() is only the basename in core 3.x, so path() is what gets shown
 // and round-tripped back as ?path=. Depth is capped so a corrupt directory
 // chain cannot recurse forever.
+//
+// Handle budget — this is what sets FILES_MAX_DEPTH. One directory handle stays
+// open per level on the stack, plus a transient file handle while iterating, and
+// the LVGL GIF decoder holds another for as long as an animation is playing. SD
+// is mounted with the library default of 5 slots, so the worst case must fit:
+//
+//     (depth + 1) dir handles  +  1 file  +  1 GIF  <=  5   ->  depth <= 2
+//
+// Raising max_files instead would cost ~4KB of heap per slot (each carries an
+// FF_MAX_SS sector cache), which the C6 cannot spare. Exceeding the budget is
+// not a clean failure: openNextFile() simply returns an invalid File, which is
+// indistinguishable from the end of a directory, so the listing would quietly
+// lose files. `deeper` is set when the cap stops a descent, so the page can say
+// so out loud instead.
+#define FILES_MAX_DEPTH 2
+
 static void files_walk(const String &dir, int depth,
                        String &rows, String &dirOpts,
-                       uint32_t &count, uint64_t &bytes)
+                       uint32_t &count, uint64_t &bytes, bool &deeper)
 {
-  if (!STORAGE || depth > 4) return;
+  if (!STORAGE) return;
+  if (depth > FILES_MAX_DEPTH) { deeper = true; return; }
 
   File d = STORAGE->open(dir.c_str());
   if (!d) return;
@@ -2062,7 +2135,7 @@ static void files_walk(const String &dir, int depth,
         dirOpts += F("'>");
         dirOpts += html_escape(full);
         dirOpts += F("</option>");
-        files_walk(full, depth + 1, rows, dirOpts, count, bytes);
+        files_walk(full, depth + 1, rows, dirOpts, count, bytes, deeper);
       } else {
         count++;
         bytes += sz;
@@ -2458,8 +2531,20 @@ static void start_web_server()
     // config half-written, because on internal flash that is unrecoverable.
     File fw = STORAGE->open("/config.tmp", FILE_WRITE);
     if (!fw) { web_server.send(500, "text/plain", "Storage write failed."); return; }
-    fw.print(body);
+    // A single write, so the byte count is an exact check: a full filesystem
+    // returns short here, and promoting that truncated temp over config.ini
+    // would defeat the whole point of writing to a temp file first.
+    const size_t want = body.length();
+    const size_t got  = fw.print(body);
     fw.close();
+    if (got != want) {
+      STORAGE->remove("/config.tmp");
+      Serial.printf("[WEB] config save: short write (%u/%u bytes) — kept existing config\n",
+                    (unsigned)got, (unsigned)want);
+      web_server.send(507, "text/plain",
+                      "Not enough space to save — existing config kept.");
+      return;
+    }
     STORAGE->remove("/config.ini");
     if (!STORAGE->rename("/config.tmp", "/config.ini")) {
       web_server.send(500, "text/plain", "Storage rename failed."); return;
@@ -2549,9 +2634,10 @@ static void start_web_server()
   // or changing anything below needs the PIN.
   web_server.on("/files", HTTP_GET, []() {
     String rows, dirOpts;
-    uint32_t count = 0;
-    uint64_t bytes = 0;
-    if (storageAvailable) files_walk("/", 0, rows, dirOpts, count, bytes);
+    uint32_t count  = 0;
+    uint64_t bytes  = 0;
+    bool     deeper = false;
+    if (storageAvailable) files_walk("/", 0, rows, dirOpts, count, bytes, deeper);
     if (rows.length() == 0)
       rows = F("<tr><td colspan='3' class='empty'>No files.</td></tr>");
 
@@ -2630,7 +2716,13 @@ static void start_web_server()
         "<label>Stored files &mdash; &#x2B07; download, &#x2716; delete</label>"
         "<table><tr><th>Path</th><th class='sz'>Bytes</th><th></th></tr>");
     html += rows;
-    html += F("</table>"
+    html += F("</table>");
+    // Say so rather than quietly returning a partial listing.
+    if (deeper)
+      html += F("<p class='note' style='color:#d29922'>&#9888; Some folders are"
+                " nested deeper than this list scans, and their contents are not"
+                " shown. Keep files within two folders of the root.</p>");
+    html += F(
         "<p class='note'>Deleting a GIF the clock is scheduled to play leaves a"
         " &quot;GIF not found&quot; message until you upload a replacement.</p>"
         "</div>"
@@ -9341,6 +9433,12 @@ void setup()
   Serial.printf("    SD: CS=%d  SCK=%d  MISO=%d  MOSI=%d  speed=4MHz\n",
                 SD_CS, SD_SCK, SD_MISO, SD_MOSI);
 
+  // max_files deliberately left at the library default of 5. Raising it is
+  // tempting for the file manager's recursive walk, but each slot carries its
+  // own FF_MAX_SS (4096-byte) sector cache because CONFIG_FATFS_PER_FILE_CACHE
+  // is on, and the C6 has no PSRAM to put them in — 5 extra slots would cost
+  // ~20KB of the internal heap the GIF decoder needs. FILES_MAX_DEPTH is capped
+  // to fit inside this budget instead.
   bool mounted = SD.begin(SD_CS, SPI, 4000000);
   Serial.printf("    SD.begin() returned: %s\n", mounted ? "true" : "false");
 
@@ -9408,6 +9506,9 @@ void setup()
 
   if (storageAvailable) {
     // ── Load config.ini ──────────────────────────────────────────────────
+    // Salvage an interrupted save first — otherwise bootstrap_config() sees no
+    // config.ini and overwrites the user's settings with defaults.
+    recover_interrupted_config();
     // Create it first if the backend is empty, so load_config() always has a
     // complete file and the web editor is never blank on a virgin device.
     bootstrap_config();

@@ -163,7 +163,18 @@
                 <li><strong>Config Editor:</strong> Edit <code style="background-color: var(--code-bg); color: var(--code-text); padding: 0.2rem 0.4rem; border-radius: 4px;">config.ini</code> directly (WiFi, Timezone, Alarm settings).</li>
                 <li><strong>Quick Time Set:</strong> Use the date/time picker to set the clock instantly.</li>
                 <li><strong>Remote Reboot:</strong> Restart the device from your browser.</li>
+                <li><strong>Manage Files:</strong> Browse everything on the SD card, download it, delete it, or upload new files — see below.</li>
             </ul>
+
+            <h3>Managing Files:</h3>
+            <p>The <strong>&#x1F4C1; Manage Files</strong> button opens a page listing every file on the card with its size, plus a meter showing how much space is used and free. This is the easiest way to swap animations: upload a new GIF and it appears on the clock without ever removing the card.</p>
+            <ul>
+                <li><strong>&#x2B07; Download</strong> saves a file to your phone or computer.</li>
+                <li><strong>&#x2716; Delete</strong> removes it, after a confirmation prompt.</li>
+                <li><strong>&#x2B06; Upload</strong> sends a new file. Choose the destination folder from the dropdown — for animations that is <code style="background-color: var(--code-bg); color: var(--code-text); padding: 0.2rem 0.4rem; border-radius: 4px;">/cruzr_emotions</code>. Uploading a file whose name already exists replaces it.</li>
+            </ul>
+            <p>All three need the PIN. If a file is too big for the space left, the upload is refused before anything is written, so a full card can never end up with a half-copied GIF on it. Remember that <strong>GIFs must be 160&times;86 pixels</strong> — see the resizing note in the SD card setup.</p>
+            <p><strong>One catch:</strong> deleting or uploading is refused while an animation or sub-screen is open on the clock itself, because the device may still be reading that file. Tap back to the clock face first, then retry.</p>
             <p><strong>No PIN needed:</strong> the <strong>&#x1F3AB; Bingo Cards</strong> button opens <code style="background-color: var(--code-bg); color: var(--code-text); padding: 0.2rem 0.4rem; border-radius: 4px;">/bingo</code> in a new tab — a printable sheet of UK/housie-style tickets (3&times;9, 1&ndash;90) generated fresh in your browser to pair with the on-device Bingo! caller. Choose 4, 6, or 8 tickets per page, then print.</p>
         </section>
 

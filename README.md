@@ -363,6 +363,9 @@ On cold boot with no WiFi, the firmware reads the last line and restores the RTC
 mode = wifi
 ssid = myhomewifi
 password = changeme
+# Reached at http://<hostname>.local in wifi mode. Must be unique on your
+# network — give a second clock its own name, e.g. esp32clock2.
+hostname = esp32clock
 
 [clock]
 ntp_server = pool.ntp.org
@@ -559,6 +562,18 @@ The device serves a browser-based configuration UI on port 80 whenever the radio
 ### Connecting
 
 **WiFi mode** (joined to your home network): navigate to `http://esp32clock.local` or the IP shown in the Status screen WiFi popup.
+
+> **Running two clocks on one network?** `esp32clock` is an mDNS hostname, and it
+> has to be unique on the LAN — two devices answering to the same `.local` name
+> collide, and you reach whichever one replies first. Give the second device its
+> own name with `hostname = esp32clock2` under `[wifi]` in its `config.ini`
+> (editable from the web UI, then reboot). The AP hotspot name never collides;
+> it already carries a per-device MAC suffix.
+>
+> The value is a DNS label, so only letters, digits and hyphens survive: spaces,
+> dots and underscores are converted, uppercase is folded, and an empty or
+> unusable value falls back to `esp32clock`. The boot log prints what was
+> actually registered, and says so explicitly if mDNS could not claim the name.
 
 **AP mode** (chosen explicitly, or entered automatically as a credential-rescue when the WiFi password keeps getting rejected — see [Resilient WiFi connect](#resilient-wifi-connect) below): the device creates its own hotspot, named `ESP32-Clock-XXXXXX` where `XXXXXX` is a 6-hex-digit suffix derived from the device's own MAC address, so multiple units stay distinguishable. Long-press anywhere → Carousel → WiFi to open the detail popup, which shows:
 
@@ -1273,6 +1288,8 @@ which takes a few seconds — expect a one-off pause on the very first cardless 
 | Web UI returns 403 | Wrong or missing PIN | Read the current PIN from the device screen (long-press → Carousel → WiFi) |
 | Web UI not reachable in AP mode | Not connected to the device's hotspot | The AP is open (no password needed) — join `ESP32-Clock-XXXXXX` from your WiFi list (name shown on the device's WiFi detail popup), then navigate to `http://192.168.4.1` |
 | Web UI not reachable in WiFi mode | mDNS not resolving | Use the IP address shown in the Status WiFi popup instead of `esp32clock.local` |
+| `esp32clock.local` opens the **wrong** clock | Two devices sharing one mDNS hostname | Set a distinct `[wifi] hostname` on one of them — see [Connecting](#connecting) |
+| Boot log says mDNS could not claim the hostname | The name is already taken on this network | Change `[wifi] hostname`, or reach the device by IP |
 | Web UI unreachable, popup shows "Radio off — retry in Ns" | Backed off after a failed connection attempt | Normal — wait out the countdown, or power-cycle to force an immediate retry |
 | Config saved but WiFi not reconnecting | WiFi/NTP changes need a reboot | Use the Reboot button in the web UI after saving |
 | Date/time set via web not sticking | RTC drift before next NTP sync | Normal — NTP will correct it at next sync; set `[wifi] mode = ap` or `off` if you want the manual time to persist |

@@ -256,6 +256,7 @@ duration = 10
 
             <h3>Connecting</h3>
             <p><strong>WiFi mode</strong> (joined to your home network): navigate to <code>http://esp32clock.local</code> or the IP address shown in the long-press WiFi detail popup.</p>
+            <p><strong>Two clocks on one network?</strong> That <code>.local</code> name has to be unique — if both devices answer to it you reach whichever replies first. Set <code>hostname = esp32clock2</code> under <code>[wifi]</code> in the second device's <code>config.ini</code> (editable from the web UI, then reboot) and it becomes <code>http://esp32clock2.local</code>. Only letters, digits and hyphens are kept; anything else is converted, and an unusable value falls back to the default. The AP hotspot name never collides — it already carries a per-device suffix.</p>
             <p><strong>AP mode</strong> (chosen explicitly, or entered automatically as a credential rescue when the WiFi password keeps getting rejected): the device creates its own hotspot, named <code>ESP32-Clock-XXXXXX</code> (a 6-hex-digit suffix from its own MAC, so multiple units stay distinguishable). Long-press anywhere → Carousel → WiFi to open the detail popup, which shows the AP name, IP address, the 6-digit web PIN, and the URL — everything you need to connect:</p>
 <pre><code>┌───────────────────────────────────┐
 │  📶  ESP32-Clock-8AF8A5           │

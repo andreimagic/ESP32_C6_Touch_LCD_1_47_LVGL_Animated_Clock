@@ -80,6 +80,10 @@ enum WifiCfgMode : uint8_t { WCFG_WIFI = 0, WCFG_AP = 1, WCFG_OFF = 2 };
 struct AppConfig {
   char wifi_ssid[64]                 = "myhomewifi";     // [wifi] ssid
   char wifi_password[64]             = "changeme";       // [wifi] password
+  char wifi_hostname[32]             = "esp32clock";     // [wifi] hostname -> <name>.local
+                                                  // Configurable because it is the one name
+                                                  // that must be unique on the LAN: two clocks
+                                                  // both answering to esp32clock.local collide.
   char ntp_server[64]                = "pool.ntp.org";   // [clock] ntp_server
   char tz_string[48]                 = "CET-1CEST,M3.5.0,M10.5.0/3"; // [clock] tz (POSIX — set once, handles DST forever)
   uint8_t wifi_mode                  = WCFG_AP;   // [wifi] mode (wifi|ap|off)
@@ -279,6 +283,40 @@ bool    storageIsInternal = false;   // true when that filesystem is FFat
 // still mounted alongside it so provision_internal_flash() can mirror the card
 // across, while STORAGE keeps pointing at the card.
 bool    ffatMounted       = false;
+
+// ── mDNS hostname ────────────────────────────────────────────────────────────
+// A hostname is a DNS label, not free text: letters, digits and hyphens only,
+// no dots or spaces, and it may not begin or end with a hyphen. A bad value
+// would make mdns_hostname_set() fail and leave the device reachable only by
+// IP — with the UI still cheerfully printing a .local address that resolves to
+// nothing. So the value is normalised on the way in rather than trusted:
+// uppercase is folded, invalid characters become hyphens, runs are collapsed,
+// and anything left empty falls back to the default.
+static void sanitize_hostname(char *dst, size_t dstlen, const char *src)
+{
+  size_t o = 0;
+  bool   prev_hyphen = true;            // leading hyphens are dropped
+  for (size_t i = 0; src[i] && o + 1 < dstlen; i++) {
+    char c = src[i];
+    if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+    if (ok) { dst[o++] = c; prev_hyphen = false; }
+    else if (!prev_hyphen) { dst[o++] = '-'; prev_hyphen = true; }
+  }
+  while (o > 0 && dst[o - 1] == '-') o--;   // and trailing ones
+  dst[o] = '\0';
+  if (o == 0) snprintf(dst, dstlen, "esp32clock");
+}
+
+// "http://<hostname>.local", built from the live config so the UI can never
+// advertise a name the device is not actually registered under. The static
+// buffer is fine here: every caller consumes it immediately.
+static const char *mdns_url()
+{
+  static char buf[48];
+  snprintf(buf, sizeof(buf), "http://%s.local", cfg.wifi_hostname);
+  return buf;
+}
 
 static inline const char *storage_label()
 {
@@ -716,6 +754,9 @@ tz = CET-1CEST,M3.5.0,M10.5.0/3
 mode = ap
 ssid = myhomewifi
 password = changeme
+# Reached at http://<hostname>.local in wifi mode. Must be unique on your
+# network — give a second clock its own name, e.g. esp32clock2.
+hostname = esp32clock
 
 [alarm]
 enabled = false
@@ -1088,6 +1129,14 @@ static void load_config()
       if (strcmp(key, "ssid") == 0) {
         strncpy(cfg.wifi_ssid, val, sizeof(cfg.wifi_ssid) - 1);
         Serial.printf("[CFG]   wifi.ssid     = %s\n", cfg.wifi_ssid);
+      }
+      else if (strcmp(key, "hostname") == 0) {
+        sanitize_hostname(cfg.wifi_hostname, sizeof(cfg.wifi_hostname), val);
+        if (strcmp(cfg.wifi_hostname, val) != 0)
+          Serial.printf("[CFG]   wifi.hostname = %s  (adjusted from '%s')\n",
+                        cfg.wifi_hostname, val);
+        else
+          Serial.printf("[CFG]   wifi.hostname = %s\n", cfg.wifi_hostname);
       }
       else if (strcmp(key, "password") == 0) {
         strncpy(cfg.wifi_password, val, sizeof(cfg.wifi_password) - 1);
@@ -1518,6 +1567,7 @@ static void save_config()
   fw.printf("mode = %s\n",     wifi_cfg_mode_name());   // wifi | ap | off
   fw.printf("ssid = %s\n",     cfg.wifi_ssid);
   fw.printf("password = %s\n", cfg.wifi_password);
+  fw.printf("hostname = %s\n", cfg.wifi_hostname);
 
   fw.print("\n[alarm]\n");
   fw.printf("enabled = %s\n",        cfg.alarm_enabled ? "true" : "false");
@@ -2320,8 +2370,8 @@ static void start_web_server()
 
     String ip  = (wifiMode == WM_STA) ? WiFi.localIP().toString()
                                       : WiFi.softAPIP().toString();
-    String url = (wifiMode == WM_STA) ? "http://esp32clock.local"
-                                      : "http://192.168.4.1";
+    String url = (wifiMode == WM_STA) ? String(mdns_url())
+                                      : String("http://192.168.4.1");
 
     String html =
       F("<!DOCTYPE html><html><head>"
@@ -2992,8 +3042,8 @@ static void show_wifi_detail_popup()
   if (!web_reachable)
     lv_label_set_text(l4, "web UI unavailable");
   else
-    lv_label_set_text(l4, (wifiMode == WM_STA) ? "http://esp32clock.local"
-                                                : "http://192.168.4.1");
+    lv_label_set_text(l4, (wifiMode == WM_STA) ? mdns_url()
+                                               : "http://192.168.4.1");
   lv_obj_set_style_text_color(l4, lv_color_make(100, 200, 255), 0);
   lv_obj_align(l4, LV_ALIGN_TOP_MID, 0, 74);
 
@@ -3459,10 +3509,17 @@ static void wifi_poll_cb(lv_timer_t *t)
       wifiMode        = WM_STA;
       wifi_fail_count = 0;
       wifi_auth_fails = 0;
-      MDNS.begin("esp32clock");
+      // Report what actually registered, not what was intended: if the name is
+      // already taken on this LAN, that is the one clue you get.
+      bool mdns_ok = MDNS.begin(cfg.wifi_hostname);
       start_web_server();
-      Serial.printf("[WiFi] Connected: SSID=%s  IP=%s  URL=http://esp32clock.local\n",
-                    WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+      Serial.printf("[WiFi] Connected: SSID=%s  IP=%s  URL=%s\n",
+                    WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(),
+                    mdns_ok ? mdns_url() : "(mDNS failed — use the IP)");
+      if (!mdns_ok)
+        Serial.printf("[WiFi] mDNS could not claim '%s' — is another device "
+                      "already using it? Change [wifi] hostname.\n",
+                      cfg.wifi_hostname);
     }
     time_t now = time(nullptr);
     timeSynced = (now >= 8 * 3600 * 2);

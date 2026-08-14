@@ -2,11 +2,19 @@
 #
 # Stage 3 — tag and release.
 # On every push to main, read FW_VERSION from the sketch and, if that version
-# isn't tagged yet, build it and publish a GitHub Release with the binaries.
+# isn't tagged yet, build every supported board and publish one GitHub Release
+# carrying a binary set per board.
 #
 # The FW_VERSION macro is the single source of truth: this workflow only reads
 # it. It never edits source and never pushes a commit back to main — the only
 # ref it creates is the tag.
+#
+# Board targets come from `.github/board-targets.json`, the same file build.yml
+# validates against, so a release can never be cut with settings CI never tested.
+#
+# Job order matters. The tag is created in `publish`, which needs every matrix
+# build to have succeeded — tagging before the builds would leave a tag with no
+# release attached if one board failed to compile.
 
 name: Release
 
@@ -22,28 +30,25 @@ concurrency:
 permissions:
   contents: write   # also covers --generate-notes; that endpoint needs no more
 
-env:
-  ESP32_CORE_VERSION: "3.3.11"
-  LVGL_VERSION: "9.5.0"
-  GFX_VERSION: "1.6.7"
-  FASTIMU_VERSION: "1.3.0"
-  FQBN: "esp32:esp32:esp32c6:JTAGAdapter=default,CDCOnBoot=cdc,PartitionScheme=default_8MB,CPUFreq=160,FlashMode=qio,FlashFreq=80,FlashSize=8M,ZigbeeMode=default,DebugLevel=none"
-
 jobs:
-  release:
-    name: Tag and release
+  # Decides whether there is anything to do. Pushes to main that don't change
+  # FW_VERSION (docs, workflow tweaks, a merge that was already released) land
+  # on an existing tag and exit cleanly here, before anything is built.
+  version:
+    name: Resolve version
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
+    timeout-minutes: 10
+    outputs:
+      should-release: ${{ steps.version.outputs.should-release }}
+      version: ${{ steps.version.outputs.version }}
+      sketch: ${{ steps.version.outputs.sketch }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      # Decides whether there is anything to do. Pushes to main that don't
-      # change FW_VERSION (docs, workflow tweaks, a merge that was already
-      # released) land on an existing tag and exit cleanly here.
       - name: Resolve version
         id: version
         run: |
@@ -73,57 +78,166 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "sketch=$SKETCH" >> "$GITHUB_OUTPUT"
 
+  targets:
+    name: Load board targets
+    needs: version
+    if: needs.version.outputs.should-release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.load.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Read board-targets.json
+        id: load
+        run: |
+          set -euo pipefail
+          FILE=".github/board-targets.json"
+          jq -e 'type == "array" and length > 0' "$FILE" > /dev/null \
+            || { echo "::error::$FILE must be a non-empty JSON array"; exit 1; }
+          echo "matrix=$(jq -c . "$FILE")" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: [version, targets]
+    if: needs.version.outputs.should-release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      # Deliberately true: if one board fails to compile, no release should be
+      # cut at all, so there is nothing to gain from finishing the others.
+      fail-fast: true
+      matrix:
+        include: ${{ fromJSON(needs.targets.outputs.matrix) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
       - name: Build firmware
-        if: steps.version.outputs.should-release == 'true'
         uses: ./.github/actions/arduino-build
         with:
-          fqbn: ${{ env.FQBN }}
-          core-version: ${{ env.ESP32_CORE_VERSION }}
-          lvgl-version: ${{ env.LVGL_VERSION }}
-          gfx-version: ${{ env.GFX_VERSION }}
-          fastimu-version: ${{ env.FASTIMU_VERSION }}
+          fqbn: ${{ matrix.fqbn }}
+          core-version: ${{ matrix.core-version }}
+          lvgl-version: ${{ matrix.lvgl-version }}
+          gfx-version: ${{ matrix.gfx-version }}
+          fastimu-version: ${{ matrix.fastimu-version }}
           output-dir: build-out
 
       # The ESP32 core emits a single flashable image itself (the
-      # objcopy.postobjcopy.3 hook runs esptool merge-bin), already using the
-      # correct esp32c6 bootloader offset of 0x0 rather than the 0x1000 default
-      # used by the Xtensa targets. Consume that rather than re-deriving it.
+      # objcopy.postobjcopy.3 hook runs esptool merge-bin), already using each
+      # chip's correct bootloader offset. Consume that rather than re-deriving
+      # it. Both supported chips place the bootloader at 0x0.
       - name: Collect release assets
-        if: steps.version.outputs.should-release == 'true'
-        id: assets
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-          SKETCH: ${{ steps.version.outputs.sketch }}
+          VERSION: ${{ needs.version.outputs.version }}
+          SKETCH: ${{ needs.version.outputs.sketch }}
+          CHIP: ${{ matrix.chip }}
+          BOARD: ${{ matrix.name }}
         run: |
           set -euo pipefail
-          mkdir -p release
+          mkdir -p dist
 
           MERGED="build-out/${SKETCH}.merged.bin"
-          if [ ! -f "$MERGED" ]; then
-            echo "::error::Expected merged image '$MERGED' was not produced. Files in build-out:"
+          APP="build-out/${SKETCH}.bin"
+          if [ ! -f "$MERGED" ] || [ ! -f "$APP" ]; then
+            echo "::error::Expected build output missing. Files in build-out:"
             ls -la build-out >&2
             exit 1
           fi
 
-          cp "$MERGED"                        "release/firmware-${VERSION}-full.bin"
-          cp "build-out/${SKETCH}.bin"        "release/firmware-${VERSION}-app.bin"
-          cp "build-out/${SKETCH}.elf"        "release/firmware-${VERSION}.elf"
+          # ── Trim the whole-chip padding ────────────────────────────────────
+          # The core builds merged.bin with `--pad-to-size {build.flash_size}`
+          # (platform.txt), so the file spans the ENTIRE flash and everything
+          # above the app is 0xFF. Published as-is, flashing it at 0x0 blanks
+          # every partition above the app — including the S3's 9.9MB ffat at
+          # 0x610000, which on a cardless board holds config.ini and all the
+          # GIFs. A firmware update would silently wipe them.
+          #
+          # Cutting at the end of the app leaves an image that writes only the
+          # bootloader, partition table and app, and is ~10x smaller.
+          APP_END=$(( 0x10000 + $(stat -c%s "$APP") ))
+          CUT=$(( (APP_END + 4095) / 4096 * 4096 ))      # round to a 4KB sector
+
+          # Only safe while the tail really is erase-value padding. If a future
+          # core version starts placing real data up there, fail loudly rather
+          # than ship a truncated image.
+          STRAY=$(tail -c "+$(( CUT + 1 ))" "$MERGED" | tr -d '\377' | wc -c)
+          if [ "$STRAY" -ne 0 ]; then
+            echo "::error::$STRAY non-0xFF bytes above offset $CUT in $MERGED — refusing to truncate."
+            exit 1
+          fi
+
+          head -c "$CUT" "$MERGED" > "dist/firmware-${VERSION}-${CHIP}-full.bin"
+          echo "full image: $(stat -c%s "dist/firmware-${VERSION}-${CHIP}-full.bin") bytes" \
+               "(trimmed from $(stat -c%s "$MERGED"))"
+
+          cp "$APP"                    "dist/firmware-${VERSION}-${CHIP}-app.bin"
+          cp "build-out/${SKETCH}.elf" "dist/firmware-${VERSION}-${CHIP}.elf"
+
+          # Not a release asset — collected by `publish` for the notes. The
+          # dist/meta prefix keeps it out of the firmware-* upload glob.
+          mkdir -p dist/meta
+          {
+            echo "${BOARD} (${CHIP})"
+            grep -E "of program storage space" compile.log || echo "no size data"
+          } > "dist/meta/size-${CHIP}.txt"
 
           {
-            echo "### Flash size"
+            echo "### ${BOARD}"
             echo ""
             echo '```'
             grep -E "of (program storage space|dynamic memory)" compile.log || echo "no size data"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-          # Captured into the release notes below.
-          grep -E "of program storage space" compile.log > flash-line.txt || echo "" > flash-line.txt
+      - name: Upload release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.chip }}
+          path: dist/
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    name: Tag and publish
+    needs: [version, targets, build]
+    if: needs.version.outputs.should-release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Download every board's assets
+        uses: actions/download-artifact@v7
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+
+      # Guards against publishing a partial release if an artifact went missing
+      # between the build jobs and here.
+      - name: Verify one full image per target
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          EXPECTED="$(jq -r 'length' .github/board-targets.json)"
+          FOUND="$(find dist -maxdepth 1 -name "firmware-${VERSION}-*-full.bin" | wc -l)"
+          echo "Expected $EXPECTED full images, found $FOUND:"
+          ls -la dist
+          [ "$FOUND" -eq "$EXPECTED" ] \
+            || { echo "::error::expected $EXPECTED full images, found $FOUND"; exit 1; }
 
       - name: Create tag
-        if: steps.version.outputs.should-release == 'true'
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
           git config user.name  "github-actions[bot]"
@@ -132,20 +246,31 @@ jobs:
           git push origin "$VERSION"
 
       - name: Publish release
-        if: steps.version.outputs.should-release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
-          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
           set -euo pipefail
 
           {
-            echo "## Flashing"
+            echo "## Which file do I need?"
             echo ""
-            echo "\`firmware-${VERSION}-full.bin\` is a complete image — bootloader, partition"
-            echo "table and app — written at offset \`0x0\`. Note \`0x0\`, not the \`0x1000\` used"
-            echo "by the older Xtensa chips; the ESP32-C6 places its bootloader at zero."
+            echo "This release carries a separate binary set per board. The images are"
+            echo "chip-specific and are **not** interchangeable — flashing the wrong one"
+            echo "produces a board that does not boot."
+            echo ""
+            echo "| Board | Full image |"
+            echo "|---|---|"
+            jq -r --arg v "$VERSION" \
+              '.[] | "| \(.name) | `firmware-\($v)-\(.chip)-full.bin` |"' \
+              .github/board-targets.json
+            echo ""
+            echo "Each \`-full.bin\` is a complete image — bootloader, partition table and"
+            echo "app — written at offset \`0x0\`. Note \`0x0\`, not \`0x1000\`: both supported"
+            echo "chips place their bootloader at zero. (\`0x1000\` belongs to the original"
+            echo "ESP32 and the ESP32-S2 only — it is not an Xtensa-versus-RISC-V split, as"
+            echo "the S3 is Xtensa and still uses \`0x0\`.)"
             echo ""
             echo "### Web flasher (no install)"
             echo ""
@@ -153,42 +278,51 @@ jobs:
             echo "   It needs WebSerial, so Firefox and Safari will not work."
             echo "2. Open the **DIY** tab."
             echo "3. Connect the board over USB, click **Connect**, and pick its serial port."
-            echo "4. Select \`firmware-${VERSION}-full.bin\` and set the flash address to \`0x0\`."
+            echo "4. Select your board's \`-full.bin\` and set the flash address to \`0x0\`."
             echo "5. Click **Program**. The board reboots into the new firmware when it finishes."
             echo ""
-            echo "Erasing the whole flash first is unnecessary — this image already replaces"
-            echo "the bootloader, partition table and app. Settings are not at risk either way:"
-            echo "they live on the SD card in \`/config.ini\`, not in flash."
+            echo "Erasing the whole flash first is unnecessary — this image replaces the"
+            echo "bootloader, partition table and app in one write, and deliberately ends"
+            echo "there instead of spanning the whole chip."
+            echo ""
+            echo "> **ESP32-S3 owners:** if you run without an SD card, your \`config.ini\` and"
+            echo "> GIFs live on the internal FFat partition at \`0x610000\` — above everything"
+            echo "> this image writes, so an update keeps them. An explicit *erase all flash*"
+            echo "> still wipes them, as does flashing a raw \`merged.bin\` from a local build,"
+            echo "> which the ESP32 core pads out across the entire flash. On the C6, settings"
+            echo "> live on the SD card and are never at risk."
             echo ""
             echo "### esptool"
             echo ""
             echo "\`\`\`"
-            echo "esptool --chip esp32c6 write-flash 0x0 firmware-${VERSION}-full.bin"
+            jq -r --arg v "$VERSION" \
+              '.[] | "esptool --chip \(.chip) write-flash 0x0 firmware-\($v)-\(.chip)-full.bin"' \
+              .github/board-targets.json
             echo "\`\`\`"
             echo ""
-            echo "### firmware-${VERSION}-app.bin"
+            echo "### The -app.bin files"
             echo ""
             echo "The application partition alone, for OTA or for reflashing over an existing"
-            echo "install at \`0x10000\`. **Use esptool for this, not the web flasher** — it writes"
-            echo "exactly the offset given and erases only the sectors it touches, whereas a"
-            echo "browser tool makes it easy to erase the chip or write to the wrong address,"
-            echo "either of which removes the bootloader and leaves the board unable to boot."
-            echo "Only valid on a board already running this same 8MB / 3MB-APP partition"
-            echo "scheme; otherwise flash the full image. Recover from a bad app-only flash by"
-            echo "writing \`firmware-${VERSION}-full.bin\` at \`0x0\` again."
+            echo "install at \`0x10000\`. **Use esptool for these, not the web flasher** — it"
+            echo "writes exactly the offset given and erases only the sectors it touches,"
+            echo "whereas a browser tool makes it easy to erase the chip or write to the wrong"
+            echo "address, either of which removes the bootloader and leaves the board unable"
+            echo "to boot. Only valid on a board already running that same partition scheme;"
+            echo "otherwise flash the full image. Recover from a bad app-only flash by writing"
+            echo "the matching \`-full.bin\` at \`0x0\` again."
             echo ""
             echo "---"
             echo ""
             echo "## Build provenance"
             echo ""
-            echo "Built from \`${GITHUB_SHA}\` with the toolchain pinned in CI:"
+            echo "Built from \`${GITHUB_SHA}\` with the toolchain pinned in"
+            echo "\`.github/board-targets.json\`, the same file CI validates against:"
             echo ""
-            echo "- ESP32 core \`${ESP32_CORE_VERSION}\`"
-            echo "- LVGL \`${LVGL_VERSION}\`"
-            echo "- GFX Library for Arduino \`${GFX_VERSION}\`, FastIMU \`${FASTIMU_VERSION}\`"
+            jq -r '.[] | "- **\(.name)** — core `\(."core-version")`, LVGL `\(."lvgl-version")`, GFX `\(."gfx-version")`, FastIMU `\(."fastimu-version")`\n  - `\(.fqbn)`"' \
+              .github/board-targets.json
             echo ""
             echo "\`\`\`"
-            cat flash-line.txt
+            cat dist/meta/size-*.txt
             echo "\`\`\`"
           } > notes.md
 
@@ -200,4 +334,4 @@ jobs:
           FLAGS=(--title "$VERSION" --notes-file notes.md --generate-notes)
           [ "$PRERELEASE" = "true" ] && FLAGS+=(--prerelease)
 
-          gh release create "$VERSION" "${FLAGS[@]}" release/*
+          gh release create "$VERSION" "${FLAGS[@]}" dist/firmware-*

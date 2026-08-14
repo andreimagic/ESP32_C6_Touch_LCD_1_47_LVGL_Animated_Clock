@@ -4,13 +4,15 @@
 
 [![Watch Demo](https://img.youtube.com/vi/FQkz1KrQX3I/0.jpg)](https://youtu.be/FQkz1KrQX3I)
 
-# ESP32-C6 Touch LCD 1.47" — LVGL Animated Clock
+# ESP32-C6 / ESP32-S3 Touch LCD 1.47" — LVGL Animated Clock
 
 [![GitHub](https://img.shields.io/badge/github-andreimagic%2FESP32__C6__Touch__LCD__1__47__LVGL__Animated__Clock-blue?logo=github)](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock)
 [![Build](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock)](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/releases/latest)
 
-A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47"** board, driven by **LVGL v9**. Displays the time in a large custom font, plays animated GIF emotions on a schedule, sounds configurable buzzer alarms, runs a countdown timer, manages brightness via device tilt, hosts a full apps menu with ASCII mini-games, and supports deep-sleep power-off — all configured from a plain `config.ini` on the SD card, no recompile needed.
+A smart animated clock for kids that runs on **two Waveshare 1.47" touch boards — the ESP32-C6 and the ESP32-S3** — driven by **LVGL v9**. Displays the time in a large custom font, plays animated GIF emotions on a schedule, sounds configurable buzzer alarms, runs a countdown timer, adjusts brightness by swipe (or tilt, where an IMU is fitted), hosts a full apps menu with ASCII mini-games, and supports deep-sleep power-off — all configured from a plain `config.ini`, no recompile needed.
+
+One sketch builds for both boards. The target is detected at compile time and every pin, bus and capability difference is resolved in [`board_config.h`](board_config.h) — see [Board Abstraction](#board-abstraction-board_configh). Storage is chosen at boot: an SD card if one is mounted, otherwise the S3's internal flash.
 
 ---
 
@@ -26,11 +28,12 @@ A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47
 | **Alarm** | Configurable wake-up time, custom buzzer pattern, `alarm_animation.gif`, fades out after beeping |
 | **Countdown timer** | Set HH:MM in the carousel, live `MM:SS` on clock face, `timer_animation.gif` on completion |
 | **Animation priority** | Alarm and timer always evict any running scheduled animation before playing |
-| **Emotion tilt** | While the smile GIF plays (upper-left tap), tilt the device to change emotion in real-time |
+| **Emotion tilt** | While the smile GIF plays (upper-left tap), tilt the device to change emotion in real-time _(C6 only — needs an IMU)_ |
+| **Dual-board support** | One sketch builds for both the ESP32-C6 and the ESP32-S3; pins, buses and capabilities resolved in `board_config.h` |
 | **Carousel settings** | Long-press → swipe through Clock / Timer / Alarm / WiFi settings |
 | **Clock editor** | Sets HH:MM **and** DD/MON/YYYY — full date+time offline, no WiFi needed |
 | **Brightness schedule** | Auto-dims at 19:00 → 19:30 → 20:00, brightens at 06:00 → 07:00 |
-| **Tilt brightness** | Tilt device left/right in the Status screen to adjust brightness in 10% steps |
+| **Brightness adjust** | Swipe left/right in the Status screen to adjust brightness in 10% steps — or tilt the device, where an IMU is fitted (C6) |
 | **WiFi modes** | Three-way radio policy set from the carousel or `config.ini`: **WiFi** (join network, NTP syncs), **AP** (own hotspot only, no internet), **Off** (airplane mode — radio fully down) |
 | **Resilient WiFi connect** | Non-blocking STA association with a disconnect-reason state machine: a rejected password auto-falls-back to the AP hotspot after 2 tries (so the web UI stays reachable to fix it); an unreachable network backs off the radio 30 s → 60 s → 2/4/8 min → 10 min cap instead of scanning forever |
 | **Web configuration** | PIN-protected browser UI served by the device — edit `config.ini`, set date/time, reboot; accessible in both WiFi and AP mode |
@@ -66,13 +69,45 @@ A smart animated clock for kids built on the **Waveshare ESP32-C6 Touch LCD 1.47
 
 ### Board
 
-**[Waveshare ESP32-C6 Touch LCD 1.47"](https://www.waveshare.com/wiki/ESP32-C6-Touch-LCD-1.47)**
+Two boards are supported, both from Waveshare and both built around the same
+1.47-inch panel and AXS5106L touch controller:
 
-The project is built on the Waveshare ESP32-C6 Touch LCD 1.47" development board, which features a 1.47-inch ST7789 display and an AXS5106L touch controller. The board also includes a QMI8658 IMU for motion sensing, an ETA6098 battery charger for power management, and an SD card slot for storage. This all-in-one design simplifies wiring and allows for a compact form factor.
-            
-You can purchase the board from [Waveshare](https://www.waveshare.com/esp32-c6-touch-lcd-1.47.htm?&aff_id=150729). It’s an affiliate link, so if you use it, you’re basically buying me a coffee (and I really appreciate it)! ☕
+| | **[ESP32-C6 Touch LCD 1.47"](https://www.waveshare.com/wiki/ESP32-C6-Touch-LCD-1.47)** | **[ESP32-S3 Touch LCD 1.47"](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-1.47)** |
+|---|---|---|
+| Arduino IDE board | `ESP32C6 Dev Module` | `ESP32S3 Dev Module` |
+| Flash | 8 MB | 16 MB |
+| PSRAM | none | 8 MB OPI |
+| IMU | QMI8658 | **none** |
+| SD card slot | shares the LCD SPI bus | own dedicated SPI pins |
+| Internal filesystem | — | 9.9 MB FFat partition |
+| Panel | 172 × 320, JD9853 (ST7789 command set) | identical |
 
-Select **ESP32C6 Dev Module** in Arduino IDE. 
+The C6 is the original target and the board this project was developed on. It
+features a QMI8658 IMU for motion sensing, an ETA6098 battery charger, and an SD
+card slot. This all-in-one design simplifies wiring and allows for a compact
+form factor.
+
+You can purchase the C6 board from [Waveshare](https://www.waveshare.com/esp32-c6-touch-lcd-1.47.htm?&aff_id=150729). It’s an affiliate link, so if you use it, you’re basically buying me a coffee (and I really appreciate it)! ☕
+
+#### Feature differences
+
+The S3 board has no IMU, so every tilt-driven interaction is unavailable there.
+The firmware detects this **at runtime** (not at compile time), so a C6 whose
+QMI8658 fails to answer at boot degrades exactly the same way.
+
+| Feature | C6 | S3 | Notes |
+|---|---|---|---|
+| Brightness adjust | tilt **or** swipe | swipe | Swipe left/right on the Status screen works on both |
+| Tennis Letters, Letters Rain, Snake Letters | ✅ | **hidden** | Steer only by tilt, so they are removed from the carousel rather than shipped unplayable |
+| Emotion GIF cycling | ✅ | **smile only** | The overlay still opens on upper-left tap; `sleep`/`sad`/`joy` are unreachable without tilt |
+| Rock Paper Scissors, Dice | ✅ | ✅ | Tap-driven; shake is a bonus, not the only input |
+| Bingo | ✅ | ✅ | Tap and the circle both draw |
+| RTC restore from log | ✅ | SD card only | The log is deliberately card-only — see [RTC Persistence Log](#rtc-persistence-log) |
+
+> **Not the ESP32-S3-LCD-1.47B.** That is a different SKU which *does* carry a
+> QMI8658. This firmware targets the **ESP32-S3-Touch-LCD-1.47**, whose complete
+> component list contains no IMU — the I²C bus reaches only the LCD connector and
+> the expansion header.
 
 ### Display
 
@@ -80,32 +115,79 @@ Key specifications of the display include a resolution of 172 × 320 pixels in l
 
 | Component | Value |
 |---|---|
-| Controller | ST7789 |
+| Controller | JD9853, driven with the ST7789 command set |
 | Resolution | 172 × 320 px |
-| Interface | SPI (HWSPI) |
+| Interface | C6: `Arduino_HWSPI` on the global `SPI` · S3: `Arduino_ESP32SPI` on **HSPI (SPI3)** |
 | Rotation | Landscape (ROTATION = 1) |
+
+The panel, its register init sequence and the whole LVGL layout are identical on
+both boards. Only the bus differs: on the C6 the display shares the global `SPI`
+object with the SD card, while on the S3 the display is pinned to HSPI explicitly
+so it cannot collide with the global `SPI` instance the card uses (the default
+would land on FSPI, which does collide).
 
 ### Pin Map
 
-| Signal | GPIO |
-|---|---|
-| Display DC | 15 |
-| Display CS | 14 |
-| Display RST | 22 |
-| Display Backlight (PWM) | 23 |
-| SPI SCK (shared) | 1 |
-| SPI MOSI (shared) | 2 |
-| SPI MISO (SD only) | 3 |
-| SD Card CS | 4 |
-| Touch I²C SDA | 18 |
-| Touch I²C SCL | 19 |
-| Touch RST | 20 |
-| Touch INT | 21 |
-| IMU (QMI8658) I²C | shared 18 / 19 |
-| Battery ADC | 0 |
-| Passive Buzzer | **5** → GND |
+Both columns are the values in [`board_config.h`](board_config.h); you never need
+to edit them by hand.
 
-> The display, SD card and buzzer share the same SPI bus (SCK=1, MOSI=2). The SD card additionally needs MISO=3. Each device uses its own CS pin.
+| Signal | C6 GPIO | S3 GPIO |
+|---|---|---|
+| Display DC | 15 | 45 |
+| Display CS | 14 | 21 |
+| Display RST | 22 | 40 |
+| Display Backlight (PWM) | 23 | 46 |
+| Display SCK | 1 _(shared)_ | 38 |
+| Display MOSI | 2 _(shared)_ | 39 |
+| SD Card CS | 4 | 14 |
+| SD Card SCK | 1 _(shared)_ | 16 |
+| SD Card MOSI | 2 _(shared)_ | 15 |
+| SD Card MISO | 3 | 17 |
+| Touch I²C SDA | 18 | 42 |
+| Touch I²C SCL | 19 | 41 |
+| Touch RST | 20 | 47 |
+| Touch INT | 21 | 48 |
+| IMU (QMI8658) I²C | shared 18 / 19 | — _(no IMU)_ |
+| Battery ADC | 0 | 12 |
+| Passive Buzzer | **5** → GND | **5** → GND |
+
+> **C6:** the display, SD card and buzzer share one SPI bus (SCK=1, MOSI=2); the
+> SD card additionally needs MISO=3. Each device uses its own CS pin.
+>
+> **S3:** the display and the TF card are on **completely separate pins and
+> separate SPI hosts** — the card keeps the global `SPI` (FSPI) while the panel
+> gets HSPI. Both boards read the battery through an identical 200K/100K divider,
+> so the same ÷3 conversion applies.
+
+> **S3 Display RST is 40, not 47.** Waveshare's own Arduino demo passes 47, which
+> is the *touch* reset line — their example is wrong. It appears to work only
+> because the JD9853 self-resets at power-on. 40 is confirmed working on hardware.
+
+> **The S3 TF slot works over SPI** despite Waveshare's demo using `SD_MMC`. The
+> slot is wired for both modes (nets labelled `SD_D0..D3`/`SD_CLK`/`SD_CMD` *and*
+> `SD_MISO`/`SD_MOSI`/`SD_SCLK`/`SD_CS`, with 10K pull-ups throughout), so SPI
+> mode is used and the existing `SD.h` code needs no changes.
+
+### Board Abstraction (`board_config.h`)
+
+All hardware differences live in one header. It selects on the
+`CONFIG_IDF_TARGET_*` macros that the ESP32 core always defines — deliberately
+**not** on `ARDUINO_<BOARD>` variant macros, which depend on which board entry
+you happen to pick in the IDE. An unsupported target is a compile error by
+design rather than a board that builds and then misbehaves.
+
+Besides the pins above it exposes the capability flags the firmware branches on:
+
+| Macro | C6 | S3 | Meaning |
+|---|---|---|---|
+| `BOARD_HAS_IMU` | 1 | 0 | A QMI8658 is fitted (tilt features compile in) |
+| `BOARD_HAS_INTERNAL_FS` | 0 | 1 | An FFat partition exists to fall back to |
+| `BOARD_SD_SHARES_LCD_BUS` | 1 | 0 | The card and panel share one SPI bus |
+| `BOARD_NEW_LCD_BUS()` | `Arduino_HWSPI` | `Arduino_ESP32SPI` on HSPI | Expands to the right bus constructor |
+| `BOARD_NAME` | `"ESP32-C6-Touch-LCD-1.47"` | `"ESP32-S3-Touch-LCD-1.47"` | Printed in the boot log |
+
+Adding a third board means adding one `#elif` block here — not touching the
+sketch.
 
 ### Battery & Charging
 
@@ -128,13 +210,19 @@ Install all libraries through **Arduino IDE → Library Manager** unless noted o
 | Library | Version tested | Purpose |
 |---|---|---|
 | **LVGL** | 9.5.0 | UI framework — widgets, animations, timers |
-| **Arduino_GFX_Library** | latest | ST7789 display driver |
-| **FastIMU** | latest | QMI8658 accelerometer (tilt brightness + emotion tilt) |
+| **Arduino_GFX_Library** | 1.6.7 | Display driver (JD9853 via the ST7789 command set) |
+| **FastIMU** | 1.3.0 | QMI8658 accelerometer (tilt brightness + emotion tilt) |
 | **esp_lcd_touch_axs5106l** | board-specific (included in repo) | Capacitive touch controller |
 | **SD** | built-in ESP32 (pre-install with esp32 Board) | SD card file access |
+| **FFat** | built-in ESP32 (pre-install with esp32 Board) | Internal-flash fallback storage (S3) |
 | **WiFi / WiFiMulti** | built-in ESP32 (pre-install with esp32 Board) | WiFi connection |
 
-> `SD`, `WiFi`, `WiFiMulti`, `SPI`, and `time.h` are part of the ESP32 Arduino core — no separate install needed.
+> `SD`, `FFat`, `WiFi`, `WiFiMulti`, `SPI`, and `time.h` are part of the ESP32 Arduino core — no separate install needed.
+
+> **FastIMU is required even for the S3**, which has no IMU: the header is
+> included unconditionally, and the tilt code paths are disabled at runtime rather
+> than compiled out. The versions above are the exact ones CI pins, so a local
+> build reproduces CI byte-for-byte.
 
 ---
 
@@ -215,9 +303,33 @@ SD root/
     └── happybirthday.gif        ← 160 × 86 px  (Easter egg — replaces alarm/timer GIF on birthdays)
 ```
 
+### Storage backends
+
+The firmware picks **one** filesystem at boot and uses it for everything:
+
+1. An **SD card**, if one mounts. A card always wins.
+2. Otherwise the **internal FFat partition**, on boards where one exists (S3 only).
+
+Everything — `config.ini`, the GIFs, the web config editor — routes through that
+single choice, so the layout above is identical whichever backend is active. The
+Status screen's config editor shows a badge telling you which one is in use.
+
+On a board with no `config.ini` on the active storage, the firmware writes a
+complete default one on first boot, including the `[clock]`, `[animation]` and
+`[birthdays]` sections. **The default WiFi mode is `ap`**, because a device
+without a valid config has no valid credentials either, and on internal flash the
+web UI is the only way to set them.
+
+> **A cardless S3 has no GIFs yet.** Nothing currently copies animations onto the
+> FFat partition, so a cardless board boots, writes its default config, and shows
+> `GIF not found on Internal flash (FFat)` where an animation would be. Insert a
+> card, or wait for the provisioning feature on the [Roadmap](#roadmap).
+
 ### GIF Requirements
 
-GIF files **must be resized to 160 × 86 pixels** before copying to the SD card. The LVGL GIF decoder allocates an ARGB8888 canvas (width × height × 4 bytes). At full 320 × 172 px that requires 220 KB of contiguous RAM which the ESP32-C6 cannot provide when WiFi is active. At 160 × 86 px it needs only 55 KB.
+GIF files **must be resized to 160 × 86 pixels** before copying to storage. The LVGL GIF decoder allocates an ARGB8888 canvas (width × height × 4 bytes) plus decoder state. At 160 × 86 px the whole decode costs 84 KB, measured on hardware. At full 320 × 172 px the canvas alone is 220 KB, and with decoder state that is ~249 KB against the ~221 KB largest contiguous block the ESP32-C6 can offer — it does not fit whether or not WiFi is up.
+
+The S3 could in principle render them at native resolution, since its PSRAM gives ~8 MB of contiguous space, but the assets are shared between both boards so they stay at 160 × 86.
 
 **To resize:** go to [https://ezgif.com/resize](https://ezgif.com/resize), upload your GIF, set Width=160 Height=86, download and copy to the SD card.
 
@@ -233,6 +345,12 @@ The firmware automatically creates and maintains `/last_seen.txt` on the SD card
 
 On cold boot with no WiFi, the firmware reads the last line and restores the RTC to that timestamp. Logging stops automatically if battery voltage drops below 3.4V.
 
+> **The log is SD-card-only by design**, because it grows without bound and the
+> internal flash partition is not the place for that. The consequence is that a
+> **cardless S3 cannot restore its clock** from a log — with no WiFi it starts
+> with an unset RTC and shows `Status` instead of the date until the time is set
+> from the web UI or the clock editor.
+
 ---
 
 ## config.ini Reference
@@ -245,6 +363,9 @@ On cold boot with no WiFi, the firmware reads the last line and restores the RTC
 mode = wifi
 ssid = myhomewifi
 password = changeme
+# Reached at http://<hostname>.local in wifi mode. Must be unique on your
+# network — give a second clock its own name, e.g. esp32clock2.
+hostname = esp32clock
 
 [clock]
 ntp_server = pool.ntp.org
@@ -442,6 +563,18 @@ The device serves a browser-based configuration UI on port 80 whenever the radio
 
 **WiFi mode** (joined to your home network): navigate to `http://esp32clock.local` or the IP shown in the Status screen WiFi popup.
 
+> **Running two clocks on one network?** `esp32clock` is an mDNS hostname, and it
+> has to be unique on the LAN — two devices answering to the same `.local` name
+> collide, and you reach whichever one replies first. Give the second device its
+> own name with `hostname = esp32clock2` under `[wifi]` in its `config.ini`
+> (editable from the web UI, then reboot). The AP hotspot name never collides;
+> it already carries a per-device MAC suffix.
+>
+> The value is a DNS label, so only letters, digits and hyphens survive: spaces,
+> dots and underscores are converted, uppercase is folded, and an empty or
+> unusable value falls back to `esp32clock`. The boot log prints what was
+> actually registered, and says so explicitly if mDNS could not claim the name.
+
 **AP mode** (chosen explicitly, or entered automatically as a credential-rescue when the WiFi password keeps getting rejected — see [Resilient WiFi connect](#resilient-wifi-connect) below): the device creates its own hotspot, named `ESP32-Clock-XXXXXX` where `XXXXXX` is a 6-hex-digit suffix derived from the device's own MAC address, so multiple units stay distinguishable. Long-press anywhere → Carousel → WiFi to open the detail popup, which shows:
 
 ```
@@ -480,7 +613,55 @@ The dark-themed page has several panels:
 | **Bingo Cards** | Opens `/bingo` in a new tab — a printable sheet of tickets for the on-device [Bingo!](#bingo) caller. No PIN needed (read-only, nothing is saved to SD). |
 | **Set date & time** | A `datetime-local` picker pre-filled with the current device time. Tap **Apply Time** to set the RTC immediately via `settimeofday()` — no reboot needed. |
 | **Reboot** | Reboots the device remotely after PIN confirmation. |
+| **Manage Files** | Opens `/files` — browse, download, delete and upload anything on the active storage. See [File manager](#file-manager). |
 | **Download Log** | Downloads `/last_seen.txt` — no PIN needed (read-only). |
+
+### File manager
+
+`/files` lists **everything on whichever backend mounted at boot**, so it manages
+an SD card and internal flash identically. The listing is flat and recursive —
+full paths rather than browsable folders, since the tree is only `config.ini`
+plus one GIF directory.
+
+| Element | Behaviour |
+|---|---|
+| Storage meter | Active backend, file count, used and free KB, plus a usage bar |
+| ⬇ per file | Downloads it. **PIN required** |
+| ✖ per file | Deletes it, after a browser confirm. **PIN required** |
+| Upload | Pick an existing folder and a file. Overwrites same-name files. **PIN required** |
+
+**Free space is guarded three times:** the browser refuses a file bigger than
+the reported free space; the server rejects the request up front if
+`Content-Length` exceeds free space minus a 16 KB margin; and a running check
+aborts mid-stream, closing and **deleting the partial file**. The third layer
+exists because `Content-Length` describes the whole multipart body, so it is an
+upper bound on the file rather than its size.
+
+Three deliberate restrictions:
+
+- **The listing reaches the root plus two folder levels.** That covers
+  `/config.ini` and `/cruzr_emotions/*.gif` with a level to spare. The limit is a
+  file-handle budget, not an arbitrary number: the walk holds one directory
+  handle open per level, plus one for the file being read and one more if a GIF
+  is playing on the device, against the SD library's five. Raising that limit
+  would cost about 4 KB of heap per extra slot — each carries its own sector
+  cache — which the C6 cannot spare. Anything nested deeper is reported in the
+  page rather than silently omitted.
+- **Folders are never created**, and directories cannot be deleted. Upload
+  targets are chosen from a dropdown of folders that already exist, because
+  FFat does not create parent directories on write.
+- **Deleting and uploading are refused while a screen is open on the device**
+  (HTTP 409). The GIF decoder may still hold that file open, and unlinking it
+  underneath FAT risks corrupting the filesystem. Tap back to the clock first.
+
+Nothing is protected by name — with the PIN you can delete `config.ini`. That is
+recoverable: `bootstrap_config()` writes a fresh default on the next boot, though
+on a cardless S3 you would have to re-enter WiFi credentials over the AP.
+
+> **Uploading to internal flash stalls the CPU.** Writing FFat means writing the
+> same SPI flash the firmware executes from, which briefly disables the
+> instruction cache. Expect the display to stutter during an S3 upload. Uploads
+> to an SD card are unaffected.
 
 ### Printable Bingo Tickets
 
@@ -497,9 +678,12 @@ The exact same generator (same ticket algorithm, ported to `docs/bingo.js`) is a
 
 - The AP hotspot is **deliberately open** (no WPA2 passphrase) — joining it is meant to be frictionless, since it exists purely to reach the web UI, not to protect a network
 - The PIN's job is narrower and different: it authorises the web UI's *mutating* actions only, not joining the hotspot
-- The PIN is never stored, never sent over the wire in cleartext, and never logged to serial
-- The WiFi password is never transmitted to the browser (masked on GET, re-injected server-side on POST if unchanged)
-- All mutating routes (`POST /config`, `POST /settime`, `POST /reboot`) return HTTP 403 if the PIN is wrong or absent
+- The PIN is not persisted — it is regenerated at every boot and never written to storage
+- **The PIN is not a secret in transit.** The web UI is plain HTTP, so it travels in cleartext; it is also printed to serial at boot (`[AP] PIN generated:`) and shown on the device's status screen by design. It gates casual tampering by someone within WiFi range, and nothing stronger
+- Downloads and uploads carry the PIN in the **query string**, so it also lands in browser history. This is forced rather than chosen: a download is a plain link, and for uploads the multipart body is not parsed into `arg()` until after the whole file has streamed — a form-field PIN could only be checked once the file was already written to flash
+- The WiFi password is never transmitted to the browser (masked on GET, re-injected server-side on POST if unchanged). **Downloading `config.ini` from the file manager bypasses that masking**, which is exactly why downloads require the PIN
+- All mutating routes (`POST /config`, `POST /settime`, `POST /reboot`, `POST /files/delete`, `POST /files/upload`) and `GET /files/get` return HTTP 403 if the PIN is wrong or absent
+- Every web-supplied path is validated before touching the filesystem — anything containing `..`, a backslash, `//`, a quote or a control character is rejected, and paths must be rooted at `/`. This is the file manager's only security boundary, so it deliberately errs strict
 - A fresh PIN on every boot means stealing a previous PIN is useless
 - Anyone on the open hotspot can still read the config page unauthenticated (as before, over the LAN, and only reachable by being physically close enough to see the AP), but cannot change anything without the PIN shown on the device screen
 
@@ -511,7 +695,16 @@ The exact same generator (same ticket algorithm, ported to `docs/bingo.js`) is a
 Top-right corner shows an Analog clock, view stays opened and refreshes every minute to display the correct time. Clicking on it will return  to the regular Time view. A filled sector centered on the clock center that starts at the top of the hour (12 o’clock) and sweeps clockwise to the current minute position, visually like a pie chart showing elapsed minutes in the current hour. 
 
 ### Status (lower-left tap)
-Title shows today's date (e.g. `Mon 23 Mar 2026`) when the RTC holds a valid time, falling back to `Status` on a fresh unconfigured boot. **Tilt the device left or right** while this screen is open to decrease or increase brightness in 10% steps.
+Title shows today's date (e.g. `Mon 23 Mar 2026`) when the RTC holds a valid time, falling back to `Status` on a fresh unconfigured boot.
+
+**Brightness is adjusted from this screen in 10% steps, two ways:**
+
+- **Swipe left or right** across the screen — decrease / increase. Works on every board.
+- **Tilt the device left or right** — same steps, same clamping. Requires an IMU, so C6 only.
+
+The row itself tells you which are available: `(tilt or swipe)` where an IMU
+answered at boot, `(swipe to adjust)` where it did not. A swipe is one 10% step —
+swipe again for the next. Swiping does **not** close the screen; a tap does.
 
 The WiFi row reflects the live radio state: connected SSID (green), `Connecting...` (amber), `Off (airplane)` (grey) in Off mode, `Retry in Ns` (counting down) while backed off between STA attempts, or `Failed (check password)` after repeated credential rejections. The NTP row is context-aware too — `NTP: synced` / `NTP: not synced` in WiFi mode, `NTP: n/a (AP mode)` in AP mode, and `NTP: off` in Off mode, so an unsynced clock never looks like a fault when the mode itself rules NTP out.
 
@@ -546,6 +739,10 @@ Tapping the **upper-left** zone opens the smile GIF as usual. While this GIF is 
 
 The swap happens in-place — the GIF changes without closing the overlay or any visible flicker. The tilt is polled every 400 ms. A threshold of 0.4 g on the X axis (forward/backward) and Y axis (left/right) must be exceeded for the emotion to change, so small accidental movements are ignored.
 
+> **C6 only.** With no IMU the overlay still opens on upper-left tap and plays
+> `cruzr_smile.gif`, but it never cycles, so `cruzr_sleep`, `cruzr_sad` and
+> `cruzr_joy` are unreachable on the S3. Tap-to-cycle is on the [Roadmap](#roadmap).
+
 Tapping the screen dismisses the animation and returns to the clock, as usual.
 
 **Long-press the smile GIF** to enter the Apps Menu (math gate first).
@@ -570,6 +767,15 @@ A random arithmetic problem (+ − × ÷, result always < 100) is shown in large
 ### Apps carousel
 
 Eight games plus a sounds toggle, navigated with **◀ ▶**. **Tap** to enter, **long-press** to go back.
+
+> **On a board with no IMU, three of the eight are hidden.** Tennis Letters,
+> Letters Rain and Snake Letters steer *only* by tilt, so rather than ship them
+> unplayable the carousel skips them in both directions, leaving six reachable
+> entries. A persisted carousel position pointing at a hidden app is normalised
+> when the carousel is built, so it can never strand you on an unreachable entry.
+>
+> Note the position dots below the title are still drawn for all nine entries, so
+> on an S3 three of them are never highlighted.
 
 ```
 ┌─────────────────────────────────────────┐
@@ -824,10 +1030,19 @@ the firmware.
 
 ### Option A — Flash a prebuilt release (no toolchain)
 
-Every release ships `firmware-<version>-full.bin`, a complete image containing
-the bootloader, partition table and application.
+Every release ships a complete image per board — bootloader, partition table and
+application in one file:
 
-1. Download `firmware-<version>-full.bin` from
+| Board | Full image |
+|---|---|
+| ESP32-C6 Touch LCD 1.47 | `firmware-<version>-esp32c6-full.bin` |
+| ESP32-S3 Touch LCD 1.47 | `firmware-<version>-esp32s3-full.bin` |
+
+> **The images are chip-specific and not interchangeable.** Flashing the C6 image
+> to an S3 (or the reverse) produces a board that does not boot. Check the `esp32c6`
+> / `esp32s3` in the filename before you flash.
+
+1. Download the `-full.bin` **for your board** from
    [Releases](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/releases).
 2. Open **[Espressif's ESP Launchpad](https://espressif.github.io/esp-launchpad/)**
    in **Chrome or Edge**. It flashes over WebSerial, which Firefox and Safari do
@@ -837,28 +1052,51 @@ the bootloader, partition table and application.
 4. Select the `.bin` file and set the flash address to **`0x0`**.
 5. Click **Program**. The board reboots into the new firmware when it finishes.
 
-> **The address is `0x0`, not `0x1000`.** The ESP32-C6 places its bootloader at
-> zero; `0x1000` is the offset used by the older Xtensa parts, and using it
-> produces an image that will not boot.
+> **The address is `0x0`, not `0x1000`.** Both the ESP32-C6 and the ESP32-S3
+> place their bootloader at zero, and using `0x1000` produces an image that will
+> not boot. `0x1000` belongs to the original ESP32 and the ESP32-S2 only — this is
+> **not** an Xtensa-versus-RISC-V distinction, as the S3 is Xtensa and still uses
+> `0x0`.
 
-You do not need to erase the flash first — the image already spans it. Your
-settings are safe either way: they live on the SD card in `/config.ini`, not in
-flash.
+You do not need to erase the flash first — the image replaces the bootloader,
+partition table and app in a single write.
 
-If you prefer a command line, the same image works with
-[esptool](https://github.com/espressif/esptool):
+Your settings survive it. On a card they live in `/config.ini`, outside flash
+entirely. On a cardless S3 they sit on the internal FFat partition at
+`0x610000`, and the release image deliberately **ends just after the app**
+(around `0x1ba000`), so nothing above that offset is touched.
+
+> **What does still erase FFat**, taking a cardless S3's config and GIFs with it:
+> **Erase All Flash Before Sketch Upload** (keep it *Disabled*), **Burn
+> Bootloader**, and any image that spans the whole chip.
+>
+> That last one is a live trap for anyone building locally: the ESP32 core pads
+> its own `merged.bin` out to the full flash size with `--pad-to-size`, filling
+> everything above the app with `0xFF`. Flashing that file at `0x0` blanks the
+> FFat partition. The release pipeline trims it at the end of the app before
+> publishing, which is why the published `-full.bin` is safe and a raw local
+> `merged.bin` is not.
+
+If you prefer a command line, the same images work with
+[esptool](https://github.com/espressif/esptool). Only the `--chip` argument and
+the filename change; the address is `0x0` for both:
 
 ```bash
-esptool --chip esp32c6 write-flash 0x0 firmware-<version>-full.bin
+esptool --chip esp32c6 write-flash 0x0 firmware-<version>-esp32c6-full.bin
 ```
 
-> Releases also contain `firmware-<version>-app.bin`, the application partition
-> on its own, for reflashing over an existing install at `0x10000`. **Use esptool
-> for that one, not a browser flasher** — esptool writes exactly the offset given
-> and erases only the sectors it touches, whereas a browser tool makes it easy to
-> erase the chip or write to the wrong address, either of which removes the
-> bootloader and leaves the board unable to boot. Recover by flashing
-> `firmware-<version>-full.bin` at `0x0` again.
+```bash
+esptool --chip esp32s3 write-flash 0x0 firmware-<version>-esp32s3-full.bin
+```
+
+> Releases also contain `firmware-<version>-<chip>-app.bin`, the application
+> partition on its own, for reflashing over an existing install at `0x10000`.
+> **Use esptool for that one, not a browser flasher** — esptool writes exactly the
+> offset given and erases only the sectors it touches, whereas a browser tool
+> makes it easy to erase the chip or write to the wrong address, either of which
+> removes the bootloader and leaves the board unable to boot. It is only valid on
+> a board already running that same partition scheme. Recover by flashing the
+> matching `-full.bin` at `0x0` again.
 
 ### Option B — Build from source
 
@@ -873,24 +1111,47 @@ esptool --chip esp32c6 write-flash 0x0 firmware-<version>-full.bin
    ```
    Then open **Tools → Board → Boards Manager**, search `esp32` and install **esp32 by Espressif**.
 
-4. Select and configure the board — **all settings below are mandatory**:
+4. Select and configure the board — **all settings below are mandatory**. Use
+   the column for the board you have:
 
-   | Setting | Value |
-   |---|---|
-   | **Board** | `ESP32C6 Dev Module` |
-   | **USB CDC On Boot** | `Enabled` |
-   | **Flash Size** | `8MB (64Mb)` |
-   | **Partition Scheme** | `8MB with spiffs (3MB APP/1.5MB SPIFFS)` |
-   | CPU Frequency | `160MHz (WiFi)` _(recommended)_ |
-   | Flash Frequency | `80MHz` |
-   | Flash Mode | `QIO` |
-   | Upload Speed | `921600` |
-   | JTAG Adapter | `Disabled` |
-   | Zigbee Mode | `Disabled` |
-   | Core Debug Level | `None` |
+   | Setting | ESP32-C6 | ESP32-S3 |
+   |---|---|---|
+   | **Board** | `ESP32C6 Dev Module` | `ESP32S3 Dev Module` |
+   | **USB CDC On Boot** | `Enabled` | `Enabled` |
+   | **USB Mode** | — | **`USB-OTG (TinyUSB)`** |
+   | **PSRAM** | — | **`OPI PSRAM`** |
+   | **Flash Size** | `8MB (64Mb)` | `16MB (128Mb)` |
+   | **Partition Scheme** | `8MB with spiffs (3MB APP/1.5MB SPIFFS)` | `16M Flash (3MB APP/9.9MB FATFS)` |
+   | CPU Frequency | `160MHz (WiFi)` _(recommended)_ | `240MHz (WiFi)` |
+   | Flash Frequency | `80MHz` | _(no such menu — see below)_ |
+   | Flash Mode | `QIO` | `QIO 80MHz` |
+   | Upload Speed | `921600` | `921600` |
+   | JTAG Adapter | `Disabled` | `Disabled` |
+   | Zigbee Mode | `Disabled` | `Disabled` |
+   | Core Debug Level | `None` | `None` |
+   | **Erase All Flash Before Upload** | `Disabled` | `Disabled` |
 
    > **USB CDC On Boot must be Enabled** — without it the Serial Monitor will not receive any output and the device may not be recognised on the port.
    > **Flash Size and Partition Scheme must match** — the 3MB APP partition is required to fit the firmware with LVGL v9 and all libraries.
+
+   Three S3-specific traps, all of which change the produced binary:
+
+   > **USB Mode must be `USB-OTG (TinyUSB)`, not `Hardware CDC and JTAG`.**
+   > Waveshare's setup page pictures Hardware CDC, but the working configuration
+   > is USB-OTG. This setting feeds `build.usb_mode`, so the two genuinely
+   > produce different firmware — it is not a cosmetic serial-port preference.
+   >
+   > **PSRAM must be `OPI PSRAM`.** The GIF decoder allocates from
+   > `MALLOC_CAP_8BIT`, which only includes the 8 MB PSRAM when it is enabled.
+   > Leave it Disabled and the S3 ends up with *less* usable headroom than the C6.
+   >
+   > **The S3 has no Flash Frequency menu.** It is folded into the Flash Mode
+   > label, so `QIO 80MHz` is one choice rather than two settings.
+
+   > **Keep Erase All Flash Before Sketch Upload Disabled** on the S3. A normal
+   > upload writes only the bootloader, partition table and app (up to
+   > ~`0x1a8fff`), leaving the FFat partition at `0x610000` intact. Erasing wipes
+   > the config and GIFs stored there, which on a cardless board is everything.
 
 5. Set the correct **Port** (e.g. `COM3` on Windows, `/dev/ttyUSB0` on Linux/macOS)
 6. Install all libraries listed in [Software Dependencies](#software-dependencies)
@@ -900,10 +1161,34 @@ esptool --chip esp32c6 write-flash 0x0 firmware-<version>-full.bin
 10. Open `ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock.ino`, click **Upload**
 11. Open Serial Monitor at **115200 baud** to watch the boot log
 
+### Continuous integration and releases
+
+Three workflows, all driven from one shared target list:
+
+| File | Trigger | Does |
+|---|---|---|
+| [`board-targets.json`](.github/board-targets.json) | — | **The single source of truth.** One object per board: FQBN, chip, and pinned library versions |
+| `build.yml` | PR / push to `development`, `main` | Compiles every target and reports flash + RAM usage per board |
+| `version-check.yml` | PR | Fails the PR unless `FW_VERSION` is bumped above the base branch |
+| `release.yml` | push to `main` | If `FW_VERSION` isn't tagged yet: builds every target, tags, and publishes one release carrying a binary set per board |
+
+Both `build.yml` and `release.yml` read their matrix from `board-targets.json`
+via `fromJSON`, so a board cannot be validated by CI with one set of settings and
+then released with another. **Adding a board is one JSON object** — no workflow
+edits, matching the one `#elif` block it takes in `board_config.h`.
+
+`release.yml` creates the tag only after *every* board has compiled
+(`fail-fast: true`, and the tag lives in a job that `needs` all of them), so a
+failure on one board can never leave a tag with no release attached. A final
+guard counts the collected `-full.bin` images against the number of entries in
+`board-targets.json` before publishing.
+
 ### Expected Boot Log
 
 ```
 ========== BOOT ==========
+[BOOT] ESP32-C6-Touch-LCD-1.47  fw v3.0.0
+[BOOT] PSRAM no  internal FS no
 [BOOT] Wake cause: cold boot / RESET button
 [1] Pulling CS pins HIGH...
     Done.
@@ -918,10 +1203,11 @@ read: 8161
     Touch ready.
 [4b] Initialising IMU...
     IMU ready.
-[5] Mounting SD card...
-    CS=4  SCK=1  MISO=3  MOSI=2  speed=4MHz
+[5] Mounting storage...
+    SD: CS=4  SCK=1  MISO=3  MOSI=2  speed=4MHz
     SD.begin() returned: true
     SD mounted OK — type: SD  size: 244 MB
+    Active storage: SD card
 [CFG] Loading /config.ini...
 [CFG]   wifi.mode          = wifi
 [CFG]   wifi.ssid     = myhomewifi
@@ -947,6 +1233,33 @@ read: 8161
 ========== SETUP DONE ==========
 ```
 
+That is a C6 with a card inserted. An S3 differs in four places:
+
+```
+[BOOT] ESP32-S3-Touch-LCD-1.47  fw v3.0.0
+[BOOT] PSRAM yes  internal FS yes (FFat)
+...
+[4b] No IMU on this board — tilt control disabled.
+```
+
+and, when no card is present, step [5] falls through to internal flash instead of
+failing (sizes as reported by `FFat`; the partition is 10,354,688 bytes):
+
+```
+[5] Mounting storage...
+    SD: CS=14  SCK=16  MISO=17  MOSI=15  speed=4MHz
+    SD.begin() returned: false
+    Retrying at 1 MHz...
+    Retry returned: false
+    No SD card (not inserted, unformatted, or wiring).
+    Falling back to internal flash (FFat)...
+    FFat mounted OK — 10112 KB total, <free> KB free
+    Active storage: Internal flash (FFat)
+```
+
+On a virgin board the `FFat.begin(true)` in that path formats the partition once,
+which takes a few seconds — expect a one-off pause on the very first cardless boot.
+
 ---
 
 ## Troubleshooting
@@ -954,7 +1267,13 @@ read: 8161
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Black screen after boot | Display init failed | Check SPI wiring; confirm `gfx->begin() OK` in serial log |
-| `SD card mount failed` | Wrong MISO pin or card not FAT32 | Confirm GPIO 3 = MISO; reformat card as FAT32 |
+| **S3:** compile error `unsupported target` | Wrong board selected in the IDE | `board_config.h` only knows ESP32-C6 and ESP32-S3; pick `ESP32S3 Dev Module` |
+| **S3:** no serial output at all | `USB Mode` set to `Hardware CDC and JTAG` | Set **USB Mode = `USB-OTG (TinyUSB)`** and re-upload — see [Option B](#option-b--build-from-source) |
+| **S3:** `Not enough RAM for GIF` | `PSRAM` left `Disabled` | Set **PSRAM = `OPI PSRAM`**; the boot log must say `PSRAM yes` |
+| **S3:** config and GIFs vanished after upload | **Erase All Flash Before Sketch Upload** was Enabled | Keep it `Disabled`; it wipes the FFat partition holding both |
+| **S3:** three games missing from the carousel | Working as intended — no IMU | Tennis Letters, Letters Rain and Snake Letters steer only by tilt |
+| **S3:** linker warning `missing .note.GNU-stack section implies executable stack` | Comes from the Xtensa toolchain's own `libgcc` (`_floatdidf.o`), not this sketch | Harmless — ignore it. It appears on every S3 build with the pinned core and does not affect the firmware |
+| `SD card mount failed` | Wrong MISO pin or card not FAT32 | Confirm MISO (GPIO 3 on C6, GPIO 17 on S3); reformat card as FAT32 |
 | `GIF not found` | Wrong filename or path | Path is case-sensitive: `/cruzr_emotions/cruzr_smile.gif` |
 | Birthday GIF not showing | `happybirthday.gif` absent or wrong date format | Place the file at `/cruzr_emotions/happybirthday.gif` (160×86 px); verify `dates` entries are `DD-MM-YYYY` |
 | GIF shows but wrong size | GIF not resized | Resize to 160 × 86 px using ezgif.com/resize |
@@ -969,6 +1288,8 @@ read: 8161
 | Web UI returns 403 | Wrong or missing PIN | Read the current PIN from the device screen (long-press → Carousel → WiFi) |
 | Web UI not reachable in AP mode | Not connected to the device's hotspot | The AP is open (no password needed) — join `ESP32-Clock-XXXXXX` from your WiFi list (name shown on the device's WiFi detail popup), then navigate to `http://192.168.4.1` |
 | Web UI not reachable in WiFi mode | mDNS not resolving | Use the IP address shown in the Status WiFi popup instead of `esp32clock.local` |
+| `esp32clock.local` opens the **wrong** clock | Two devices sharing one mDNS hostname | Set a distinct `[wifi] hostname` on one of them — see [Connecting](#connecting) |
+| Boot log says mDNS could not claim the hostname | The name is already taken on this network | Change `[wifi] hostname`, or reach the device by IP |
 | Web UI unreachable, popup shows "Radio off — retry in Ns" | Backed off after a failed connection attempt | Normal — wait out the countdown, or power-cycle to force an immediate retry |
 | Config saved but WiFi not reconnecting | WiFi/NTP changes need a reboot | Use the Reboot button in the web UI after saving |
 | Date/time set via web not sticking | RTC drift before next NTP sync | Normal — NTP will correct it at next sync; set `[wifi] mode = ap` or `off` if you want the manual time to persist |
@@ -989,8 +1310,11 @@ read: 8161
 ## Architecture Notes
 
 - **No blocking calls in `loop()`** — `loop()` only calls `lv_timer_handler()` + `delay(5)`. All WiFi polling, clock ticks, brightness schedules, buzzer patterns, countdown timer, and animations run as LVGL timer callbacks.
-- **SD ↔ LVGL filesystem bridge** — a custom `lv_fs_drv_t` registered under drive letter `'S'` forwards all LVGL file operations to the Arduino `SD` library. This lets `lv_gif_set_src()` open files directly from the card with the prefix `S:/`.
-- **GIF memory management** — the LVGL GIF decoder needs a contiguous block for its canvas. GIFs are pre-scaled to 160×86 px (55 KB canvas) so they fit alongside the WiFi stack. The render buffer uses 20 scan lines for good throughput without exhausting RAM.
+- **Board abstraction** — `board_config.h` selects on `CONFIG_IDF_TARGET_*` (never on `ARDUINO_<BOARD>` variant macros, which depend on the IDE board entry the user picks) and an unsupported target is a deliberate compile error. Beyond pins it exports capability flags — `BOARD_HAS_IMU`, `BOARD_HAS_INTERNAL_FS`, `BOARD_SD_SHARES_LCD_BUS` — and a `BOARD_NEW_LCD_BUS()` macro expanding to the correct `Arduino_DataBus` constructor, so the sketch contains no `#ifdef` per board. Adding a target is one `#elif` block.
+- **Storage abstraction** — a single `fs::FS *STORAGE` pointer is resolved once at boot: the SD card if one mounts, otherwise `FFat` where `BOARD_HAS_INTERNAL_FS`. Exactly one backend is ever active and a card always wins. Every one of the 18 call sites goes through the pointer, including `lvgl_sd_open()`, which is the single chokepoint for all `GIF_*_PATH` opens — so the `S:` drive letter behaves identically whichever backend is live. `sdCardAvailable` means literally "a card is mounted"; `storageAvailable` means "some filesystem is mounted"; the two are deliberately not interchangeable.
+- **Storage ↔ LVGL filesystem bridge** — a custom `lv_fs_drv_t` registered under drive letter `'S'` forwards all LVGL file operations to whichever backend `STORAGE` points at. This lets `lv_gif_set_src()` open files with the prefix `S:/` from either an SD card or internal flash. Paths are probed with `STORAGE->exists()` before being handed to LVGL, because `lv_gif_set_src()` only logs a warning on a missing file and renders nothing — indistinguishable from a hung black screen.
+- **GIF memory management** — the LVGL GIF decoder needs a contiguous block for its canvas. GIFs are pre-scaled to 160×86 px, which costs **84 KB measured** end to end (55 KB canvas + ~29 KB decoder state). The C6's largest free block is ~221 KB with the radio and web server up, so that leaves ~137 KB of headroom; full 320×172 would need ~249 KB and genuinely does not fit. On the S3 the same allocation lands in PSRAM, since that is inside `MALLOC_CAP_8BIT`. The render buffer uses 20 scan lines for good throughput without exhausting RAM.
+- **Bootstrapped config** — `bootstrap_config()` writes a complete default `config.ini` from PROGMEM when the active storage has none. Necessary because `save_config()` only rewrites the sections it manages, so `[clock]`, `[animation]` and `[birthdays]` would never appear and the web editor would show a blank textarea on a virgin device. The default WiFi mode is `ap` in all three places it is defined (struct, template, parser fallback), because a device with no valid config has no valid credentials either — and on internal flash the web UI is the only way to enter them.
 - **DST-aware timekeeping** — `configTzTime(tz_string, ntp_server)` sets the POSIX TZ env var and starts SNTP in a single call. NTP delivers UTC; `localtime_r()` converts to correct local time including DST transitions automatically. `setenv("TZ", tz_string, 1)` is also called before WiFi starts so offline use (restore from log) is correct too.
 - **RTC persistence** — `log_last_seen()` appends a timestamped voltage reading to `/last_seen.txt` every hour, on every config save, and on clock editor use. `restore_time_from_log()` reads the last entry on cold boot. With TZ set, `mktime()` converts local→UTC correctly including DST.
 - **Carousel** — a full-screen LVGL modal opened by long-press. Each tap on ◀/▶ calls `lv_obj_clean()` and rebuilds the view in place. The centre zone uses `LV_EVENT_CLICKED` (not `LV_EVENT_PRESSED`) so long-press and tap are mutually exclusive — the editor never opens before the long-press exit fires.
@@ -1007,7 +1331,7 @@ read: 8161
 - **Automation gate** — `run_daily_automation()` fires when `now > 2026-01-01` (RTC sanity check) instead of `timeSynced`, so brightness schedules, alarms, and animations all work correctly when WiFi is in AP/Off mode or the time was set manually.
 - **Deep sleep & Alarm NTP guard** — `boot_millis` captured at the very start of `setup()`. In WiFi mode, wakes 5 min before alarm when > 5 min away, 30 s when close; AP/Off mode always wakes 30 s early since there is no sync to wait for (`wifi_ntp_possible()` gates this). Holds `alarm_ntp_pending` while a sync is still possible; `show_alarm_warning()` fires the buzzer with a text overlay instead of the GIF if NTP is ruled out by the mode (AP/Off) or times out after 15 min in WiFi mode — the alarm itself is never skipped or delayed, only its visual changes.
 - **config.ini** — parsed once at boot with a hand-rolled INI reader (no external library). On save, `[wifi]`, `[alarm]`, `[timer]`, and `[menu]` sections are fully rewritten (using the new `mode = wifi|ap|off` key); all other sections and comments are preserved. A legacy `[wifi] enabled` key (no `mode` key present) is still read and mapped (`true`→`wifi`, `false`→`ap`) for backward compatibility with files from before v2.7.1.
-- **Web configuration server** — `WebServer` on port 80, whose routes are registered exactly once (`webRoutesRegistered`) since `WebServer::on()` appends to a linked list and would leak a duplicate handler set on every AP/WiFi mode switch otherwise; `start_web_server()`/`stop_web_server()` just start/stop the listener (and `MDNS.end()`) on top of that fixed route table as the radio comes and goes. The boot-generated PIN (`ap_pin[7]`) is seeded from `esp_timer_get_time()` and authorises the web UI's mutating routes only — the AP hotspot itself (`ap_ssid`, `ESP32-Clock-XXXXXX` from the softAP MAC) is deliberately open, no WPA2 passphrase. `GET /` sends the config textarea with the WiFi password masked; `POST /config` re-injects the real password from RAM if the placeholder is unchanged, then writes to SD and calls `load_config()`. `POST /settime` parses `YYYY-MM-DDTHH:MM` and calls `settimeofday()` directly. `POST /reboot` calls `ESP.restart()` after flushing the HTTP response. All three POST routes return HTTP 403 on PIN mismatch.
+- **Web configuration server** — `WebServer` on port 80, whose routes are registered exactly once (`webRoutesRegistered`) since `WebServer::on()` appends to a linked list and would leak a duplicate handler set on every AP/WiFi mode switch otherwise; `start_web_server()`/`stop_web_server()` just start/stop the listener (and `MDNS.end()`) on top of that fixed route table as the radio comes and goes. The boot-generated PIN (`ap_pin[7]`) is seeded from `esp_timer_get_time()` and authorises the web UI's mutating routes only — the AP hotspot itself (`ap_ssid`, `ESP32-Clock-XXXXXX`) is deliberately open, no WPA2 passphrase. The MAC in that SSID is read straight from eFuse via `esp_read_mac(..., ESP_MAC_WIFI_SOFTAP)` rather than `WiFi.softAPmacAddress()`, which was being called before `softAP()` had created the netif and therefore returned zeros — every device came up as `ESP32-Clock-000000`. This was a latent bug on the C6 too; it simply kept winning the race. `GET /` sends the config textarea with the WiFi password masked; `POST /config` re-injects the real password from RAM if the placeholder is unchanged, then writes to storage and calls `load_config()`. Both that route and `save_config()` write `/config.tmp` and rename it over the original — the previous `remove()`-then-`write()` left a window in which a power cut lost the config outright, which is unrecoverable on a cardless board. The editor also shows a badge naming the active backend (`SD card` or `Internal flash (FFat)`), and `/log` returns an explanatory message rather than a bare 404 when there is no card to read a log from. `POST /settime` parses `YYYY-MM-DDTHH:MM` and calls `settimeofday()` directly. `POST /reboot` calls `ESP.restart()` after flushing the HTTP response. All three POST routes return HTTP 403 on PIN mismatch.
 
 ---
 
@@ -1037,7 +1361,10 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v2.6.0 | ✅ released | Snake Letters game: classic snake with alphabet targets, distraction letters, and length modifiers |
 | v2.6.1 | ✅ released | Bugfix: Clock editor touch zones re-derived from drawn geometry, fixing dead strips and drift between the HH/mm/date fields; Metronome BPM label right-aligned so digits grow without overlapping the "BPM" unit or the slider |
 | v2.7.0 | ✅ released | Bingo! — on-device 1–90 number caller (tap/tilt to draw, cycle-and-reveal animation, call-history popup); web-served printable UK/housie ticket sheets at `/bingo`, linked from the Web Configuration page; same generator mirrored on the docs site at `/bingo.html` |
-| v2.7.1 | 🚀 new | WiFi configuration redesign — three-way `[wifi] mode = wifi\|ap\|off` (replaces the old on/off toggle) with a carousel sub-screen selector; non-blocking connect state machine with credential-rejection → automatic AP rescue and exponential backoff for unreachable networks (`WiFiMulti` removed); AP hotspot is now **open** and named `ESP32-Clock-XXXXXX` per device — the PIN authorises only the web UI's mutating actions; alarm always fires with a drift-warning overlay instead of the GIF when no time-sync source is available (AP/Off mode, or NTP timeout), and the 5-minute early-wake margin is skipped entirely outside WiFi mode |
+| v2.7.1 | ✅ released | WiFi configuration redesign — three-way `[wifi] mode = wifi\|ap\|off` (replaces the old on/off toggle) with a carousel sub-screen selector; non-blocking connect state machine with credential-rejection → automatic AP rescue and exponential backoff for unreachable networks (`WiFiMulti` removed); AP hotspot is now **open** and named `ESP32-Clock-XXXXXX` per device — the PIN authorises only the web UI's mutating actions; alarm always fires with a drift-warning overlay instead of the GIF when no time-sync source is available (AP/Off mode, or NTP timeout), and the 5-minute early-wake margin is skipped entirely outside WiFi mode |
+| v2.7.2 | ✅ released | Three-stage CI/CD pipeline — compile validation against a pinned toolchain, an `FW_VERSION` guard that fails any PR reusing a released version, and automatic tag-and-release on `main` — plus a weekly canary that rebuilds against the latest upstream core and libraries. One shared tune engine now backs the apps menu and every game, fixing two tune bugs |
+| v3.0.0 | 🚀 new | **ESP32-S3 support** — one sketch, two boards, all hardware differences in `board_config.h`; storage abstraction that falls back from SD card to the S3's internal FFat partition (with a generated default `config.ini` on a virgin device); tilt-only games and emotion cycling hidden at runtime where no IMU answers; **swipe left/right to adjust brightness** on every board; atomic config writes (temp file + rename); AP SSID MAC read from eFuse instead of the not-yet-created softAP netif; missing-GIF paths reported instead of rendering a blank screen; **web file manager** at `/files` — browse, download, delete and upload on either storage backend, with a three-layer free-space guard; **dual-target CI and releases** — every release ships a binary set per board, built from one shared target definition |
+| — | 🔭 planned | **Internal-flash provisioning** — copy GIFs to FFat on first boot when a card is present, plus a web upload endpoint, so a cardless S3 is fully usable |
 
 ## License
 

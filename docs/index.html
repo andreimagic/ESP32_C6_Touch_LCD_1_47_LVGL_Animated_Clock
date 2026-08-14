@@ -256,6 +256,7 @@ duration = 10
 
             <h3>Connecting</h3>
             <p><strong>WiFi mode</strong> (joined to your home network): navigate to <code>http://esp32clock.local</code> or the IP address shown in the long-press WiFi detail popup.</p>
+            <p><strong>Two clocks on one network?</strong> That <code>.local</code> name has to be unique — if both devices answer to it you reach whichever replies first. Set <code>hostname = esp32clock2</code> under <code>[wifi]</code> in the second device's <code>config.ini</code> (editable from the web UI, then reboot) and it becomes <code>http://esp32clock2.local</code>. Only letters, digits and hyphens are kept; anything else is converted, and an unusable value falls back to the default. The AP hotspot name never collides — it already carries a per-device suffix.</p>
             <p><strong>AP mode</strong> (chosen explicitly, or entered automatically as a credential rescue when the WiFi password keeps getting rejected): the device creates its own hotspot, named <code>ESP32-Clock-XXXXXX</code> (a 6-hex-digit suffix from its own MAC, so multiple units stay distinguishable). Long-press anywhere → Carousel → WiFi to open the detail popup, which shows the AP name, IP address, the 6-digit web PIN, and the URL — everything you need to connect:</p>
 <pre><code>┌───────────────────────────────────┐
 │  📶  ESP32-Clock-8AF8A5           │
@@ -277,18 +278,40 @@ duration = 10
                         <tr><td><strong>Bingo Cards</strong></td><td>Opens <code>/bingo</code> in a new tab — a printable sheet of UK/housie tickets for the on-device Bingo! caller. No PIN needed, nothing saved to SD, fresh tickets every load.</td></tr>
                         <tr><td><strong>Set date &amp; time</strong></td><td>A date/time picker pre-filled with the current device time. <strong>Apply Time</strong> sets the RTC immediately via <code>settimeofday()</code> — no reboot needed.</td></tr>
                         <tr><td><strong>Reboot</strong></td><td>Reboots the device remotely after PIN confirmation.</td></tr>
+                        <tr><td><strong>Manage Files</strong></td><td>Opens <code>/files</code> — browse everything on the SD card, download it, delete it, or upload new files straight from the browser. See below.</td></tr>
                         <tr><td><strong>Download Log</strong></td><td>Downloads <code>/last_seen.txt</code> — read-only, no PIN required.</td></tr>
                     </tbody>
                 </table>
             </div>
 
+            <h3>File manager</h3>
+            <p>The <strong>Manage Files</strong> button opens a second page listing everything stored on the card, so animations and settings can be swapped without ever taking the card out. The list is flat: every file is shown with its full path, rather than folders you click into.</p>
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr><th>Control</th><th>What it does</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><strong>Storage meter</strong></td><td>File count, kilobytes used and free, and a usage bar — so you can see at a glance whether a new GIF will fit.</td></tr>
+                        <tr><td><strong>⬇ Download</strong></td><td>Saves that file to your computer or phone. <strong>PIN required</strong>, because <code>config.ini</code> contains your WiFi password.</td></tr>
+                        <tr><td><strong>✖ Delete</strong></td><td>Removes the file after a confirmation prompt. <strong>PIN required.</strong></td></tr>
+                        <tr><td><strong>⬆ Upload</strong></td><td>Pick an existing folder and a file. Uploading a file whose name already exists replaces it. <strong>PIN required.</strong></td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p><strong>Uploads are size-checked three times</strong> so a full card cannot leave a half-written file behind: the browser refuses anything larger than the reported free space, the device rejects the request before accepting a byte, and a running check aborts and deletes the partial file if it overruns anyway.</p>
+            <p>Two things it deliberately will not do. It <strong>never creates folders</strong> — upload targets come from a dropdown of folders that already exist — and it <strong>refuses to delete or upload while a screen is open on the device</strong>, since the animation player may still have that file open. Tap back to the clock first. The listing reaches the root plus two folder levels, which covers the standard layout; anything nested deeper is flagged on the page rather than quietly left out.</p>
+
             <h3>Security model</h3>
             <ul>
                 <li>The AP hotspot is <strong>deliberately open</strong> (no WPA2 passphrase) — joining it is meant to be frictionless, since it exists purely to reach the web UI.</li>
                 <li>The PIN's job is narrower: it authorises the web UI's <em>mutating</em> actions only, never joining the hotspot.</li>
-                <li>The PIN is never stored in flash, never sent in cleartext, and never printed to serial.</li>
-                <li>The WiFi password is <strong>never transmitted to the browser</strong> — masked on GET, re-injected server-side on POST if unchanged.</li>
-                <li>All mutating routes return <strong>HTTP 403</strong> if the PIN is wrong or absent.</li>
+                <li>The PIN is never persisted — it is regenerated at every boot and never written to storage.</li>
+                <li><strong>The PIN is not a secret in transit.</strong> The web UI is plain HTTP, so it travels in cleartext; it is also printed to the serial console at boot and shown on the device's own status screen by design. It gates casual tampering by someone already within WiFi range, and nothing stronger.</li>
+                <li>Downloads and uploads carry the PIN in the URL, so it also lands in browser history. That is forced rather than chosen: a download is a plain link, and during an upload the form fields are not readable until the whole file has already arrived — checking the PIN any later would mean writing it to storage first.</li>
+                <li>The WiFi password is <strong>never transmitted to the browser</strong> — masked on GET, re-injected server-side on POST if unchanged. Downloading <code>config.ini</code> from the file manager bypasses that masking, which is exactly why downloads need the PIN.</li>
+                <li>All mutating routes, and the file download route, return <strong>HTTP 403</strong> if the PIN is wrong or absent.</li>
+                <li>Every file path supplied by the browser is validated before it reaches the card — anything containing <code>..</code>, a backslash, a quote or a control character is rejected outright.</li>
                 <li>A fresh PIN on every boot means a captured PIN from a previous session is useless.</li>
             </ul>
         </section>
@@ -300,6 +323,10 @@ duration = 10
                 <li><strong>SD ↔ LVGL filesystem bridge:</strong> Allows `lv_gif_set_src("S:/...")` natively.</li>
                 <li><strong>DST-aware timekeeping:</strong> `configTzTime` sets POSIX TZ handling DST automatically.</li>
                 <li><strong>Emotion tilt in-place swap:</strong> Swaps the GIF path dynamically based on IMU data without rebuilding the overlay.</li>
+                            <li><strong>Gyro shake/tilt trigger:</strong> <code>app_gyro_poll_cb()</code> runs as a 150 ms LVGL timer while RPS or Dice is active. It detects a physical shake via |ΔaccelZ| &gt; 1.8 g between consecutive samples, and a hard tilt via |accelY| &gt; 1.0 g. Both call <code>app_screen_start()</code> identically to a tap. The timer is created on game start and deleted on exit.</li>
+                <li><strong>Metronome hardware timer:</strong> Beat timing uses two <code>esp_timer</code> hardware timers running outside the LVGL loop. <code>metro_hw_beat_cb()</code> writes directly to <code>ledcChangeFrequency()</code> (safe from timer task context) and sets a volatile flag. A 20 ms LVGL poll timer reads the flag and updates dot colours on the LVGL thread. BPM changes stop and restart the periodic timer with the new period (60,000,000 / bpm µs).</li>
+                <li><strong>WiFi state machine:</strong> <code>WiFiMulti</code> removed — its blocking channel scan stalled LVGL on every reconnect. Non-blocking <code>WiFi.begin()</code> plus a <code>WiFi.onEvent()</code> disconnect-reason handler tell a rejected password from an unreachable network apart: repeated auth failures trigger an automatic AP rescue, everything else backs off the radio 30s→10min between attempts, fully powered down in between.</li>
+                <li><strong>Web configuration server:</strong> <code>WebServer</code> on port 80, routes registered once and shared between WiFi and AP modes as the radio comes and goes. Boot PIN seeded from <code>esp_timer_get_time()</code>; authorises only the web UI's mutating routes — the AP hotspot itself is open, no WPA2. <code>POST /config</code> re-injects the masked WiFi password from RAM before writing to SD. <code>POST /settime</code> calls <code>settimeofday()</code> directly. All mutating routes return 403 on PIN mismatch.</li>
             </ul>
 
             <h3>🕒 Analog Clock Engine</h3>
@@ -346,7 +373,9 @@ duration = 10
                         <tr><td>v2.6.0</td><td>✅ released</td><td>Snake Letters game: classic snake with alphabet targets, distraction letters, and length modifiers.</td></tr>
                         <tr><td>v2.6.1</td><td>✅ released</td><td>Bugfix: Clock editor touch zones re-derived from drawn geometry (fixes drift between HH/mm/date fields); Metronome BPM label right-aligned to stop digit overlap.</td></tr>
                         <tr><td>v2.7.0</td><td>✅ released</td><td>Bingo! on-device 1–90 number caller with tap/tilt draw and call-history popup; printable UK/housie ticket sheets served at <code>/bingo</code> from Web Configuration, also mirrored here on the docs site at <a href="bingo.html">Bingo Cards</a>.</td></tr>
-                        <tr><td>v2.7.1</td><td>🚀 new</td><td>WiFi configuration redesign: three-way WiFi / AP / Off mode selector (replaces the on/off toggle); non-blocking connect with automatic AP rescue on a rejected password and exponential backoff for unreachable networks; AP hotspot is now open and uniquely named per device, PIN guards the web UI only; alarm always fires with a drift-warning overlay when no time-sync source is available.</td></tr>
+                        <tr><td>v2.7.1</td><td>✅ released</td><td>WiFi configuration redesign: three-way WiFi / AP / Off mode selector (replaces the on/off toggle); non-blocking connect with automatic AP rescue on a rejected password and exponential backoff for unreachable networks; AP hotspot is now open and uniquely named per device, PIN guards the web UI only; alarm always fires with a drift-warning overlay when no time-sync source is available.</td></tr>
+                        <tr><td>v2.7.2</td><td>✅ released</td><td>Three-stage CI/CD pipeline: compile validation against a pinned toolchain, an <code>FW_VERSION</code> guard that fails any PR reusing a released version, and automatic tag-and-release on <code>main</code> — plus a weekly canary that rebuilds against the latest upstream core and libraries. One shared tune engine now backs the apps menu and every game, fixing two tune bugs.</td></tr>
+                        <tr><td>v3.0.0</td><td>🚀 new</td><td>ESP32-S3 support — one sketch, two boards, all hardware differences in <code>board_config.h</code>; storage abstraction that falls back from SD card to the S3's internal FFat partition (with a generated default <code>config.ini</code> on a virgin device); tilt-only games and emotion cycling hidden at runtime where no IMU answers; swipe left/right to adjust brightness on every board; atomic config writes (temp file + rename); AP SSID MAC read from eFuse instead of the not-yet-created softAP netif; missing-GIF paths reported instead of rendering a blank screen; web file manager at <code>/files</code> — browse, download, delete and upload from the browser, with a three-layer free-space guard; dual-target CI and releases — every release ships a binary set per board, built from one shared target definition.</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -357,9 +386,9 @@ duration = 10
             <p>Flashing a prebuilt release takes a couple of minutes and needs no toolchain. Building from source is only necessary if you want to change the firmware.</p>
 
             <h3>Option A — Flash a prebuilt release (no toolchain)</h3>
-            <p>Every release ships <code class="code-inline">firmware-&lt;version&gt;-full.bin</code>, a complete image containing the bootloader, partition table and application.</p>
+            <p>Every release ships <code class="code-inline">firmware-&lt;version&gt;-esp32c6-full.bin</code>, a complete image containing the bootloader, partition table and application.</p>
             <ol>
-                <li>Download <code class="code-inline">firmware-&lt;version&gt;-full.bin</code> from <a href="https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/releases" target="_blank">Releases</a>.</li>
+                <li>Download <code class="code-inline">firmware-&lt;version&gt;-esp32c6-full.bin</code> from <a href="https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/releases" target="_blank">Releases</a>.</li>
                 <li>Open <a href="https://espressif.github.io/esp-launchpad/" target="_blank">Espressif's ESP Launchpad</a> in <strong>Chrome or Edge</strong> — it flashes over WebSerial, which Firefox and Safari do not support.</li>
                 <li>Open the <strong>DIY</strong> tab, connect the board over USB, click <strong>Connect</strong> and pick its serial port.</li>
                 <li>Select the <code class="code-inline">.bin</code> file and set the flash address to <strong><code class="code-inline">0x0</code></strong>.</li>
@@ -368,8 +397,8 @@ duration = 10
             <p><strong>The address is <code class="code-inline">0x0</code>, not <code class="code-inline">0x1000</code>.</strong> The ESP32-C6 places its bootloader at zero; <code class="code-inline">0x1000</code> is the offset used by the older Xtensa parts, and using it produces an image that will not boot.</p>
             <p>You do not need to erase the flash first — the image already spans it. Your settings are safe either way: they live on the SD card in <code class="code-inline">/config.ini</code>, not in flash.</p>
             <p>If you prefer a command line, the same image works with <a href="https://github.com/espressif/esptool" target="_blank">esptool</a>:</p>
-            <pre><code>esptool --chip esp32c6 write-flash 0x0 firmware-&lt;version&gt;-full.bin</code></pre>
-            <p>Releases also contain <code class="code-inline">firmware-&lt;version&gt;-app.bin</code>, the application partition on its own, for reflashing over an existing install at <code class="code-inline">0x10000</code>. <strong>Use esptool for that one, not a browser flasher</strong> — esptool writes exactly the offset given and erases only the sectors it touches, whereas a browser tool makes it easy to erase the chip or write to the wrong address, either of which removes the bootloader and leaves the board unable to boot. Recover by flashing <code class="code-inline">firmware-&lt;version&gt;-full.bin</code> at <code class="code-inline">0x0</code> again.</p>
+            <pre><code>esptool --chip esp32c6 write-flash 0x0 firmware-&lt;version&gt;-esp32c6-full.bin</code></pre>
+            <p>Releases also contain <code class="code-inline">firmware-&lt;version&gt;-esp32c6-app.bin</code>, the application partition on its own, for reflashing over an existing install at <code class="code-inline">0x10000</code>. <strong>Use esptool for that one, not a browser flasher</strong> — esptool writes exactly the offset given and erases only the sectors it touches, whereas a browser tool makes it easy to erase the chip or write to the wrong address, either of which removes the bootloader and leaves the board unable to boot. Recover by flashing <code class="code-inline">firmware-&lt;version&gt;-esp32c6-full.bin</code> at <code class="code-inline">0x0</code> again.</p>
 
             <h3>Option B — Build from source</h3>
             <ol>
@@ -400,24 +429,15 @@ duration = 10
             </div>
         </section>
         
-        <section id="architecture">
-            <h2>🏗 Architecture Notes</h2>
-            <ul>
-                <li><strong>No blocking calls in <code>loop()</code>:</strong> Everything runs as LVGL timer callbacks.</li>
-                <li><strong>SD ↔ LVGL filesystem bridge:</strong> Allows `lv_gif_set_src("S:/...")` natively.</li>
-                <li><strong>DST-aware timekeeping:</strong> `configTzTime` sets POSIX TZ handling DST automatically.</li>
-                <li><strong>Emotion tilt in-place swap:</strong> Swaps the GIF path dynamically based on IMU data without rebuilding the overlay.</li>
-                <li><strong>Gyro shake/tilt trigger:</strong> <code>app_gyro_poll_cb()</code> runs as a 150 ms LVGL timer while RPS or Dice is active. It detects a physical shake via |ΔaccelZ| &gt; 1.8 g between consecutive samples, and a hard tilt via |accelY| &gt; 1.0 g. Both call <code>app_screen_start()</code> identically to a tap. The timer is created on game start and deleted on exit.</li>
-                <li><strong>Metronome hardware timer:</strong> Beat timing uses two <code>esp_timer</code> hardware timers running outside the LVGL loop. <code>metro_hw_beat_cb()</code> writes directly to <code>ledcChangeFrequency()</code> (safe from timer task context) and sets a volatile flag. A 20 ms LVGL poll timer reads the flag and updates dot colours on the LVGL thread. BPM changes stop and restart the periodic timer with the new period (60,000,000 / bpm µs).</li>
-                <li><strong>WiFi state machine:</strong> <code>WiFiMulti</code> removed — its blocking channel scan stalled LVGL on every reconnect. Non-blocking <code>WiFi.begin()</code> plus a <code>WiFi.onEvent()</code> disconnect-reason handler tell a rejected password from an unreachable network apart: repeated auth failures trigger an automatic AP rescue, everything else backs off the radio 30s→10min between attempts, fully powered down in between.</li>
-                <li><strong>Web configuration server:</strong> <code>WebServer</code> on port 80, routes registered once and shared between WiFi and AP modes as the radio comes and goes. Boot PIN seeded from <code>esp_timer_get_time()</code>; authorises only the web UI's mutating routes — the AP hotspot itself is open, no WPA2. <code>POST /config</code> re-injects the masked WiFi password from RAM before writing to SD. <code>POST /settime</code> calls <code>settimeofday()</code> directly. All mutating routes return 403 on PIN mismatch.</li>
-            </ul>
-        </section>
 
         <section id="disclaimer" class="card warning">
             <h2>⚠️ Disclaimer — ASCII Art</h2>
             <p>Some coin flip ASCII art displayed in the Apps Menu was sourced from <a href="https://www.asciiart.eu/video-games/pokemon" target="_blank">asciiart.eu</a>. All Pokémon characters and names are trademarks of <strong>The Pokémon Company International</strong>. This project is not affiliated with, sponsored by, or endorsed by The Pokémon Company. The art is used here solely for non-commercial, personal, educational purposes.</p>
         </section>
+        <p style="margin-top:2.5rem;padding-top:1rem;border-top:1px solid var(--border-color);font-size:0.85rem;color:var(--secondary-text);text-align:center;">
+            These pages describe the <strong>ESP32-C6</strong> build. The project has since been adapted to run on <strong>ESP32-S3</strong> hardware as well, from the same source — you may read more about dual-board support in the <a href="https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock#readme" target="_blank" rel="noopener">README</a>.
+        </p>
+
     </main>
 
     <footer>

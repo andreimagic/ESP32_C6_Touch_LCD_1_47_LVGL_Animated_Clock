@@ -5,12 +5,19 @@
  * A smart animated clock for kids built on the ESP32-C6, driven by LVGL v9.
  * Displays the time in large digits, plays GIF animations on a schedule,
  * sounds a buzzer alarm, and controls brightness via tilt.
- * All user settings live in /config.ini on the SD card — no recompile needed.
+ * All user settings live in /config.ini, read from whichever filesystem
+ * mounted at boot: SD card if one is present, otherwise the internal FAT
+ * partition on boards that have one. No recompile needed either way.
  *
- * Board  : ESP32-C6 Dev Module
- * Display: ST7789 172×320 (landscape) via Arduino_GFX
+ * Boards : ESP32-C6 Dev Module  (ESP32-C6-Touch-LCD-1.47)
+ *          ESP32S3 Dev Module  (ESP32-S3-Touch-LCD-1.47)
+ *          Pins and capabilities are selected in board_config.h.
+ * Display: JD9853 172×320 (landscape), ST7789 command set, via Arduino_GFX
  * Touch  : AXS5106L (I²C)
- * IMU    : QMI8658 (I²C, shared bus with touch)
+ * IMU    : QMI8658 (I²C, shared bus with touch) — C6 ONLY.
+ *          The S3 board has no accelerometer, so tilt-to-brightness and the
+ *          three tilt-steered games (Tennis Letters, Letters Rain, Snake
+ *          Letters) are hidden from the apps carousel on that target.
  *
  * lv_conf.h requirements:
  *   LV_USE_GIF             = 1
@@ -34,8 +41,10 @@
 #include "esp_lcd_touch_axs5106l.h"
 #include <Arduino_GFX_Library.h>
 #include <SD.h>
+#include <FFat.h>          // internal-flash fallback (see STORAGE below)
 #include <SPI.h>
 #include <WiFi.h>
+#include <esp_mac.h>
 // WiFiMulti removed in v2.8.0 — WiFiMulti::run() performs a *blocking* full
 // channel scan (~1.5-3 s) on every call while disconnected, which stalled LVGL
 // and kept the radio+CPU busy whenever the SSID was absent or the password
@@ -56,7 +65,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v2.7.2"
+#define FW_VERSION      "v3.0.0"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -71,9 +80,16 @@ enum WifiCfgMode : uint8_t { WCFG_WIFI = 0, WCFG_AP = 1, WCFG_OFF = 2 };
 struct AppConfig {
   char wifi_ssid[64]                 = "myhomewifi";     // [wifi] ssid
   char wifi_password[64]             = "changeme";       // [wifi] password
+  char wifi_hostname[32]             = "esp32clock";     // [wifi] hostname -> <name>.local
+                                                  // Configurable because it is the one name
+                                                  // that must be unique on the LAN: two clocks
+                                                  // both answering to esp32clock.local collide.
   char ntp_server[64]                = "pool.ntp.org";   // [clock] ntp_server
   char tz_string[48]                 = "CET-1CEST,M3.5.0,M10.5.0/3"; // [clock] tz (POSIX — set once, handles DST forever)
-  uint8_t wifi_mode                  = WCFG_WIFI; // [wifi] mode (wifi|ap|off)
+  uint8_t wifi_mode                  = WCFG_AP;   // [wifi] mode (wifi|ap|off)
+                                                  // AP by default: with no config there are no
+                                                  // real credentials either, and the web UI is
+                                                  // the only way to set them on internal flash.
   bool alarm_enabled                 = false;   // [alarm] enabled
   int  alarm_hour                    = 7;       // [alarm] time HH
   int  alarm_minute                  = 0;       // [alarm] time MM
@@ -117,21 +133,13 @@ struct AppConfig {
   int  birthday_count         = 2;   // number of parsed birthday entries
 } cfg;
 
-// ─── Pin definitions ─────────────────────────────────────────────────────────
-#define ROTATION        1
-#define GFX_BL          23
-#define BUZZER_PIN      5    // Passive buzzer — connect between GPIO5 and GND
-#define SD_CS           4
-#define SD_SCK          1
-#define SD_MOSI         2
-#define SD_MISO         3
-
-#define Touch_I2C_SDA   18
-#define Touch_I2C_SCL   19
-#define Touch_RST       20
-#define Touch_INT       21
-
-#define BAT_PIN         0
+// ─── Board configuration ─────────────────────────────────────────────────────
+// Every pin assignment and per-board capability flag lives in board_config.h,
+// which selects on CONFIG_IDF_TARGET_*. Supported targets:
+//   ESP32-C6-Touch-LCD-1.47   (8MB flash, QMI8658 IMU)
+//   ESP32-S3-Touch-LCD-1.47   (16MB flash + 8MB PSRAM, no IMU)
+// Selecting any other board is a deliberate compile error.
+#include "board_config.h"
 
 // ─── GIF paths — SD card root is mapped to LVGL drive letter "S" ──────────────
 #define GIF_SMILE_PATH    "S:/cruzr_emotions/cruzr_smile.gif"
@@ -141,6 +149,10 @@ struct AppConfig {
 #define GIF_ALARM_PATH    "S:/cruzr_emotions/alarm_animation.gif"
 #define GIF_TIMER_PATH    "S:/cruzr_emotions/timer_animation.gif"
 #define GIF_BIRTHDAY_PATH "S:/cruzr_emotions/happybirthday.gif"
+
+// Same directory as the paths above, without the LVGL drive letter — filesystem
+// calls (SD./FFat./STORAGE->) never take one.
+#define GIF_DIR_FS        "/cruzr_emotions"
 
 // ─── Forward declarations ─────────────────────────────────────────────────────
 static void home_screen_init(void);
@@ -171,11 +183,11 @@ static void generate_ap_pin(void);
 
 
 // ─── Display ─────────────────────────────────────────────────────────────────
-Arduino_DataBus *bus = new Arduino_HWSPI(15 /* DC */, 14 /* CS */, 1 /* SCK */, 2 /* MOSI */);
+Arduino_DataBus *bus = BOARD_NEW_LCD_BUS();
 Arduino_GFX    *gfx = new Arduino_ST7789(
-  bus, 22 /* RST */, 0 /* rotation */, false /* IPS */,
-  172 /* width */, 320 /* height */,
-  34, 0, 34, 0);
+  bus, LCD_RST, 0 /* rotation */, false /* IPS */,
+  LCD_H_RES /* width */, LCD_V_RES /* height */,
+  LCD_COL_OFFSET, LCD_ROW_OFFSET, LCD_COL_OFFSET, LCD_ROW_OFFSET);
 
 // ─── LVGL display dimensions ─────────────────────────────────────────────────
 // Set after gfx->begin(); used by the display driver and GIF size checks.
@@ -251,7 +263,127 @@ lv_timer_t *wifi_timer     = nullptr;
 lv_obj_t   *home_bell_lbl  = nullptr;  // bell icon shown on home when alarm ON
 lv_obj_t   *alarm_cont     = nullptr;  // alarm editor screen
 
-bool sdCardAvailable  = false;
+bool sdCardAvailable  = false;   // literally: a card is mounted
+
+// ── Storage backend ──────────────────────────────────────────────────────────
+// GIFs and config.ini are reached through STORAGE, which points at whichever
+// filesystem mounted at boot. Precedence is SD first, internal flash second,
+// so inserting a card always wins and you can never be silently served a
+// stale internal copy. Exactly ONE backend is live at a time, never both.
+//
+// The runtime log (/last_seen.txt) is deliberately NOT routed through STORAGE.
+// It grows without bound, so it stays on the card only. Note the consequence:
+// restore_time_from_log() reads that same file, so RTC recovery after power
+// loss is unavailable when running from internal flash. Route the log through
+// STORAGE too if you would rather have the clock restore than the size cap.
+fs::FS *STORAGE           = nullptr;
+bool    storageAvailable  = false;   // some filesystem is mounted
+bool    storageIsInternal = false;   // true when that filesystem is FFat
+// FFat is mounted. Not the same as storageIsInternal: when a card wins, FFat is
+// still mounted alongside it so provision_internal_flash() can mirror the card
+// across, while STORAGE keeps pointing at the card.
+bool    ffatMounted       = false;
+
+// ── mDNS hostname ────────────────────────────────────────────────────────────
+// A hostname is a DNS label, not free text: letters, digits and hyphens only,
+// no dots or spaces, and it may not begin or end with a hyphen. A bad value
+// would make mdns_hostname_set() fail and leave the device reachable only by
+// IP — with the UI still cheerfully printing a .local address that resolves to
+// nothing. So the value is normalised on the way in rather than trusted:
+// uppercase is folded, invalid characters become hyphens, runs are collapsed,
+// and anything left empty falls back to the default.
+static void sanitize_hostname(char *dst, size_t dstlen, const char *src)
+{
+  size_t o = 0;
+  bool   prev_hyphen = true;            // leading hyphens are dropped
+  for (size_t i = 0; src[i] && o + 1 < dstlen; i++) {
+    char c = src[i];
+    if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+    if (ok) { dst[o++] = c; prev_hyphen = false; }
+    else if (!prev_hyphen) { dst[o++] = '-'; prev_hyphen = true; }
+  }
+  while (o > 0 && dst[o - 1] == '-') o--;   // and trailing ones
+  dst[o] = '\0';
+  if (o == 0) snprintf(dst, dstlen, "esp32clock");
+}
+
+// "http://<hostname>.local", built from the live config so the UI can never
+// advertise a name the device is not actually registered under. The static
+// buffer is fine here: every caller consumes it immediately.
+static const char *mdns_url()
+{
+  static char buf[48];
+  snprintf(buf, sizeof(buf), "http://%s.local", cfg.wifi_hostname);
+  return buf;
+}
+
+static inline const char *storage_label()
+{
+  return !storageAvailable  ? "none"
+       :  storageIsInternal ? "Internal flash (FFat)"
+                            : "SD card";
+}
+
+// ── Storage capacity ─────────────────────────────────────────────────────────
+// freeBytes() exists only on FFat. SD has no equivalent, so it is derived from
+// totalBytes()/usedBytes(). Both are whole-filesystem figures, and neither is
+// reachable through the fs::FS base class that STORAGE points at — hence the
+// branch on storageIsInternal rather than a virtual call.
+//
+// uint64_t throughout because SD reports 64-bit sizes while FFat is size_t
+// (32-bit here); mixing them truncates silently on a large card.
+static uint64_t storage_total_bytes()
+{
+  if (!storageAvailable) return 0;
+  return storageIsInternal ? (uint64_t)FFat.totalBytes() : SD.totalBytes();
+}
+
+static uint64_t storage_free_bytes()
+{
+  if (!storageAvailable) return 0;
+  if (storageIsInternal) return (uint64_t)FFat.freeBytes();
+  uint64_t t = SD.totalBytes(), u = SD.usedBytes();
+  return t > u ? t - u : 0;
+}
+
+// ── Path validation — the file manager's only security boundary ──────────────
+// Every web-supplied path is checked here before it reaches the filesystem.
+// Rejecting ".." is what stops a crafted request reading or deleting outside
+// the tree; rejecting control characters and quotes keeps the same string safe
+// to interpolate into the Content-Disposition header and into HTML attributes.
+static bool path_is_safe(const String &p)
+{
+  if (p.length() < 2 || p.length() > 96) return false;
+  if (p[0] != '/')                       return false;
+  if (p.indexOf("..")  >= 0)             return false;
+  if (p.indexOf('\\')  >= 0)             return false;
+  if (p.indexOf("//")  >= 0)             return false;
+  if (p.indexOf('"')   >= 0)             return false;
+  for (unsigned i = 0; i < p.length(); i++) {
+    uint8_t c = (uint8_t)p[i];
+    if (c < 0x20 || c == 0x7f) return false;
+  }
+  return true;
+}
+
+// Escape for HTML text and single-quoted attributes. Filenames come off the
+// filesystem, not from path_is_safe(), so they are escaped rather than trusted.
+static String html_escape(const String &s)
+{
+  String o;
+  o.reserve(s.length() + 12);
+  for (unsigned i = 0; i < s.length(); i++) {
+    char c = s[i];
+    if      (c == '&')  o += F("&amp;");
+    else if (c == '<')  o += F("&lt;");
+    else if (c == '>')  o += F("&gt;");
+    else if (c == '"')  o += F("&quot;");
+    else if (c == '\'') o += F("&#39;");
+    else                o += c;
+  }
+  return o;
+}
 bool boot_from_sleep      = false;  // true when waking from deep sleep via BOOT btn
 uint32_t boot_millis       = 0;     // millis() captured at start of setup()
 bool     alarm_ntp_pending = false; // alarm held waiting for NTP sync after wake
@@ -284,6 +416,11 @@ bool      imuReady  = false;
 // ─── Brightness + tilt timer handles — valid only while Status screen is open ─
 lv_obj_t   *label_brightness = nullptr;
 lv_timer_t *tilt_timer         = nullptr;
+// Set when a left/right swipe has just adjusted the brightness. LVGL still
+// delivers LV_EVENT_CLICKED on release after a gesture (the overlay is not
+// scrollable, so nothing suppresses the click), which would close the status
+// screen mid-adjust. overlay_close_event_cb() consumes this flag instead.
+bool        swipe_consumed_tap = false;
 bool        emotion_tilt_active = false;   // true while UL smile GIF is open
 const char *emotion_current_gif = nullptr; // tracks which GIF is showing
 lv_timer_t *buzzer_timer      = nullptr;  // alarm beep pattern timer
@@ -305,17 +442,30 @@ lv_obj_t   *home_timer_lbl  = nullptr;  // small label bottom-left when running
 
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  SD ↔ LVGL FILESYSTEM BRIDGE  (drive letter "S")
+//  STORAGE ↔ LVGL FILESYSTEM BRIDGE  (drive letter "S")
 //  Registers 6 callbacks (open/close/read/write/seek/tell) so that LVGL
-//  widgets (lv_gif, lv_img, lv_font_load) can open SD files transparently.
+//  widgets (lv_gif, lv_img, lv_font_load) can open files transparently.
+//  This is the single chokepoint for every GIF path: swapping STORAGE swaps
+//  the backing filesystem for all of them at once. The drive letter stays
+//  "S" whichever backend is live, so no GIF_*_PATH macro ever changes.
 // ══════════════════════════════════════════════════════════════════════════════
 struct LvSdFile { File f; };
+
+// LVGL paths carry the drive letter ("S:/dir/file.gif"); STORAGE does not.
+// Strip it so a path can be probed with STORAGE->exists() before handing it
+// to a widget, since lv_gif_set_src() fails silently on a missing file and
+// leaves nothing but an empty overlay on screen.
+static inline const char *storage_path(const char *lv_path)
+{
+  return (lv_path && lv_path[0] && lv_path[1] == ':') ? lv_path + 2 : lv_path;
+}
 
 static void *lvgl_sd_open(lv_fs_drv_t * /*drv*/, const char *path, lv_fs_mode_t mode)
 {
   const char *sdMode = (mode == LV_FS_MODE_WR) ? FILE_WRITE : FILE_READ;
+  if (!STORAGE) return nullptr;
   LvSdFile *fp = new LvSdFile();
-  fp->f = SD.open(path, sdMode);
+  fp->f = STORAGE->open(path, sdMode);
   if (!fp->f) { delete fp; return nullptr; }
   return (void *)fp;
 }
@@ -500,6 +650,19 @@ void backlight_init()
   Serial.printf("[BL] Backlight init at %d%% (PWM=%d)\n", brightnessPercent, pwm);
 }
 
+// Status-screen brightness row. Both the initial draw and every later update go
+// through here so the two cannot drift apart — they previously did, and the
+// "(tilt to adjust)" hint disappeared the moment the value first changed.
+// Tilt is only advertised when an IMU actually answered at boot; swipe works on
+// every board.
+static void brightness_label_refresh(int percent)
+{
+  if (!label_brightness) return;
+  lv_label_set_text_fmt(label_brightness,
+                        LV_SYMBOL_IMAGE "  Brightness: %d%%  (%s)",
+                        percent, imuReady ? "tilt or swipe" : "swipe to adjust");
+}
+
 void set_brightness(int percent)
 {
   if (percent < 1)   percent = 1;
@@ -509,9 +672,7 @@ void set_brightness(int percent)
   ledcWrite(GFX_BL, pwm);
   Serial.printf("[BL] Brightness %d%% (PWM=%d)\n", percent, pwm);
   // Update label if status screen is open
-  if (label_brightness) {
-    lv_label_set_text_fmt(label_brightness, LV_SYMBOL_IMAGE "  Brightness: %d%%", percent);
-  }
+  brightness_label_refresh(percent);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -567,11 +728,357 @@ static char *ini_trim(char *s)
   return s;
 }
 
+// ── Default config.ini ───────────────────────────────────────────────────────
+// Written verbatim on first boot when the active storage has no config.ini.
+// Every value below matches the AppConfig struct defaults exactly, so a device
+// behaves identically whether or not the file exists. That includes [wifi]
+// mode = ap: with no config there are no real credentials either, so the
+// device should come up reachable rather than chase a placeholder SSID.
+//
+// Keys and sections here are exactly those load_config() accepts; adding a key
+// the parser does not know is harmless but silently ignored.
+static const char DEFAULT_CONFIG_INI[] PROGMEM =
+R"INI(# ============================================================
+#  ESP32 Animated Clock — configuration
+#  Edit here or through the web UI, then reboot for [wifi] changes.
+#  Lines starting with # are comments and are preserved on save.
+# ============================================================
+
+[clock]
+# NTP is only used in wifi mode. tz is a POSIX string: set once, DST forever.
+ntp_server = pool.ntp.org
+tz = CET-1CEST,M3.5.0,M10.5.0/3
+
+[wifi]
+# mode: wifi = join the network below | ap = own hotspot | off = radio down
+mode = ap
+ssid = myhomewifi
+password = changeme
+# Reached at http://<hostname>.local in wifi mode. Must be unique on your
+# network — give a second clock its own name, e.g. esp32clock2.
+hostname = esp32clock
+
+[alarm]
+enabled = false
+time = 07:00
+# beep_sequences: 0 = keep beeping until touched
+beep_sequences = 5
+
+[timer]
+# duration is HH:MM
+duration = 00:00
+beep_sequences = 3
+
+[animation]
+# Play an emotion GIF on the hour. duration is seconds (3-60).
+schedule = true
+duration = 10
+
+[menu]
+sounds = true
+
+[birthdays]
+# Up to 8 entries, DD-MM-YYYY, comma separated. Only day and month are matched.
+dates = 01-01-1970,06-08-2017
+
+[tennis]
+high_score = 0
+paddle_size = 6
+ball_speed_ms = 500
+ball_speed_min_ms = 200
+ball_speed_change_ms = 10
+paddle_speed_ms = 250
+paddle_speed_min_ms = 100
+paddle_speed_change_ms = 5
+
+[letter_rain]
+last_score = 0
+paddle_size = 6
+max_entities = 5
+fall_speed_ms = 850
+fall_speed_min_ms = 600
+fall_speed_change_ms = 10
+paddle_speed_ms = 150
+paddle_speed_min_ms = 50
+paddle_speed_change_ms = 5
+
+[snake]
+high_score = 0
+snake_size = 3
+snake_speed_ms = 600
+snake_speed_min_ms = 200
+snake_speed_change_ms = 5
+vertical_walls = true
+horizontal_walls = false
+distractions = 3
+next_level_score = 10
+)INI";
+
+// ── Create config.ini when the active storage has none ───────────────────────
+// A blank SD card used to mean "user forgot the file", and save_config() would
+// eventually produce one. On a freshly formatted FFat partition that is simply
+// the normal first-boot state, and save_config() only rewrites the sections it
+// manages -- [clock], [animation] and [birthdays] would never appear. So write
+// the full template up front instead, before load_config() reads it.
+//
+// Returns true only when a file was actually created.
+// FAT cannot atomically replace an existing file, so save_config() and the web
+// editor both remove config.ini and then rename config.tmp over it. Lose power
+// between those two calls and the device comes up with no config.ini at all and
+// an orphan config.tmp holding the real settings — which bootstrap_config()
+// would then paper over with defaults, silently discarding WiFi credentials.
+// On internal flash there is no card to restore from, so recover it here.
+//
+// Must run BEFORE bootstrap_config(). If both files exist the swap completed
+// and the temp is simply stale, so it is cleaned up rather than promoted.
+static void recover_interrupted_config()
+{
+  if (!storageAvailable || !STORAGE)    return;
+  if (!STORAGE->exists("/config.tmp"))  return;
+
+  if (STORAGE->exists("/config.ini")) {
+    STORAGE->remove("/config.tmp");
+    Serial.println("[CFG] removed a stale config.tmp left by an earlier save");
+    return;
+  }
+
+  if (STORAGE->rename("/config.tmp", "/config.ini"))
+    Serial.println("[CFG] recovered config.ini from an interrupted save");
+  else
+    Serial.println("[CFG] found config.tmp but could not rename it into place");
+}
+
+static bool bootstrap_config()
+{
+  if (!storageAvailable || !STORAGE)      return false;
+  if (STORAGE->exists("/config.ini"))     return false;
+
+  File f = STORAGE->open("/config.ini", FILE_WRITE);
+  if (!f) {
+    Serial.printf("[CFG] bootstrap: cannot create config.ini on %s\n", storage_label());
+    return false;
+  }
+  // PROGMEM on ESP32 is ordinary flash-mapped rodata, so this reads directly.
+  const size_t len = strlen(DEFAULT_CONFIG_INI);
+  const size_t written = f.write((const uint8_t *)DEFAULT_CONFIG_INI, len);
+  f.close();
+
+  if (written != len) {
+    Serial.printf("[CFG] bootstrap: short write (%u/%u bytes)\n",
+                  (unsigned)written, (unsigned)len);
+    return false;
+  }
+  Serial.printf("[CFG] No config.ini on %s — wrote defaults (%u bytes).\n",
+                storage_label(), (unsigned)len);
+  return true;
+}
+
+#if BOARD_HAS_INTERNAL_FS
+// ══════════════════════════════════════════════════════════════════════════════
+//  INTERNAL-FLASH PROVISIONING
+//  Mirrors the card's animations and config.ini onto the on-chip FAT partition,
+//  so the board keeps working once the card is removed: insert a card once, run
+//  cardless afterwards.
+//
+//  Runs with BOTH filesystems mounted — which is why the mount block begins FFat
+//  even when a card wins. STORAGE still points at the card throughout; every
+//  write here goes through FFat explicitly, never through STORAGE, so the copy
+//  direction can never be ambiguous.
+//
+//  While a card is inserted it is the master copy. A GIF is skipped when name and
+//  size already match, which makes this idempotent and near-free on every later
+//  boot, and re-copies only what actually changed. config.ini is always refreshed
+//  instead of size-compared: a text edit easily preserves the byte count.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// One file, copied in chunks through a temp name that is renamed into place only
+// after a complete write. A power cut mid-copy therefore leaves no truncated GIF
+// behind — which would otherwise render as exactly the blank screen the rest of
+// this firmware works to avoid.
+static bool provision_copy_file(const char *path, size_t *done, size_t total,
+                                lv_obj_t *pct_label)
+{
+  File src = SD.open(path, FILE_READ);
+  if (!src) { Serial.printf("[PROV] cannot read %s from card\n", path); return false; }
+
+  char tmp[80];
+  snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+  FFat.remove(tmp);                       // stale temp from an aborted run
+
+  File dst = FFat.open(tmp, FILE_WRITE);
+  if (!dst) {
+    Serial.printf("[PROV] cannot create %s on flash\n", tmp);
+    src.close();
+    return false;
+  }
+
+  // static, not stack: 4KB of stack here would be a real risk in setup().
+  static uint8_t buf[4096];
+  bool ok = true;
+  while (src.available()) {
+    size_t n = src.read(buf, sizeof(buf));
+    if (n == 0) break;
+    if (dst.write(buf, n) != n) { ok = false; break; }   // flash full
+    *done += n;
+    if (pct_label && total)
+      lv_label_set_text_fmt(pct_label, "%u%%", (unsigned)((*done * 100) / total));
+    lv_timer_handler();                   // keep the progress screen repainting
+  }
+  dst.close();
+  src.close();
+
+  if (!ok) {
+    Serial.printf("[PROV] write failed for %s — flash full?\n", path);
+    FFat.remove(tmp);
+    return false;
+  }
+  FFat.remove(path);                      // rename() will not overwrite
+  if (!FFat.rename(tmp, path)) {
+    Serial.printf("[PROV] rename failed for %s\n", path);
+    FFat.remove(tmp);
+    return false;
+  }
+  return true;
+}
+
+static void provision_internal_flash()
+{
+  if (!sdCardAvailable || !ffatMounted) return;
+
+  // ── Work out what needs copying before writing anything ───────────────────
+  struct { char name[48]; size_t size; } todo[16];
+  int    todo_n = 0;
+  size_t total  = 0;
+
+  File dir = SD.open(GIF_DIR_FS);
+  if (dir && dir.isDirectory()) {
+    File e = dir.openNextFile();
+    while (e && todo_n < (int)(sizeof(todo) / sizeof(todo[0]))) {
+      // name() is the basename on core 3.x; path() would carry the directory.
+      const char *bn  = e.name();
+      size_t      len = bn ? strlen(bn) : 0;
+      if (!e.isDirectory() && len > 4 && len < sizeof(todo[0].name) &&
+          strcasecmp(bn + len - 4, ".gif") == 0) {
+        char full[80];
+        snprintf(full, sizeof(full), "%s/%s", GIF_DIR_FS, bn);
+        File have = FFat.open(full, FILE_READ);
+        bool same = have && (size_t)have.size() == (size_t)e.size();
+        if (have) have.close();
+        if (!same) {
+          snprintf(todo[todo_n].name, sizeof(todo[todo_n].name), "%s", bn);
+          todo[todo_n].size = e.size();
+          total += e.size();
+          todo_n++;
+        }
+      }
+      e = dir.openNextFile();
+    }
+    dir.close();
+  } else {
+    Serial.printf("[PROV] no %s on card — nothing to mirror\n", GIF_DIR_FS);
+  }
+
+  // config.ini is always refreshed while a card is present (see header note).
+  File cfg_src = SD.open("/config.ini", FILE_READ);
+  size_t cfg_size = cfg_src ? cfg_src.size() : 0;
+  if (cfg_src) cfg_src.close();
+  total += cfg_size;
+
+  if (todo_n == 0 && cfg_size == 0) {
+    Serial.println("[PROV] internal flash already matches the card.");
+    return;
+  }
+
+  // ── Refuse rather than half-fill the partition ─────────────────────────────
+  size_t freeb = FFat.freeBytes();
+  if (total + 32768 > freeb) {          // 32KB margin for FAT metadata
+    Serial.printf("[PROV] need %u bytes, only %u free on flash — skipping.\n",
+                  (unsigned)total, (unsigned)freeb);
+    return;
+  }
+
+  if (!FFat.exists(GIF_DIR_FS) && !FFat.mkdir(GIF_DIR_FS)) {
+    Serial.printf("[PROV] cannot create %s on flash — skipping.\n", GIF_DIR_FS);
+    return;
+  }
+
+  Serial.printf("[PROV] mirroring %d GIF(s)%s to internal flash — %u KB\n",
+                todo_n, cfg_size ? " + config.ini" : "", (unsigned)(total / 1024));
+
+  // ── Progress screen ───────────────────────────────────────────────────────
+  // Built by hand rather than via make_overlay(): that attaches a tap-to-close
+  // handler and is meant for the interactive UI, which does not exist yet.
+  lv_obj_t *scr = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(scr, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_style_bg_color(scr, lv_color_make(10, 14, 26), 0);
+  lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(scr, 0, 0);
+  lv_obj_set_style_radius(scr, 0, 0);
+  lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t *title = lv_label_create(scr);
+  lv_label_set_text(title, LV_SYMBOL_DOWNLOAD "  Copying to internal flash");
+  lv_obj_set_style_text_color(title, lv_color_white(), 0);
+  lv_obj_align(title, LV_ALIGN_CENTER, 0, -30);
+
+  lv_obj_t *what = lv_label_create(scr);
+  lv_label_set_text(what, "");
+  lv_obj_set_style_text_color(what, lv_color_make(150, 160, 200), 0);
+  lv_obj_set_width(what, screenWidth - 20);
+  lv_label_set_long_mode(what, LV_LABEL_LONG_DOT);
+  lv_obj_set_style_text_align(what, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(what, LV_ALIGN_CENTER, 0, 0);
+
+  lv_obj_t *pct = lv_label_create(scr);
+  lv_label_set_text(pct, "0%");
+  lv_obj_set_style_text_color(pct, lv_color_make(120, 220, 140), 0);
+  lv_obj_align(pct, LV_ALIGN_CENTER, 0, 28);
+
+  lv_obj_t *note = lv_label_create(scr);
+  lv_label_set_text(note, "one-off — do not power off");
+  lv_obj_set_style_text_color(note, lv_color_make(110, 110, 130), 0);
+  lv_obj_align(note, LV_ALIGN_BOTTOM_MID, 0, -8);
+  lv_timer_handler();
+
+  // ── Copy ──────────────────────────────────────────────────────────────────
+  size_t done = 0;
+  int    okn = 0, failn = 0;
+
+  for (int i = 0; i < todo_n; i++) {
+    char full[80];
+    snprintf(full, sizeof(full), "%s/%s", GIF_DIR_FS, todo[i].name);
+    lv_label_set_text(what, todo[i].name);
+    lv_timer_handler();
+    if (provision_copy_file(full, &done, total, pct)) {
+      okn++;
+      Serial.printf("[PROV]   %s (%u bytes)\n", todo[i].name, (unsigned)todo[i].size);
+    } else {
+      failn++;
+      done += todo[i].size;               // keep the percentage monotonic
+    }
+  }
+
+  if (cfg_size) {
+    lv_label_set_text(what, "config.ini");
+    lv_timer_handler();
+    if (provision_copy_file("/config.ini", &done, total, pct)) okn++;
+    else                                                       failn++;
+  }
+
+  lv_obj_del(scr);
+  lv_timer_handler();
+
+  Serial.printf("[PROV] done — %d copied, %d failed. Flash now %u KB free.\n",
+                okn, failn, (unsigned)(FFat.freeBytes() / 1024));
+}
+#endif  // BOARD_HAS_INTERNAL_FS
+
 static void load_config()
 {
   Serial.println("[CFG] Loading /config.ini...");
 
-  File f = SD.open("/config.ini", FILE_READ);
+  if (!STORAGE) { Serial.println("[CFG] no storage mounted — using defaults."); return; }
+  File f = STORAGE->open("/config.ini", FILE_READ);
   if (!f) {
     Serial.println("[CFG] config.ini not found — using defaults.");
     return;
@@ -623,6 +1130,14 @@ static void load_config()
         strncpy(cfg.wifi_ssid, val, sizeof(cfg.wifi_ssid) - 1);
         Serial.printf("[CFG]   wifi.ssid     = %s\n", cfg.wifi_ssid);
       }
+      else if (strcmp(key, "hostname") == 0) {
+        sanitize_hostname(cfg.wifi_hostname, sizeof(cfg.wifi_hostname), val);
+        if (strcmp(cfg.wifi_hostname, val) != 0)
+          Serial.printf("[CFG]   wifi.hostname = %s  (adjusted from '%s')\n",
+                        cfg.wifi_hostname, val);
+        else
+          Serial.printf("[CFG]   wifi.hostname = %s\n", cfg.wifi_hostname);
+      }
       else if (strcmp(key, "password") == 0) {
         strncpy(cfg.wifi_password, val, sizeof(cfg.wifi_password) - 1);
         Serial.println("[CFG]   wifi.password = (hidden)");
@@ -630,9 +1145,12 @@ static void load_config()
       else if (strcmp(key, "mode") == 0) {
         // Anything unrecognised falls back to WiFi rather than silently
         // leaving the clock offline because of a typo.
-        if      (strcmp(val, "off") == 0 || strcmp(val, "OFF") == 0) cfg.wifi_mode = WCFG_OFF;
-        else if (strcmp(val, "ap")  == 0 || strcmp(val, "AP")  == 0) cfg.wifi_mode = WCFG_AP;
-        else                                                         cfg.wifi_mode = WCFG_WIFI;
+        if      (strcmp(val, "off")  == 0 || strcmp(val, "OFF")  == 0) cfg.wifi_mode = WCFG_OFF;
+        else if (strcmp(val, "wifi") == 0 || strcmp(val, "WIFI") == 0) cfg.wifi_mode = WCFG_WIFI;
+        else                                                           cfg.wifi_mode = WCFG_AP;
+        // Note the fallback is AP, not STA: an unrecognised value (typo, or a
+        // key we no longer understand) should leave the device reachable
+        // rather than chasing a network it was never told about correctly.
         wifi_mode_seen = true;
         Serial.printf("[CFG]   wifi.mode          = %s\n", wifi_cfg_mode_name());
       }
@@ -879,6 +1397,7 @@ static void load_config()
 }
 
 static void restore_time_from_log() {
+  // SD-only by design: the log lives on the card, so RTC recovery does too.
   if (!sdCardAvailable) return;
 
   File f = SD.open("/last_seen.txt", FILE_READ);
@@ -964,7 +1483,9 @@ static void log_last_seen() {
            t.tm_hour, t.tm_min, t.tm_sec, voltage);
 
   // 4. Append Mode: Write to last_seen.txt
-  // FILE_WRITE on ESP32 SD library defaults to appending/creating if it exists.
+  // Card-only by design — the log grows without bound, so it is never routed
+  // through STORAGE onto the internal flash partition.
+  if (!sdCardAvailable) return;
   File logFile = SD.open("/last_seen.txt", FILE_APPEND);
   if (logFile) {
     logFile.print(log_buf);
@@ -990,7 +1511,8 @@ static void save_config()
   int  lineCount = 0;
   bool inManaged = false;
 
-  File fr = SD.open(path, FILE_READ);
+  if (!STORAGE) { Serial.println("[CFG] save_config: no storage mounted"); return; }
+  File fr = STORAGE->open(path, FILE_READ);
   if (fr) {
     while (fr.available() && lineCount < 30) {
       int len = 0;
@@ -1025,8 +1547,12 @@ static void save_config()
     fr.close();
   }
 
-  File fw = SD.open(path, FILE_WRITE);
-  if (!fw) { Serial.println("[CFG] save_config: cannot open for write"); return; }
+  // Write to a temp file and swap it in, rather than truncating the live one.
+  // On a card a bad write is recoverable by re-imaging; on internal flash it
+  // is not, so never leave config.ini in a half-written state.
+  const char *tmp = "/config.tmp";
+  File fw = STORAGE->open(tmp, FILE_WRITE);
+  if (!fw) { Serial.println("[CFG] save_config: cannot open temp for write"); return; }
 
   // Preserved lines (clock / animation / birthdays / user comments).
   // fw.print + "\n" instead of fw.println to avoid the extra \r that
@@ -1041,6 +1567,7 @@ static void save_config()
   fw.printf("mode = %s\n",     wifi_cfg_mode_name());   // wifi | ap | off
   fw.printf("ssid = %s\n",     cfg.wifi_ssid);
   fw.printf("password = %s\n", cfg.wifi_password);
+  fw.printf("hostname = %s\n", cfg.wifi_hostname);
 
   fw.print("\n[alarm]\n");
   fw.printf("enabled = %s\n",        cfg.alarm_enabled ? "true" : "false");
@@ -1084,11 +1611,48 @@ static void save_config()
   fw.printf("vertical_walls = %s\n",       cfg.sn_vertical_walls   ? "true" : "false");
   fw.printf("horizontal_walls = %s\n",     cfg.sn_horizontal_walls ? "true" : "false");
   fw.printf("distractions = %d\n",         cfg.sn_distractions);
-  fw.printf("next_level_score = %d\n",     cfg.sn_next_level_score);
-
+  // ── Verify before swapping ────────────────────────────────────────────────
+  // The print()/printf() calls above are unchecked individually — there are
+  // around fifty and testing each would drown the function. Instead the final
+  // line is written explicitly and verified: a filesystem that filled at any
+  // point stays full for the rest of this function, so if anything was lost
+  // this last write fails too. File::write() does not set Print's write-error
+  // flag, so getWriteError() cannot be used for this.
+  //
+  // Without the check the swap below happily promotes a truncated temp file
+  // over a good config.ini — precisely the failure temp-then-swap exists to
+  // prevent, and unrecoverable on a board running from internal flash.
+  char tail[48];
+  const int  tail_len = snprintf(tail, sizeof(tail), "next_level_score = %d\n",
+                                 cfg.sn_next_level_score);
+  const bool tail_ok  = tail_len > 0 &&
+                        fw.write((const uint8_t *)tail, (size_t)tail_len) == (size_t)tail_len;
+  const size_t claimed = fw.position();
   fw.close();
 
-  Serial.println("[CFG] Saved wifi/alarm/timer/menu/tennis/letter_rain/snake.");
+  // Re-stat rather than trust the handle: this is the size that survived.
+  File chk = STORAGE->open(tmp, FILE_READ);
+  const size_t actual = chk ? (size_t)chk.size() : 0;
+  if (chk) chk.close();
+
+  // The managed sections alone run to several hundred bytes, so anything this
+  // small is a fragment rather than a legitimately terse config.
+  if (!tail_ok || actual != claimed || actual < 256) {
+    Serial.printf("[CFG] save_config: temp file incomplete (%u on disk, %u written)"
+                  " — keeping the existing config.ini\n",
+                  (unsigned)actual, (unsigned)claimed);
+    STORAGE->remove(tmp);
+    return;
+  }
+
+  STORAGE->remove(path);
+  if (!STORAGE->rename(tmp, path)) {
+    Serial.println("[CFG] save_config: rename failed — config.tmp left in place");
+    return;
+  }
+
+  Serial.printf("[CFG] Saved to %s (wifi/alarm/timer/menu/tennis/letter_rain/snake).\n",
+                storage_label());
   
   // Save the current timestamp to the log file as well
   log_last_seen();
@@ -1100,10 +1664,10 @@ static void save_config()
 // web UI always shows all tennis settings from the very first power-on.
 static void seed_tennis_config()
 {
-  if (!sdCardAvailable) return;
+  if (!storageAvailable || !STORAGE) return;
 
   // Check whether [tennis] is already in the file
-  File fr = SD.open("/config.ini", FILE_READ);
+  File fr = STORAGE->open("/config.ini", FILE_READ);
   if (!fr) return;  // no file at all — save_config() will create it later
   bool found = false;
   char line[64];
@@ -1128,7 +1692,7 @@ static void seed_tennis_config()
   }
 
   // Append the section with current (default) values
-  File fa = SD.open("/config.ini", FILE_APPEND);
+  File fa = STORAGE->open("/config.ini", FILE_APPEND);
   if (!fa) { Serial.println("[CFG] seed_tennis_config: cannot open for append"); return; }
   fa.println();
   fa.println("[tennis]");
@@ -1150,9 +1714,9 @@ static void seed_tennis_config()
 // web UI always shows all letter_rain settings from the very first power-on.
 static void seed_letter_rain_config()
 {
-  if (!sdCardAvailable) return;
+  if (!storageAvailable || !STORAGE) return;
 
-  File fr = SD.open("/config.ini", FILE_READ);
+  File fr = STORAGE->open("/config.ini", FILE_READ);
   if (!fr) return;  // no file at all — save_config() will create it later
   bool found = false;
   char line[64];
@@ -1177,7 +1741,7 @@ static void seed_letter_rain_config()
   }
 
   // Append the section with current (default) values
-  File fa = SD.open("/config.ini", FILE_APPEND);
+  File fa = STORAGE->open("/config.ini", FILE_APPEND);
   if (!fa) { Serial.println("[CFG] seed_letter_rain_config: cannot open for append"); return; }
   fa.println();
   fa.println("[letter_rain]");
@@ -1200,9 +1764,9 @@ static void seed_letter_rain_config()
 // web UI always shows all snake settings from the very first power-on.
 static void seed_snake_config()
 {
-  if (!sdCardAvailable) return;
+  if (!storageAvailable || !STORAGE) return;
 
-  File fr = SD.open("/config.ini", FILE_READ);
+  File fr = STORAGE->open("/config.ini", FILE_READ);
   if (!fr) return;  // no file at all — save_config() will create it later
   bool found = false;
   char line[64];
@@ -1227,7 +1791,7 @@ static void seed_snake_config()
   }
 
   // Append the section with current (default) values
-  File fa = SD.open("/config.ini", FILE_APPEND);
+  File fa = STORAGE->open("/config.ini", FILE_APPEND);
   if (!fa) { Serial.println("[CFG] seed_snake_config: cannot open for append"); return; }
   fa.println();
   fa.println("[snake]");
@@ -1369,11 +1933,14 @@ static void start_ap_mode()
   // Name the hotspot after the radio's own MAC so several units in one house
   // stay tellable apart, e.g. "ESP32-Clock-8AF8A5". The suffix is the same three
   // bytes the IDF uses for its own "ESP_xxxxxx" default name.
-  String apmac = WiFi.softAPmacAddress();     // "8A:F8:A5:12:34:56"
-  apmac.replace(":", "");
-  if (apmac.length() >= 6)
-    snprintf(ap_ssid, sizeof(ap_ssid), "ESP32-Clock-%s",
-             apmac.substring(apmac.length() - 6).c_str());
+  // Read the MAC from eFuse rather than the AP interface: softAPmacAddress()
+  // queries a netif that does not exist until softAP() runs a few lines below,
+  // and returns all zeros before then. esp_read_mac() is independent of WiFi
+  // state and yields the same three bytes the IDF uses for "ESP_xxxxxx".
+  uint8_t apmac[6] = {0};
+  if (esp_read_mac(apmac, ESP_MAC_WIFI_SOFTAP) == ESP_OK)
+    snprintf(ap_ssid, sizeof(ap_ssid), "ESP32-Clock-%02X%02X%02X",
+             apmac[3], apmac[4], apmac[5]);
 
   // Deliberately OPEN — no WPA2 passphrase. Joining the hotspot is meant to be
   // frictionless; ap_pin is not a WiFi key, it authorises the mutating web
@@ -1567,6 +2134,187 @@ function build(){
 build();
 </script></body></html>)HTML";
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  WEB FILE MANAGER
+//  Flat recursive listing with download / delete / upload, all on STORAGE, so
+//  it works the same on an SD card and on internal flash.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// One table row per file, plus a <option> per directory for the upload target.
+// File::name() is only the basename in core 3.x, so path() is what gets shown
+// and round-tripped back as ?path=. Depth is capped so a corrupt directory
+// chain cannot recurse forever.
+//
+// Handle budget — this is what sets FILES_MAX_DEPTH. One directory handle stays
+// open per level on the stack, plus a transient file handle while iterating, and
+// the LVGL GIF decoder holds another for as long as an animation is playing. SD
+// is mounted with the library default of 5 slots, so the worst case must fit:
+//
+//     (depth + 1) dir handles  +  1 file  +  1 GIF  <=  5   ->  depth <= 2
+//
+// Raising max_files instead would cost ~4KB of heap per slot (each carries an
+// FF_MAX_SS sector cache), which the C6 cannot spare. Exceeding the budget is
+// not a clean failure: openNextFile() simply returns an invalid File, which is
+// indistinguishable from the end of a directory, so the listing would quietly
+// lose files. `deeper` is set when the cap stops a descent, so the page can say
+// so out loud instead.
+#define FILES_MAX_DEPTH 2
+
+static void files_walk(const String &dir, int depth,
+                       String &rows, String &dirOpts,
+                       uint32_t &count, uint64_t &bytes, bool &deeper)
+{
+  if (!STORAGE) return;
+  if (depth > FILES_MAX_DEPTH) { deeper = true; return; }
+
+  File d = STORAGE->open(dir.c_str());
+  if (!d) return;
+  if (!d.isDirectory()) { d.close(); return; }
+
+  File f = d.openNextFile();
+  while (f) {
+    String full = f.path() ? String(f.path()) : String();
+    bool   isdir = f.isDirectory();
+    uint32_t sz = isdir ? 0 : (uint32_t)f.size();
+    f.close();
+
+    if (full.length()) {
+      if (isdir) {
+        dirOpts += F("<option value='");
+        dirOpts += html_escape(full);
+        dirOpts += F("'>");
+        dirOpts += html_escape(full);
+        dirOpts += F("</option>");
+        files_walk(full, depth + 1, rows, dirOpts, count, bytes, deeper);
+      } else {
+        count++;
+        bytes += sz;
+        String esc = html_escape(full);
+        rows += F("<tr><td class='fn'>");
+        rows += esc;
+        rows += F("</td><td class='sz'>");
+        rows += String(sz);
+        rows += F("</td><td class='ac'>"
+                  "<button class='mini dl' data-p='");
+        rows += esc;
+        rows += F("'>&#x2B07;</button>"
+                  "<button class='mini rm' data-p='");
+        rows += esc;
+        rows += F("'>&#x2716;</button></td></tr>");
+      }
+    }
+    f = d.openNextFile();
+  }
+  d.close();
+}
+
+// ── Upload state ─────────────────────────────────────────────────────────────
+// The upload handler is called repeatedly as the body streams, so its progress
+// has to live outside the callback. Reset on every UPLOAD_FILE_START.
+static File     up_file;
+static String   up_path;
+static String   up_error;
+static bool     up_failed  = false;
+static int      up_code    = 400;
+static uint64_t up_written = 0;
+static uint64_t up_budget  = 0;
+
+static void files_upload_handler()
+{
+  HTTPUpload &u = web_server.upload();
+
+  if (u.status == UPLOAD_FILE_START) {
+    up_failed = false; up_error = ""; up_path = ""; up_written = 0; up_code = 400;
+
+    // The PIN is checked HERE, before a single byte is written, and it must
+    // arrive as a QUERY argument. Multipart form fields are not visible to
+    // arg() until the entire body has been parsed (WebServer Parsing.cpp
+    // rebuilds _currentArgs from _postArgs only at the end), which would mean
+    // writing the whole file to flash before discovering the PIN was wrong.
+    if (web_server.arg("pin") != String(ap_pin)) {
+      up_failed = true; up_code = 403; up_error = F("Wrong PIN."); return;
+    }
+    if (!storageAvailable) {
+      up_failed = true; up_error = F("No storage mounted."); return;
+    }
+    // Writing over a file the GIF decoder may still hold open risks corrupting
+    // the FAT. Cheap to avoid: refuse while any overlay is on screen.
+    if (overlay_cont) {
+      up_failed = true; up_error = F("Close the screen on the device first."); return;
+    }
+
+    String dir = web_server.hasArg("dir") ? web_server.arg("dir") : String("/");
+    if (dir.length() == 0) dir = "/";
+    if (dir.length() > 1 && dir.endsWith("/")) dir.remove(dir.length() - 1);
+
+    // Only the basename is honoured — some browsers send a full client path.
+    String base = u.filename;
+    int s1 = base.lastIndexOf('/'), s2 = base.lastIndexOf('\\');
+    int cut = s1 > s2 ? s1 : s2;
+    if (cut >= 0) base = base.substring(cut + 1);
+    if (base.length() == 0) {
+      up_failed = true; up_error = F("No filename."); return;
+    }
+
+    up_path = (dir == "/") ? ("/" + base) : (dir + "/" + base);
+    if (!path_is_safe(up_path)) {
+      up_failed = true; up_error = F("Unsafe path."); return;
+    }
+
+    // Content-Length covers the whole multipart body, so it is an upper bound
+    // on the file rather than its size — good enough to refuse an obviously
+    // oversized upload up front. The running check below is the real guard.
+    const uint64_t MARGIN = 16 * 1024;   // leave headroom for FAT metadata
+    uint64_t freeb = storage_free_bytes();
+    up_budget = freeb > MARGIN ? freeb - MARGIN : 0;
+
+    uint64_t clen = (uint64_t)web_server.header("Content-Length").toInt();
+    if (clen && clen > up_budget) {
+      up_failed = true;
+      up_error  = F("Not enough free space for that file.");
+      return;
+    }
+
+    // FFat does not create parent directories on write, so the folder must
+    // already exist. FILE_WRITE truncates, which is what an overwrite wants.
+    up_file = STORAGE->open(up_path.c_str(), FILE_WRITE);
+    if (!up_file) {
+      up_failed = true;
+      up_error  = F("Cannot create file — does that folder exist?");
+    }
+  }
+
+  else if (u.status == UPLOAD_FILE_WRITE) {
+    if (up_failed || !up_file) return;
+    if (up_written + u.currentSize > up_budget) {
+      up_file.close();
+      STORAGE->remove(up_path.c_str());
+      up_failed = true;
+      up_error  = F("Ran out of space — partial file removed.");
+      return;
+    }
+    if (up_file.write(u.buf, u.currentSize) != u.currentSize) {
+      up_file.close();
+      STORAGE->remove(up_path.c_str());
+      up_failed = true;
+      up_error  = F("Write failed — partial file removed.");
+      return;
+    }
+    up_written += u.currentSize;
+  }
+
+  else if (u.status == UPLOAD_FILE_END) {
+    if (up_file) up_file.close();
+  }
+
+  else if (u.status == UPLOAD_FILE_ABORTED) {
+    if (up_file) up_file.close();
+    if (!up_failed && up_path.length()) STORAGE->remove(up_path.c_str());
+    up_failed = true;
+    up_error  = F("Upload aborted.");
+  }
+}
+
 static void start_web_server()
 {
   if (webServerRunning) return;
@@ -1580,10 +2328,12 @@ static void start_web_server()
   // ── GET / — config editor page ───────────────────────────────────────────
   web_server.on("/", HTTP_GET, []() {
 
-    // Read config.ini from SD
+    // Read config.ini from whichever backend mounted at boot
     String cfg_text;
-    File f = SD.open("/config.ini", FILE_READ);
-    if (f) { while (f.available()) cfg_text += (char)f.read(); f.close(); }
+    if (STORAGE) {
+      File f = STORAGE->open("/config.ini", FILE_READ);
+      if (f) { while (f.available()) cfg_text += (char)f.read(); f.close(); }
+    }
 
     // ── Mask the wifi password line before sending to browser ───────────────
     // Replace "password = <anything>" with a fixed placeholder so the real
@@ -1620,8 +2370,8 @@ static void start_web_server()
 
     String ip  = (wifiMode == WM_STA) ? WiFi.localIP().toString()
                                       : WiFi.softAPIP().toString();
-    String url = (wifiMode == WM_STA) ? "http://esp32clock.local"
-                                      : "http://192.168.4.1";
+    String url = (wifiMode == WM_STA) ? String(mdns_url())
+                                      : String("http://192.168.4.1");
 
     String html =
       F("<!DOCTYPE html><html><head>"
@@ -1658,6 +2408,7 @@ static void start_web_server()
         ".log{background:#1f6feb;color:#fff}"
         ".time-btn{background:#6e40c9;color:#fff}"
         ".bingo{background:#1a7f64;color:#fff}"
+        ".files{background:#8957e5;color:#fff}"
         ".note{font-size:11px;color:#8b949e;margin-top:8px}"
         ".err{color:#f85149;font-size:12px;margin-top:6px;display:none}"
         "hr{border:none;border-top:1px solid #30363d;margin:10px 0}"
@@ -1682,6 +2433,9 @@ static void start_web_server()
         // ── config.ini editor ─────────────────────────────────────────────
         "<div class='card'>"
         "<label>config.ini &mdash; edit and tap Save to apply</label>"
+        "<div style='font-size:12px;opacity:.7;margin:-6px 0 6px'>stored on: ");
+    html += storage_label();
+    html += F("</div>"
         "<textarea id='cfg'>");
     html += cfg_display;
     html += F("</textarea>"
@@ -1708,6 +2462,16 @@ static void start_web_server()
         "<p class='note'>Opens a printable sheet of 3&times;9 tickets (1&ndash;90) to pair"
         " with the Bingo! app. Choose 4, 6 or 8 per page, then use your browser's"
         " Share &rarr; Print.</p>"
+        "</div>"
+
+        // ── File manager ──────────────────────────────────────────────────
+        "<div class='card'>"
+        "<label>&#x1F5C2; Files &mdash; view, download, delete and upload</label>"
+        "<div class='row'>"
+        "<a class='btn files' href='/files'>&#x1F4C1; Manage Files</a>"
+        "</div>"
+        "<p class='note'>Browse everything on the active storage. Uploads are"
+        " refused if the file will not fit.</p>"
         "</div>"
 
         // ── Date / time setter ────────────────────────────────────────────
@@ -1811,11 +2575,30 @@ static void start_web_server()
     body.replace("\r\n", "\n");
     body.replace("\r",   "\n");
 
-    SD.remove("/config.ini");
-    File fw = SD.open("/config.ini", FILE_WRITE);
-    if (!fw) { web_server.send(500, "text/plain", "SD write failed."); return; }
-    fw.print(body);
+    if (!STORAGE) { web_server.send(503, "text/plain", "No storage mounted."); return; }
+
+    // Temp-then-swap, same reasoning as save_config(): never leave the live
+    // config half-written, because on internal flash that is unrecoverable.
+    File fw = STORAGE->open("/config.tmp", FILE_WRITE);
+    if (!fw) { web_server.send(500, "text/plain", "Storage write failed."); return; }
+    // A single write, so the byte count is an exact check: a full filesystem
+    // returns short here, and promoting that truncated temp over config.ini
+    // would defeat the whole point of writing to a temp file first.
+    const size_t want = body.length();
+    const size_t got  = fw.print(body);
     fw.close();
+    if (got != want) {
+      STORAGE->remove("/config.tmp");
+      Serial.printf("[WEB] config save: short write (%u/%u bytes) — kept existing config\n",
+                    (unsigned)got, (unsigned)want);
+      web_server.send(507, "text/plain",
+                      "Not enough space to save — existing config kept.");
+      return;
+    }
+    STORAGE->remove("/config.ini");
+    if (!STORAGE->rename("/config.tmp", "/config.ini")) {
+      web_server.send(500, "text/plain", "Storage rename failed."); return;
+    }
 
     // Reload cfg from the new file and apply settings that don't need a reboot
     load_config();
@@ -1877,6 +2660,12 @@ static void start_web_server()
 
   // ── GET /log — download last_seen.txt (no PIN required — read-only) ──────
   web_server.on("/log", HTTP_GET, []() {
+    // Always SD: the log is card-only by design, never on internal flash.
+    if (!sdCardAvailable) {
+      web_server.send(404, "text/plain",
+                      "No SD card — the run log is only kept on a card.");
+      return;
+    }
     File f = SD.open("/last_seen.txt", FILE_READ);
     if (!f) { web_server.send(404, "text/plain", "Log not found"); return; }
     web_server.sendHeader("Content-Disposition", "attachment; filename=\"last_seen.txt\"");
@@ -1889,6 +2678,256 @@ static void start_web_server()
   web_server.on("/bingo", HTTP_GET, []() {
     web_server.send_P(200, "text/html", BINGO_PAGE);
   });
+
+  // ── GET /files — flat recursive listing + storage meter ──────────────────
+  // Unauthenticated, matching GET / : it reveals names and sizes only. Reading
+  // or changing anything below needs the PIN.
+  web_server.on("/files", HTTP_GET, []() {
+    String rows, dirOpts;
+    uint32_t count  = 0;
+    uint64_t bytes  = 0;
+    bool     deeper = false;
+    if (storageAvailable) files_walk("/", 0, rows, dirOpts, count, bytes, deeper);
+    if (rows.length() == 0)
+      rows = F("<tr><td colspan='3' class='empty'>No files.</td></tr>");
+
+    uint64_t freeb = storage_free_bytes();
+    uint64_t total = storage_total_bytes();
+
+    String html =
+      F("<!DOCTYPE html><html><head>"
+        "<meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>ESP32 Clock &mdash; Files</title>"
+        "<style>"
+        "*{box-sizing:border-box;margin:0;padding:0}"
+        "body{font:14px/1.5 sans-serif;background:#0d1117;color:#c9d1d9;"
+             "padding:16px;max-width:520px;margin:0 auto}"
+        "h2{color:#79c0ff;margin-bottom:10px;font-size:17px}"
+        ".info{background:#161b22;border:1px solid #30363d;border-radius:6px;"
+              "padding:8px 12px;margin-bottom:10px;font-size:12px;color:#8b949e}"
+        ".info b{color:#79c0ff}"
+        ".card{background:#161b22;border:1px solid #30363d;border-radius:8px;"
+              "padding:12px;margin-bottom:10px}"
+        "label{font-size:11px;color:#8b949e;display:block;margin-bottom:4px}"
+        "input[type=password],input[type=file],select{"
+          "width:100%;padding:8px 10px;background:#0d1117;color:#c9d1d9;"
+          "border:1px solid #30363d;border-radius:6px;font-size:13px;"
+          "margin-bottom:8px}"
+        "input[type=password]{letter-spacing:2px}"
+        "table{width:100%;border-collapse:collapse;font-size:12px}"
+        "th{text-align:left;color:#8b949e;font-weight:600;padding:4px 2px;"
+           "border-bottom:1px solid #30363d}"
+        "td{padding:4px 2px;border-bottom:1px solid #21262d;vertical-align:middle}"
+        ".fn{font-family:monospace;color:#7ee787;word-break:break-all}"
+        ".sz{text-align:right;color:#8b949e;white-space:nowrap}"
+        ".ac{text-align:right;white-space:nowrap}"
+        ".empty{color:#8b949e;text-align:center;padding:10px}"
+        ".mini{border:none;border-radius:5px;padding:4px 7px;margin-left:4px;"
+              "cursor:pointer;font-size:12px;color:#fff}"
+        ".dl{background:#1f6feb}.rm{background:#b62324}"
+        ".row{display:flex;gap:8px;margin-top:10px}"
+        ".btn{flex:1;padding:10px;border:none;border-radius:6px;font-size:14px;"
+             "cursor:pointer;font-weight:600;text-align:center;text-decoration:none;"
+             "display:flex;align-items:center;justify-content:center}"
+        ".up{background:#238636;color:#fff}"
+        ".back{background:#30363d;color:#c9d1d9}"
+        ".note{font-size:11px;color:#8b949e;margin-top:8px}"
+        ".msg{font-size:12px;margin-top:8px;min-height:16px}"
+        ".bar{height:6px;background:#0d1117;border:1px solid #30363d;"
+             "border-radius:4px;overflow:hidden;margin-top:6px}"
+        ".bar>i{display:block;height:100%;background:#1f6feb}"
+        "</style></head><body>"
+        "<h2>&#x1F5C2; Files</h2>"
+        "<div class='info'><b>Storage:</b> ");
+    html += storage_label();
+    html += F(" &nbsp; <b>Files:</b> ");
+    html += String(count);
+    html += F(" &nbsp; <b>Used:</b> ");
+    html += String((uint32_t)(bytes / 1024));
+    html += F(" KB &nbsp; <b>Free:</b> ");
+    html += String((uint32_t)(freeb / 1024));
+    html += F(" KB");
+    if (total) {
+      uint32_t pct = (uint32_t)(((total - freeb) * 100) / total);
+      html += F("<div class='bar'><i style='width:");
+      html += String(pct);
+      html += F("%'></i></div>");
+    }
+    html += F("</div>"
+
+        "<div class='card'>"
+        "<label>&#x1F511; Device PIN &mdash; needed to download, delete or upload</label>"
+        "<input type='password' id='pin' inputmode='numeric' maxlength='6'"
+               " placeholder='6-digit PIN' autocomplete='off'>"
+        "</div>"
+
+        "<div class='card'>"
+        "<label>Stored files &mdash; &#x2B07; download, &#x2716; delete</label>"
+        "<table><tr><th>Path</th><th class='sz'>Bytes</th><th></th></tr>");
+    html += rows;
+    html += F("</table>");
+    // Say so rather than quietly returning a partial listing.
+    if (deeper)
+      html += F("<p class='note' style='color:#d29922'>&#9888; Some folders are"
+                " nested deeper than this list scans, and their contents are not"
+                " shown. Keep files within two folders of the root.</p>");
+    html += F(
+        "<p class='note'>Deleting a GIF the clock is scheduled to play leaves a"
+        " &quot;GIF not found&quot; message until you upload a replacement.</p>"
+        "</div>"
+
+        "<div class='card'>"
+        "<label>&#x2B06; Upload &mdash; overwrites a file of the same name</label>"
+        "<select id='dir'><option value='/'>/</option>");
+    html += dirOpts;
+    html += F("</select>"
+        "<input type='file' id='f'>"
+        "<div class='row'>"
+        "<button class='btn up' onclick='doUp()'>&#x2B06; Upload</button>"
+        "<a class='btn back' href='/'>&#x2190; Back</a>"
+        "</div>"
+        "<p class='note'>Folders are not created automatically &mdash; pick an"
+        " existing one. GIFs must already be 160&times;86 px.</p>"
+        "</div>"
+        "<p class='msg' id='msg'></p>"
+
+        "<script>"
+        "var FREE=");
+    html += String((uint32_t)freeb);
+    html += F(";"
+        "function pin(){return document.getElementById('pin').value.trim();}"
+        "function msg(t,ok){var e=document.getElementById('msg');"
+        "  e.textContent=t;e.style.color=ok?'#7ee787':'#f85149';}"
+        "function needPin(){var p=pin();"
+        "  if(p.length!==6){msg('Enter the 6-digit PIN first.');return '';}return p;}"
+
+        // Download and delete are wired by delegation so the path can live in a
+        // data attribute — safer than interpolating it into an onclick string.
+        "document.addEventListener('click',function(e){"
+        "  var b=e.target.closest?e.target.closest('button[data-p]'):null;"
+        "  if(!b)return;"
+        "  var p=b.getAttribute('data-p');"
+        "  if(b.classList.contains('dl'))dl(p);else rm(p);});"
+
+        "function dl(p){var q=needPin();if(!q)return;"
+        "  window.location='/files/get?pin='+encodeURIComponent(q)"
+        "    +'&path='+encodeURIComponent(p);}"
+
+        "function rm(p){var q=needPin();if(!q)return;"
+        "  if(!confirm('Delete '+p+' ?'))return;"
+        "  var fd=new FormData();fd.append('pin',q);fd.append('path',p);"
+        "  fetch('/files/delete',{method:'POST',body:fd})"
+        "  .then(function(r){return r.text().then(function(t){"
+        "    if(r.ok){location.reload();}else{msg(t);}});})"
+        "  .catch(function(){msg('Network error.');});}"
+
+        "function doUp(){var q=needPin();if(!q)return;"
+        "  var i=document.getElementById('f');"
+        "  if(!i.files.length){msg('Choose a file first.');return;}"
+        "  var f=i.files[0];"
+        "  if(f.size>FREE){msg('That file is larger than the free space.');return;}"
+        "  var d=document.getElementById('dir').value;"
+        "  var fd=new FormData();fd.append('file',f,f.name);"
+        "  msg('Uploading '+f.name+'\\u2026',true);"
+        "  fetch('/files/upload?pin='+encodeURIComponent(q)"
+        "        +'&dir='+encodeURIComponent(d),{method:'POST',body:fd})"
+        "  .then(function(r){return r.text().then(function(t){"
+        "    if(r.ok){location.reload();}else{msg(t);}});})"
+        "  .catch(function(){msg('Network error.');});}"
+        "</script>"
+        "</body></html>");
+
+    web_server.send(200, "text/html", html);
+  });
+
+  // ── GET /files/get — download one file ───────────────────────────────────
+  // PIN rides in the query string because this is a plain link. Note that puts
+  // it in browser history; on an open AP where form posts are already cleartext
+  // that changes little, but it is a real difference.
+  web_server.on("/files/get", HTTP_GET, []() {
+    if (!web_server.hasArg("pin") || web_server.arg("pin") != String(ap_pin)) {
+      web_server.send(403, "text/plain", "Wrong PIN."); return;
+    }
+    if (!storageAvailable) {
+      web_server.send(404, "text/plain", "No storage mounted."); return;
+    }
+    String path = web_server.arg("path");
+    if (!path_is_safe(path)) {
+      web_server.send(400, "text/plain", "Unsafe path."); return;
+    }
+    File f = STORAGE->open(path.c_str(), FILE_READ);
+    if (!f) { web_server.send(404, "text/plain", "Not found."); return; }
+    if (f.isDirectory()) {
+      f.close();
+      web_server.send(400, "text/plain", "That is a directory."); return;
+    }
+    String base = path.substring(path.lastIndexOf('/') + 1);
+    web_server.sendHeader("Content-Disposition",
+                          "attachment; filename=\"" + base + "\"");
+    web_server.streamFile(f, "application/octet-stream");
+    f.close();
+  });
+
+  // ── POST /files/delete ───────────────────────────────────────────────────
+  web_server.on("/files/delete", HTTP_POST, []() {
+    if (!web_server.hasArg("pin") || web_server.arg("pin") != String(ap_pin)) {
+      web_server.send(403, "text/plain", "Wrong PIN."); return;
+    }
+    if (!storageAvailable) {
+      web_server.send(404, "text/plain", "No storage mounted."); return;
+    }
+    // Same reasoning as the upload guard: the GIF decoder may hold this file
+    // open, and unlinking it underneath FAT is not worth the risk.
+    if (overlay_cont) {
+      web_server.send(409, "text/plain",
+                      "Close the screen on the device first."); return;
+    }
+    String path = web_server.arg("path");
+    if (!path_is_safe(path)) {
+      web_server.send(400, "text/plain", "Unsafe path."); return;
+    }
+    File f = STORAGE->open(path.c_str(), FILE_READ);
+    if (!f) { web_server.send(404, "text/plain", "Not found."); return; }
+    bool isdir = f.isDirectory();
+    f.close();
+    if (isdir) {
+      web_server.send(400, "text/plain",
+                      "Refusing to delete a folder."); return;
+    }
+    if (!STORAGE->remove(path.c_str())) {
+      web_server.send(500, "text/plain", "Delete failed."); return;
+    }
+    Serial.printf("[WEB] deleted %s from %s\n", path.c_str(), storage_label());
+    web_server.send(200, "text/plain", "Deleted.");
+  });
+
+  // ── POST /files/upload ───────────────────────────────────────────────────
+  // Two handlers: the second streams the body (and does the PIN check before
+  // writing anything), the first runs once it has finished and reports.
+  web_server.on("/files/upload", HTTP_POST,
+    []() {
+      if (up_failed) {
+        web_server.send(up_code, "text/plain", up_error);
+        return;
+      }
+      Serial.printf("[WEB] uploaded %s (%u bytes) to %s\n",
+                    up_path.c_str(), (unsigned)up_written, storage_label());
+      String m = F("Uploaded ");
+      m += up_path;
+      m += F(" (");
+      m += String((uint32_t)up_written);
+      m += F(" bytes).");
+      web_server.send(200, "text/plain", m);
+    },
+    files_upload_handler);
+
+  // Content-Length is needed by the upload guard, and WebServer only keeps
+  // headers it was explicitly told to collect.
+  {
+    static const char *kHeaders[] = { "Content-Length" };
+    web_server.collectHeaders(kHeaders, 1);
+  }
 
   webRoutesRegistered = true;
   web_server.begin();
@@ -2003,8 +3042,8 @@ static void show_wifi_detail_popup()
   if (!web_reachable)
     lv_label_set_text(l4, "web UI unavailable");
   else
-    lv_label_set_text(l4, (wifiMode == WM_STA) ? "http://esp32clock.local"
-                                                : "http://192.168.4.1");
+    lv_label_set_text(l4, (wifiMode == WM_STA) ? mdns_url()
+                                               : "http://192.168.4.1");
   lv_obj_set_style_text_color(l4, lv_color_make(100, 200, 255), 0);
   lv_obj_align(l4, LV_ALIGN_TOP_MID, 0, 74);
 
@@ -2470,10 +3509,17 @@ static void wifi_poll_cb(lv_timer_t *t)
       wifiMode        = WM_STA;
       wifi_fail_count = 0;
       wifi_auth_fails = 0;
-      MDNS.begin("esp32clock");
+      // Report what actually registered, not what was intended: if the name is
+      // already taken on this LAN, that is the one clue you get.
+      bool mdns_ok = MDNS.begin(cfg.wifi_hostname);
       start_web_server();
-      Serial.printf("[WiFi] Connected: SSID=%s  IP=%s  URL=http://esp32clock.local\n",
-                    WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+      Serial.printf("[WiFi] Connected: SSID=%s  IP=%s  URL=%s\n",
+                    WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(),
+                    mdns_ok ? mdns_url() : "(mDNS failed — use the IP)");
+      if (!mdns_ok)
+        Serial.printf("[WiFi] mDNS could not claim '%s' — is another device "
+                      "already using it? Change [wifi] hostname.\n",
+                      cfg.wifi_hostname);
     }
     time_t now = time(nullptr);
     timeSynced = (now >= 8 * 3600 * 2);
@@ -2600,7 +3646,7 @@ static void close_scheduled_gif()
 static void run_scheduled_animation(int hour)
 {
   if (!cfg.anim_schedule_enabled) return;
-  if (!sdCardAvailable)           return;
+  if (!storageAvailable)          return;
   if (overlay_cont)               return;  // another screen already open
   if (apps_cont)                  return;  // apps menu open (incl. metronome)
   if (!home_time_lbl)             return;  // clock face not visible yet
@@ -2834,6 +3880,9 @@ static void clock_tick_cb(lv_timer_t * /*t*/)
 static void overlay_close_event_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  // A swipe releases inside this full-screen overlay, so LVGL follows the
+  // gesture with a CLICKED on the same object. That is not "tap to return".
+  if (swipe_consumed_tap) { swipe_consumed_tap = false; return; }
   if (overlay_cont) {
     label_adc_raw = nullptr;
     label_voltage = nullptr;
@@ -2868,6 +3917,10 @@ static void overlay_close_event_cb(lv_event_t *e)
 
 static lv_obj_t *make_overlay(lv_color_t bg_color)
 {
+  // Cleared here rather than only on consumption: if an overlay is ever torn
+  // down by a timer between the gesture and the release, the pending flag would
+  // otherwise swallow the first tap on whatever screen opens next.
+  swipe_consumed_tap = false;
   lv_obj_t *cont = lv_obj_create(lv_scr_act());
   lv_obj_set_size(cont, LV_PCT(100), LV_PCT(100));
   lv_obj_align(cont, LV_ALIGN_CENTER, 0, 0);
@@ -2901,27 +3954,53 @@ static void show_gif_fullscreen(const char *path)
   if (overlay_cont) return;
   overlay_cont = make_overlay(lv_color_black());
 #if LV_USE_GIF
-  if (sdCardAvailable) {
+  if (storageAvailable) {
     uint32_t free_b  = heap_caps_get_free_size(MALLOC_CAP_8BIT);
     uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     Serial.printf("[GIF] heap free=%u  largest=%u\n", free_b, largest);
 
-    // ── RAM requirement ───────────────────────────────────────────────────────
-    // LVGL v9 GIF decoder allocates an ARGB8888 canvas = width × height × 4 bytes
-    //   320×172 px → 220 160 bytes — DOES NOT FIT on ESP32-C6 (max ~77 KB free)
-    //   160× 86 px →  54 880 bytes — fits easily
+    // ── RAM requirement — MEASURED on hardware, not estimated ─────────────────
+    // The LVGL v9 GIF decoder allocates an ARGB8888 canvas of width × height × 4
+    // plus decoder state. A 160×86 decode costs 84 056 bytes end to end
+    // (canvas 55 040 + ~29 KB of state), measured identically on both boards via
+    // the free/largest print above.
     //
-    // !! YOU MUST RESIZE BOTH GIF FILES ON THE SD CARD TO 160×86 PIXELS !!
+    // ESP32-C6 largest free block at this point, measured:
+    //   wifi.mode = ap   (web server up)   238 944 free / 221 172 largest
+    //   wifi.mode = off                    277 296 free / 229 364 largest
+    // So a 160×86 GIF has ~137 KB of headroom on the C6 — not the ~2 KB that an
+    // earlier version of this comment implied by claiming "max ~77 KB free".
+    // That figure was simply wrong; do not reintroduce it.
+    //
+    // !! YOU MUST STILL RESIZE BOTH GIF FILES ON THE SD CARD TO 160×86 PIXELS !!
+    // Full panel resolution genuinely does not fit on the C6, for the real
+    // reason: a 320×172 canvas is 220 160 bytes, and with decoder state that is
+    // ~249 KB against the 221 KB largest block — short by roughly 28 KB.
     //    Tool: https://ezgif.com/resize
     //    Steps: Upload GIF → Width=160, Height=86, Resize → Download
     //    Save back to SD card overwriting the original filename.
     //
     // The widget is then scaled 2× by LVGL to fill the 320×172 screen.
+    //
+    // On the S3 the guard below never trips: PSRAM lives inside MALLOC_CAP_8BIT,
+    // so `largest` is ~8 MB and the canvas is allocated there. Native-resolution
+    // GIFs would fit on that board, but the assets are shared, so they stay
+    // 160×86 for both.
     // ─────────────────────────────────────────────────────────────────────────
 
-    // 160×86×4 = 54880 bytes canvas + ~20KB decoder overhead = ~75KB needed
-    if (largest < 75000) {
-      Serial.printf("[GIF] need 75KB, only %u available\n", largest);
+    // Measured need is 84 056; the threshold carries a small margin above it.
+    if (!STORAGE->exists(storage_path(path))) {
+      // lv_gif_set_src() only logs a warning and renders nothing, which looks
+      // like a hung black screen. Say what is actually wrong instead.
+      Serial.printf("[GIF] not found: %s (on %s)\n", storage_path(path), storage_label());
+      lv_obj_t *err = lv_label_create(overlay_cont);
+      lv_label_set_text_fmt(err, LV_SYMBOL_WARNING "  GIF not found on %s", storage_label());
+      lv_obj_set_style_text_color(err, lv_color_white(), 0);
+      lv_label_set_long_mode(err, LV_LABEL_LONG_WRAP);
+      lv_obj_set_width(err, screenWidth - 20);
+      lv_obj_align(err, LV_ALIGN_CENTER, 0, 0);
+    } else if (largest < 90000) {
+      Serial.printf("[GIF] need ~84KB, only %u available\n", largest);
       lv_obj_t *err = lv_label_create(overlay_cont);
       lv_label_set_text(err, LV_SYMBOL_WARNING "  Not enough RAM — resize GIF to 160x86");
       lv_obj_set_style_text_color(err, lv_color_white(), 0);
@@ -2947,7 +4026,7 @@ static void show_gif_fullscreen(const char *path)
     }
   } else {
     lv_obj_t *err = lv_label_create(overlay_cont);
-    lv_label_set_text(err, LV_SYMBOL_WARNING "  SD card not available");
+    lv_label_set_text(err, LV_SYMBOL_WARNING "  No storage available");
     lv_obj_set_style_text_color(err, lv_color_white(), 0);
     lv_obj_align(err, LV_ALIGN_CENTER, 0, 0);
   }
@@ -3012,6 +4091,23 @@ static void tilt_poll_cb(lv_timer_t * /*t*/)
     if      (y >  0.5f) set_brightness(brightnessPercent - 10);
     else if (y < -0.5f) set_brightness(brightnessPercent + 10);
   }
+}
+
+// ── Swipe left/right on the status screen: brightness ∓10% ───────────────────
+// Same step and clamping as the tilt path above, deliberately: the two are meant
+// to be interchangeable. Swipe works on every board, so this is the only
+// brightness control on the S3, which has no IMU to tilt.
+//
+// LVGL sends at most one LV_EVENT_GESTURE per press (indev sets gesture_sent),
+// so one swipe is one 10% step — swipe again for the next.
+static void brightness_swipe_cb(lv_event_t * /*e*/)
+{
+  switch (lv_indev_get_gesture_dir(lv_indev_get_act())) {
+    case LV_DIR_LEFT:  set_brightness(brightnessPercent - 10); break;
+    case LV_DIR_RIGHT: set_brightness(brightnessPercent + 10); break;
+    default: return;   // vertical swipe: leave it to the tap-to-return handler
+  }
+  swipe_consumed_tap = true;   // suppress the CLICKED that follows this gesture
 }
 
 // ── WiFi / NTP / Date status (lower-left) ────────────────────────────────────
@@ -3132,15 +4228,28 @@ static void show_status_screen(void)
 
   // ── Row 3: Brightness  (y = +28 from mid = ~114px from top) ──────────────
   label_brightness = lv_label_create(overlay_cont);
-  lv_label_set_text_fmt(label_brightness,
-    LV_SYMBOL_IMAGE "  Brightness: %d%%  (tilt to adjust)",
-    brightnessPercent);
+  brightness_label_refresh(brightnessPercent);
   lv_obj_set_style_text_color(label_brightness, lv_color_make(200, 200, 100), 0);
   lv_obj_align(label_brightness, LV_ALIGN_LEFT_MID, 20, 28);
   lv_obj_add_flag(label_brightness, LV_OBJ_FLAG_IGNORE_LAYOUT);
 
-  // Start tilt poll timer — 400 ms, runs while this screen is open
-  tilt_timer = lv_timer_create(tilt_poll_cb, 400, nullptr);
+  // Swipe left/right to adjust brightness — available on both boards.
+  //
+  // GESTURE_BUBBLE must be cleared here or this callback never runs. LVGL sets
+  // that flag on every object created with a parent (lv_obj.c), and
+  // indev_gesture() walks *up* from the pressed object for as long as it is set —
+  // so with it left on, the walk passes straight over this overlay and delivers
+  // the event to the screen, whose parent is NULL. Clearing it makes the overlay
+  // the end of the walk, which also means a gesture starting on a child (the
+  // separator is clickable, being an lv_obj) still lands here.
+  lv_obj_clear_flag(overlay_cont, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_event_cb(overlay_cont, brightness_swipe_cb, LV_EVENT_GESTURE, nullptr);
+
+  // Start tilt poll timer — 400 ms, runs while this screen is open. Skipped
+  // without an IMU, matching the guarded path at the emotion overlay;
+  // tilt_poll_cb() would early-return anyway.
+  if (imuReady && !tilt_timer)
+    tilt_timer = lv_timer_create(tilt_poll_cb, 400, nullptr);
 
   add_back_hint(overlay_cont);
 }
@@ -4274,6 +5383,38 @@ static void menu_tone_hi()   { menu_tone(NOTE_HI, 80); }
 // ── Apps state ────────────────────────────────────────────────────────────────
 // apps_cont declared globally above wifi_poll_cb
 static int         apps_idx       = 0;   // 0=RPS 1=Dice 2=Coin 3=Metro 4=Tennis 5=Rain 6=Snake 7=Bingo 8=Sound
+#define APPS_COUNT 9
+
+// ── Gyro-dependent apps ──────────────────────────────────────────────────────
+// Tennis Letters (4), Letters Rain (5) and Snake Letters (6) steer entirely by
+// tilt: their field tap opens the pause popup, it does not move anything. With
+// no accelerometer they are unplayable, so they are dropped from the carousel
+// rather than shipped as dead entries.
+//
+// Deliberately NOT hidden:
+//   RPS (0) / Dice (1) — tap-driven; the gyro is only a shake-to-reroll extra.
+//   Bingo (7)          — bn_tap_cb calls numbers on tap; tilt is the alternate.
+//
+// The test is runtime (imuReady), not compile-time, so it also covers a C6
+// whose QMI8658 fails to answer at boot. On the S3 the IMU code is compiled
+// out and imuReady is permanently false, so the effect is the same.
+static inline bool app_needs_imu(int idx)
+{ return idx == 4 || idx == 5 || idx == 6; }
+
+static inline bool app_is_available(int idx)
+{ return imuReady || !app_needs_imu(idx); }
+
+// Step the carousel by `dir`, skipping anything unavailable on this hardware.
+// Falls back to the current index if nothing else is selectable.
+static int apps_step(int from, int dir)
+{
+  int i = from;
+  for (int n = 0; n < APPS_COUNT; n++) {
+    i = (i + dir + APPS_COUNT) % APPS_COUNT;
+    if (app_is_available(i)) return i;
+  }
+  return from;
+}
 static int         app_subphase   = 0;   // 0=carousel  1=game
 static lv_timer_t *app_anim_timer = nullptr;
 static lv_timer_t *app_gyro_timer = nullptr;  // shake/tilt watcher for RPS & Dice
@@ -4473,9 +5614,9 @@ static void apps_longpress_cb(lv_event_t *e)
 }
 
 static void apps_left_cb(lv_event_t *e)
-{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+8)%9;apps_carousel_build();} }
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=apps_step(apps_idx,-1);apps_carousel_build();} }
 static void apps_right_cb(lv_event_t *e)
-{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=(apps_idx+1)%9;apps_carousel_build();} }
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){apps_idx=apps_step(apps_idx,+1);apps_carousel_build();} }
 
 // Transparent full-screen tap zone helper for game screens
 static lv_obj_t *app_tapzone(lv_obj_t *p, lv_event_cb_t cb)
@@ -7724,6 +8865,11 @@ static void apps_tap_enter_cb(lv_event_t *e)
 // ── Apps carousel builder ─────────────────────────────────────────────────────
 static void apps_carousel_build()
 {
+  // Single choke point for every path into the carousel. If apps_idx is
+  // parked on a gyro-only app (persisted from a previous session, or the IMU
+  // dropped out), slide to the next available one before drawing.
+  if (!app_is_available(apps_idx)) apps_idx = apps_step(apps_idx, +1);
+
   metro_clear_ui();  // null UI refs before lv_obj_clean frees them
   lv_obj_clean(apps_cont);
   app_subphase = 0;
@@ -7921,13 +9067,22 @@ static void apps_carousel_build()
   lv_obj_set_style_text_opa(hint, LV_OPA_60, 0);
   lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -18);
 
-  // 9 position dots  (9 × 14 px = 126 px; start at x=97 to centre on 320 px screen)
-  for (int i = 0; i < 9; i++) {
+  // Position dots — one per app that is actually reachable on this hardware.
+  // apps_step() skips anything app_is_available() rejects, so drawing a dot per
+  // raw index would leave unreachable dots that can never light up (3 of them
+  // with no IMU). Count the row first, then centre it on its own width at the
+  // 14 px pitch: 9 dots land back on x=97, as before.
+  int dot_n = 0;
+  for (int i = 0; i < APPS_COUNT; i++) if (app_is_available(i)) dot_n++;
+  int dot_x0 = ((int)screenWidth - dot_n * 14) / 2;
+  for (int i = 0, slot = 0; i < APPS_COUNT; i++) {
+    if (!app_is_available(i)) continue;
     lv_obj_t *dot = lv_label_create(apps_cont);
     lv_obj_set_style_text_font(dot, &dejavu_mono_14, 0);
     lv_label_set_text(dot, i==apps_idx ? "\xe2\x97\x8f" : "\xe2\x97\x8b");
     lv_obj_set_style_text_color(dot, i==apps_idx ? lv_color_white() : lv_color_make(80,80,100), 0);
-    lv_obj_set_pos(dot, 97 + i * 14, 156);
+    lv_obj_set_pos(dot, dot_x0 + slot * 14, 156);
+    slot++;
   }
 }
 
@@ -8253,6 +9408,10 @@ void setup()
   Serial.begin(115200);
   delay(500);  // give serial monitor time to connect
   Serial.println("\n\n========== BOOT ==========");
+  Serial.printf("[BOOT] %s  fw %s\n", BOARD_NAME, FW_VERSION);
+  Serial.printf("[BOOT] PSRAM %s  internal FS %s\n",
+                psramFound() ? "yes" : "no",
+                BOARD_HAS_INTERNAL_FS ? "yes (FFat)" : "no");
   Serial.printf("[BOOT] Wake cause: %s\n",
     wakeup_cause == ESP_SLEEP_WAKEUP_TIMER     ? "TIMER — alarm auto-wake" :
     wakeup_cause == ESP_SLEEP_WAKEUP_UNDEFINED ? "cold boot / RESET button" : "other");
@@ -8264,14 +9423,17 @@ void setup()
   // This prevents any device from misinterpreting the SPI init sequence.
   Serial.println("[1] Pulling CS pins HIGH...");
   pinMode(SD_CS,  OUTPUT); digitalWrite(SD_CS,  HIGH);
-  pinMode(14,     OUTPUT); digitalWrite(14,     HIGH);  // display CS
+  pinMode(LCD_CS, OUTPUT); digitalWrite(LCD_CS, HIGH);  // display CS
   Serial.println("    Done.");
 
-  // ── Step 2: Start the shared SPI bus ONCE with all four pins ──────────────
-  // gfx->begin() would call SPI.begin() internally, but only with SCK/MOSI.
-  // By calling it here first with MISO included, both display and SD share
-  // the already-configured peripheral. On ESP32-C6 a second SPI.begin() on
-  // the same bus is a no-op, so this must come before gfx->begin().
+  // ── Step 2: Start the SPI bus that carries the TF card ────────────────────
+  // C6: display and card SHARE this bus (GPIO1/2). gfx->begin() would call
+  //     SPI.begin() itself but only with SCK/MOSI, so we begin it here first
+  //     with MISO included and both devices then share the peripheral. A
+  //     second SPI.begin() on the same bus is a no-op, so this must come
+  //     before gfx->begin().
+  // S3: the card has dedicated pins and the panel runs on HSPI, so this bus
+  //     belongs to the card alone. Same call, different pins, no contention.
   Serial.printf("[2] SPI.begin(SCK=%d, MISO=%d, MOSI=%d, CS=%d)...\n",
                 SD_SCK, SD_MISO, SD_MOSI, SD_CS);
   SPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
@@ -8302,7 +9464,11 @@ void setup()
   Serial.println("    Touch ready.");
 
   // ── IMU (QMI8658) — shares the I2C bus already started for touch ─────────
-  Serial.println("[4b] Initialising IMU...");  
+  // Boards with no IMU (ESP32-S3-Touch-LCD-1.47) compile this out entirely.
+  // Every tilt call site is already gated on imuReady, so leaving it false
+  // cleanly disables tilt-to-brightness, tilt-to-call and gyro game controls.
+#if BOARD_HAS_IMU
+  Serial.println("[4b] Initialising IMU...");
   int imuErr = imu.init(imuCalib, IMU_ADDRESS);
   if (imuErr != 0) {
     Serial.printf("    IMU init failed (err=%d) — tilt control disabled\n", imuErr);
@@ -8311,14 +9477,25 @@ void setup()
     Serial.println("    IMU ready.");
     imuReady = true;
   }
+#else
+  Serial.println("[4b] No IMU on this board — tilt control disabled.");
+  imuReady = false;
+#endif
 
-  // ── Step 5: SD card ───────────────────────────────────────────────────────
-  // SPI bus is already up (Step 2). We pass the same SPI instance and a safe
-  // 4 MHz clock. The display runs faster but SD is more sensitive to speed.
-  Serial.println("[5] Mounting SD card...");
-  Serial.printf("    CS=%d  SCK=%d  MISO=%d  MOSI=%d  speed=4MHz\n",
+  // ── Step 5: Storage ───────────────────────────────────────────────────────
+  // Precedence is SD first, internal flash second. A card always wins, so
+  // inserting one can never leave you silently reading a stale internal copy.
+  // Exactly one backend ends up live in STORAGE — never both.
+  Serial.println("[5] Mounting storage...");
+  Serial.printf("    SD: CS=%d  SCK=%d  MISO=%d  MOSI=%d  speed=4MHz\n",
                 SD_CS, SD_SCK, SD_MISO, SD_MOSI);
 
+  // max_files deliberately left at the library default of 5. Raising it is
+  // tempting for the file manager's recursive walk, but each slot carries its
+  // own FF_MAX_SS (4096-byte) sector cache because CONFIG_FATFS_PER_FILE_CACHE
+  // is on, and the C6 has no PSRAM to put them in — 5 extra slots would cost
+  // ~20KB of the internal heap the GIF decoder needs. FILES_MAX_DEPTH is capped
+  // to fit inside this budget instead.
   bool mounted = SD.begin(SD_CS, SPI, 4000000);
   Serial.printf("    SD.begin() returned: %s\n", mounted ? "true" : "false");
 
@@ -8331,11 +9508,7 @@ void setup()
     Serial.printf("    Retry returned: %s\n", mounted ? "true" : "false");
   }
 
-  if (!mounted) {
-    Serial.println("    ERROR: SD card mount failed!");
-    Serial.println("    Check: card inserted? FAT32 formatted? wiring correct?");
-    sdCardAvailable = false;
-  } else {
+  if (mounted) {
     uint8_t  cardType = SD.cardType();
     uint64_t cardSize = SD.cardSize() / (1024 * 1024);
     Serial.printf("    SD mounted OK — type: %s  size: %llu MB\n",
@@ -8343,41 +9516,96 @@ void setup()
                   cardType == CARD_SD   ? "SD"   :
                   cardType == CARD_SDHC ? "SDHC" : "UNKNOWN",
                   cardSize);
-    sdCardAvailable = true;
+    sdCardAvailable   = true;
+    STORAGE           = &SD;
+    storageIsInternal = false;
+    storageAvailable  = true;
 
+#if BOARD_HAS_INTERNAL_FS
+    // Mount the internal partition *alongside* the card rather than instead of
+    // it, so provision_internal_flash() can mirror one onto the other later in
+    // setup(). STORAGE deliberately stays on the card — a card always wins.
+    if (FFat.begin(true)) {
+      ffatMounted = true;
+      Serial.printf("    FFat also mounted for mirroring — %u KB free\n",
+                    (unsigned)(FFat.freeBytes() / 1024));
+    } else {
+      Serial.println("    FFat mount failed — cannot mirror to internal flash.");
+    }
+#endif
+  } else {
+    Serial.println("    No SD card (not inserted, unformatted, or wiring).");
+    sdCardAvailable = false;
+    SD.end();
+
+#if BOARD_HAS_INTERNAL_FS
+    // Fall back to the on-chip FAT partition. begin(true) formats it on first
+    // use, which costs a few seconds exactly once on a virgin board.
+    Serial.println("    Falling back to internal flash (FFat)...");
+    if (FFat.begin(true)) {
+      STORAGE           = &FFat;
+      storageIsInternal = true;
+      storageAvailable  = true;
+      ffatMounted       = true;
+      Serial.printf("    FFat mounted OK — %u KB total, %u KB free\n",
+                    (unsigned)(FFat.totalBytes() / 1024),
+                    (unsigned)(FFat.freeBytes()  / 1024));
+    } else {
+      Serial.println("    ERROR: FFat mount/format failed.");
+    }
+#else
+    Serial.println("    This board has no internal FAT partition "
+                   "(BOARD_HAS_INTERNAL_FS=0) — an SD card is required.");
+#endif
+  }
+
+  Serial.printf("    Active storage: %s\n", storage_label());
+
+  if (storageAvailable) {
     // ── Load config.ini ──────────────────────────────────────────────────
+    // Salvage an interrupted save first — otherwise bootstrap_config() sees no
+    // config.ini and overwrites the user's settings with defaults.
+    recover_interrupted_config();
+    // Create it first if the backend is empty, so load_config() always has a
+    // complete file and the web editor is never blank on a virgin device.
+    bootstrap_config();
     load_config();
-    seed_tennis_config();  // append [tennis] section if not yet present
+    seed_tennis_config();       // append [tennis] section if not yet present
     seed_letter_rain_config();  // append [letter_rain] section if not yet present
     seed_snake_config();        // append [snake] section if not yet present
 
-    // BUG FIX: Only restore time from log if NOT waking from a scheduled alarm
+    // RTC recovery reads /last_seen.txt, which is card-only — so this is a
+    // no-op when running from internal flash. Skip it on an alarm wake so a
+    // stale file cannot drag a freshly-synced RTC backwards.
     if (!boot_from_sleep) {
       restore_time_from_log();
     } else {
       Serial.println("    [TIME] Wakeup from alarm: skipping file restore to keep RTC sync.");
     }
 
-    // Verify GIF file exists
+    // Verify the emotion GIFs are actually present on whichever backend won
     Serial.printf("    Checking for GIF at: %s\n", "/cruzr_emotions/cruzr_smile.gif");
-    File chk = SD.open("/cruzr_emotions/cruzr_smile.gif", FILE_READ);
+    File chk = STORAGE->open("/cruzr_emotions/cruzr_smile.gif", FILE_READ);
     if (chk) {
       Serial.printf("    GIF found — %u bytes\n", (unsigned)chk.size());
       chk.close();
     } else {
-      Serial.println("    WARNING: GIF not found! Check path and filename exactly.");
-      // List root directory to help diagnose path issues
-      Serial.println("    SD root contents:");
-      File root = SD.open("/");
-      File entry = root.openNextFile();
-      while (entry) {
-        Serial.printf("      %s %s (%u bytes)\n",
-                      entry.isDirectory() ? "[DIR]" : "     ",
-                      entry.name(), (unsigned)entry.size());
-        entry = root.openNextFile();
+      Serial.printf("    WARNING: GIF not found on %s.\n", storage_label());
+      Serial.println("    Root contents:");
+      File root = STORAGE->open("/");
+      if (root) {
+        File entry = root.openNextFile();
+        while (entry) {
+          Serial.printf("      %s %s (%u bytes)\n",
+                        entry.isDirectory() ? "[DIR]" : "     ",
+                        entry.name(), (unsigned)entry.size());
+          entry = root.openNextFile();
+        }
+        root.close();
       }
-      root.close();
     }
+  } else {
+    Serial.println("    ERROR: no storage mounted — GIFs and config.ini unavailable.");
   }
 
   // ── Step 6: LVGL ──────────────────────────────────────────────────────────
@@ -8409,8 +9637,20 @@ void setup()
   lv_indev_set_read_cb(indev, touchpad_read_cb);
 
   // ── Step 7: Register SD → LVGL filesystem drive 'S' ──────────────────────
-  Serial.println("[7] Registering LVGL SD filesystem driver...");
+  Serial.println("[7] Registering LVGL storage filesystem driver...");
   lvgl_sd_fs_init();
+
+#if BOARD_HAS_INTERNAL_FS
+  // ── Step 7a: Mirror the card onto internal flash ──────────────────────────
+  // Deliberately placed here: LVGL exists (so there is a progress screen) but
+  // the radio is still down, which keeps the most contiguous RAM free and stops
+  // a reconnect from competing for SPI. It also completes before the clock UI is
+  // built, so provisioning reads as a distinct one-off step rather than an
+  // interruption. No-ops in well under a millisecond once flash matches the card.
+  Serial.println("[7a] Checking internal flash against card...");
+  provision_internal_flash();
+#endif
+
   // ── Step 7b: WiFi + NTP ───────────────────────────────────────────────────
   // WiFi.begin() only queues the association; the result is picked up by
   // wifi_poll_cb() (an LVGL timer) so setup() is never blocked.

@@ -39,3 +39,10 @@
 
 # debug information files
 *.dwo
+
+# arduino-cli local build output. `arduino-cli compile` writes a build/ tree in
+# the sketch folder (~115MB for both targets) in addition to any --output-dir,
+# and CI's compile step tees to compile.log.
+/build/
+/build-out/
+compile.log

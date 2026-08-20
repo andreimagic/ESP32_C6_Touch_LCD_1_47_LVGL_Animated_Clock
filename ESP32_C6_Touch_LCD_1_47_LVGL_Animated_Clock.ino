@@ -65,7 +65,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v3.0.0"
+#define FW_VERSION      "v3.1.0"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -76,6 +76,15 @@
 //   WCFG_AP   : own hotspot only. No internet, so NTP is never started.
 //   WCFG_OFF  : airplane mode. Radio down, no SNTP, no web server, no polling.
 enum WifiCfgMode : uint8_t { WCFG_WIFI = 0, WCFG_AP = 1, WCFG_OFF = 2 };
+
+// USB persona (S3 only — see BOARD_HAS_USB_HID). Chosen from the touchscreen,
+// applied at boot before anything else touches the USB peripheral, because a
+// TinyUSB composite descriptor can't be changed once enumerated.
+//   USB_HID_ONLY   : mouse only. No CDC interface exists — the host sees no
+//                    serial port at all. No debug output.
+//   USB_HID_SERIAL : mouse + Serial debug output over the same port.
+//   USB_SERIAL_ONLY: Serial only, no HID interface. Matches pre-feature behaviour.
+enum UsbPersona : uint8_t { USB_HID_ONLY = 0, USB_HID_SERIAL = 1, USB_SERIAL_ONLY = 2 };
 
 struct AppConfig {
   char wifi_ssid[64]                 = "myhomewifi";     // [wifi] ssid
@@ -100,6 +109,7 @@ struct AppConfig {
   bool anim_schedule_enabled         = true;    // [animation] schedule
   int  anim_duration_sec             = 10;      // [animation] duration
   bool menu_sounds                   = true;    // [menu] sounds
+  uint8_t usb_persona                = USB_HID_SERIAL;  // [usb] mode (S3 only, see UsbPersona)
   int  tennis_high_score             = 0;       // [tennis] high_score
   int  tennis_paddle_size            = 6;       // [tennis] paddle_size  (chars, 1-10)
   int  tennis_ball_speed_ms          = 500;     // [tennis] ball_speed_ms
@@ -141,6 +151,26 @@ struct AppConfig {
 // Selecting any other board is a deliberate compile error.
 #include "board_config.h"
 
+// ─── USB persona (S3 only) ────────────────────────────────────────────────────
+// Own USBCDC/USBHIDMouse instances rather than the core's auto-wired globals,
+// because those only exist when "USB CDC On Boot" is Enabled at compile time —
+// which bakes CDC into every persona and makes a true HID-only enumeration
+// (no serial interface at all) impossible. This build instead compiles with
+// CDCOnBoot=Disabled and brings up exactly the interfaces cfg.usb_persona asks
+// for, from scratch, in usb_persona_begin() before USB.begin() ever runs.
+// #define Serial below redirects every existing Serial.* call in this sketch
+// to that instance unmodified — see usb_persona_begin() for the boot sequence.
+#if BOARD_HAS_USB_HID
+  #include <USB.h>
+  #include <USBCDC.h>
+  #include <USBHIDMouse.h>
+  #include <Preferences.h>
+  static USBCDC             ClockUSBSerial;
+  static USBHIDRelativeMouse UsbJiggleMouse;
+  #undef Serial
+  #define Serial ClockUSBSerial
+#endif
+
 // ─── GIF paths — SD card root is mapped to LVGL drive letter "S" ──────────────
 #define GIF_SMILE_PATH    "S:/cruzr_emotions/cruzr_smile.gif"
 #define GIF_SLEEP_PATH    "S:/cruzr_emotions/cruzr_sleep.gif"
@@ -180,6 +210,12 @@ static const char *wifi_cfg_mode_name(void);
 static void show_wifi_detail_popup(void);
 static void buzzer_start_birthday(int sequences);
 static void generate_ap_pin(void);
+#if BOARD_HAS_USB_HID
+static void usb_persona_begin(void);
+static void show_usb_carousel(void);
+static void hid_jiggle_arm(void);
+static void hid_jiggle_stop(void);
+#endif
 
 
 // ─── Display ─────────────────────────────────────────────────────────────────
@@ -1236,6 +1272,18 @@ static void load_config()
       }
     }
 
+#if BOARD_HAS_USB_HID
+    // ── [usb] — persona (S3 only) ───────────────────────────────────────────
+    else if (strcmp(section, "usb") == 0) {
+      if (strcmp(key, "mode") == 0) {
+        if      (strcmp(val, "hid")    == 0) cfg.usb_persona = USB_HID_ONLY;
+        else if (strcmp(val, "serial") == 0) cfg.usb_persona = USB_SERIAL_ONLY;
+        else                                  cfg.usb_persona = USB_HID_SERIAL;  // "hid_serial" or unrecognised
+        Serial.printf("[CFG]   usb.mode       = %d\n", cfg.usb_persona);
+      }
+    }
+#endif
+
     // ── [tennis] ────────────────────────────────────────────────────────────
     else if (strcmp(section, "tennis") == 0) {
       if (strcmp(key, "high_score") == 0) {
@@ -1532,6 +1580,7 @@ static void save_config()
           strncmp(trimmed,"[alarm]",       7)==0 ||
           strncmp(trimmed,"[timer]",       7)==0 ||
           strncmp(trimmed,"[menu]",        6)==0 ||
+          strncmp(trimmed,"[usb]",         5)==0 ||
           strncmp(trimmed,"[tennis]",      8)==0 ||
           strncmp(trimmed,"[letter_rain]",13)==0 ||
           strncmp(trimmed,"[snake]",       7)==0) { inManaged=true;  continue; }
@@ -1580,6 +1629,12 @@ static void save_config()
 
   fw.print("\n[menu]\n");
   fw.printf("sounds = %s\n", cfg.menu_sounds ? "true" : "false");
+
+#if BOARD_HAS_USB_HID
+  fw.print("\n[usb]\n");
+  fw.printf("mode = %s\n", cfg.usb_persona == USB_HID_ONLY    ? "hid"    :
+                            cfg.usb_persona == USB_SERIAL_ONLY ? "serial" : "hid_serial");
+#endif
 
   fw.print("\n[tennis]\n");
   fw.printf("high_score = %d\n",      cfg.tennis_high_score);
@@ -3906,6 +3961,9 @@ static void overlay_close_event_cb(lv_event_t *e)
     if (sched_close_timer) { lv_timer_del(sched_close_timer); sched_close_timer = nullptr; }
     // Cancel analog clock refresh timer
     if (aclock_timer) { lv_timer_del(aclock_timer); aclock_timer = nullptr; }
+#if BOARD_HAS_USB_HID
+    hid_jiggle_stop();   // returning to clock view stops the mouse jiggler
+#endif
     // Stop buzzer if alarm was playing (screen touch = acknowledge alarm)
     buzzer_stop();
     lv_obj_del(overlay_cont);  // frees GIF decoder + canvas automatically
@@ -4000,9 +4058,25 @@ static void show_gif_fullscreen(const char *path)
       lv_obj_set_width(err, screenWidth - 20);
       lv_obj_align(err, LV_ALIGN_CENTER, 0, 0);
     } else if (largest < 90000) {
-      Serial.printf("[GIF] need ~84KB, only %u available\n", largest);
+      // One shortfall, two causes, opposite remedies. On a board that ships
+      // PSRAM this nearly always means Tools -> PSRAM was left Disabled: the
+      // canvas never reaches the 8MB pool, the heap is internal SRAM only, and
+      // resizing the GIF would be wasted effort against a file that is already
+      // correct. Only blame the asset when there is no PSRAM to enable (C6), or
+      // when PSRAM is up and the block is still short.
+      const bool psram_missing = (BOARD_EXPECTS_PSRAM != 0) && !psramFound();
+      if (psram_missing) {
+        Serial.printf("[GIF] only %u available — PSRAM is not enabled\n", (unsigned)largest);
+        Serial.println("[GIF]   Fix: Arduino IDE -> Tools -> PSRAM -> \"OPI PSRAM\", re-upload.");
+        Serial.println("[GIF]   The boot log must read \"PSRAM yes\". Do not resize the GIF.");
+      } else {
+        Serial.printf("[GIF] need ~84KB, only %u available — resize the GIF to 160x86\n",
+                      (unsigned)largest);
+      }
       lv_obj_t *err = lv_label_create(overlay_cont);
-      lv_label_set_text(err, LV_SYMBOL_WARNING "  Not enough RAM — resize GIF to 160x86");
+      lv_label_set_text(err, psram_missing
+        ? LV_SYMBOL_WARNING "  PSRAM not enabled - set Tools > PSRAM > OPI PSRAM"
+        : LV_SYMBOL_WARNING "  Not enough RAM - resize GIF to 160x86");
       lv_obj_set_style_text_color(err, lv_color_white(), 0);
       lv_label_set_long_mode(err, LV_LABEL_LONG_WRAP);
       lv_obj_set_width(err, screenWidth - 20);
@@ -5474,6 +5548,9 @@ static void math_close_overlay()
 {
   if (tilt_timer) { lv_timer_del(tilt_timer); tilt_timer = nullptr; }
   emotion_tilt_active = false; emotion_current_gif = nullptr;
+#if BOARD_HAS_USB_HID
+  hid_jiggle_stop();
+#endif
   buzzer_stop();
   if (overlay_cont) { lv_obj_del(overlay_cont); overlay_cont = nullptr; }
 }
@@ -5523,6 +5600,9 @@ static void show_math_challenge()
   // and causes 200-300ms lag on every button tap.
   if (tilt_timer) { lv_timer_del(tilt_timer); tilt_timer = nullptr; }
   emotion_tilt_active = false; emotion_current_gif = nullptr;
+#if BOARD_HAS_USB_HID
+  hid_jiggle_stop();   // entering the math gateway stops the mouse jiggler
+#endif
   if (overlay_cont) { lv_obj_del(overlay_cont); overlay_cont = nullptr; }
   char prob[32]; int opts[4];
   math_generate(prob, sizeof(prob), opts);
@@ -9126,7 +9206,370 @@ static void zone_ul_cb(lv_event_t *e)
     if (gif_w)
       lv_obj_add_event_cb(gif_w, apps_gif_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
   }
+#if BOARD_HAS_USB_HID
+  // Arm the jiggle timer only once the GIF overlay actually opened — a failed
+  // open (e.g. no storage) leaves overlay_cont null and nothing should arm.
+  if (overlay_cont) hid_jiggle_arm();
+#endif
 }
+
+#if BOARD_HAS_USB_HID
+// ══════════════════════════════════════════════════════════════════════════════
+//  USB PERSONA — carousel/editor + mouse jiggler (S3 only)
+// ══════════════════════════════════════════════════════════════════════════════
+//  Entry: long-press the analog clock (top-right corner, then hold).
+//  A single-item carousel shell, styled like show_carousel(), wrapping a
+//  3-way editor cloned from open_wifi_editor(): HID / HID+CDC / Serial.
+//  Committing a change persists it and reboots — TinyUSB fixes its composite
+//  descriptor at the first USB.begin() and can't swap it live afterward.
+//
+//  The mouse jiggler itself only runs while the top-left smile GIF (zone_ul_cb)
+//  is open, starting 5s after it opens, and is stopped from every path that
+//  closes that overlay: a tap back to the clock (overlay_close_event_cb) or
+//  the math-gateway long-press into the apps carousel (show_math_challenge()).
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Mirrors cfg.usb_persona into NVS on every commit. Read back at the very top
+// of setup(), before SPI/SD/display/load_config() run, because the USB
+// persona has to be decided before the peripheral is touched at all — reading
+// it from the SD-backed config.ini isn't an option that early since storage
+// isn't mounted yet.
+static void usb_persona_nvs_save(uint8_t persona)
+{
+  Preferences p;
+  p.begin("usbcfg", false);
+  p.putUChar("persona", persona);
+  p.end();
+}
+
+// ── Carousel/editor state ───────────────────────────────────────────────────
+static lv_obj_t *usb_modal_cont  = nullptr;   // this carousel's own full-screen modal
+static lv_obj_t *usb_editor_cont = nullptr;
+static uint8_t   usb_editor_sel  = USB_HID_SERIAL;  // pending choice — not applied until commit
+static lv_obj_t *se_usb_lbl      = nullptr;
+static lv_obj_t *se_usb_desc     = nullptr;
+static lv_obj_t *se_usb_dot[3]   = {nullptr, nullptr, nullptr};
+
+static void usb_carousel_build(void);
+static void usb_modal_longpress_cb(lv_event_t *e);
+
+static void usb_editor_refresh()
+{
+  if (!se_usb_lbl) return;
+  static const char *names[3] = {"HID", "HID+CDC", "Serial"};
+  static const char *descs[3] = {"mouse only, no serial port",
+                                 "mouse + Serial debug output",
+                                 "Serial debug, no mouse (default)"};
+  const lv_color_t cols[3] = {lv_color_make(200,140,60),    // HID only    amber
+                              lv_color_make(80,200,120),    // HID+Serial  green
+                              lv_color_make(80,180,220)};   // Serial only cyan
+  lv_label_set_text(se_usb_lbl, names[usb_editor_sel]);
+  lv_obj_set_style_text_color(se_usb_lbl, cols[usb_editor_sel], 0);
+  if (se_usb_desc) lv_label_set_text(se_usb_desc, descs[usb_editor_sel]);
+  for (int i=0;i<3;i++) {
+    if (!se_usb_dot[i]) continue;
+    lv_label_set_text(se_usb_dot[i], (i==usb_editor_sel) ? "\xe2\x97\x8f" : "\xe2\x97\x8b"); // "●" : "○"
+    lv_obj_set_style_text_color(se_usb_dot[i],
+      (i==usb_editor_sel) ? lv_color_white() : lv_color_make(80,80,100), 0);
+  }
+  se_flash(se_usb_lbl);
+  se_flash(se_usb_desc);
+}
+
+static void se_usb_prev(lv_event_t*e)
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){usb_editor_sel=(uint8_t)((usb_editor_sel+2)%3);usb_editor_refresh();} }
+static void se_usb_next(lv_event_t*e)
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){usb_editor_sel=(uint8_t)((usb_editor_sel+1)%3);usb_editor_refresh();} }
+
+// Transparent zone helper local to this modal — se_zone() elsewhere hardwires
+// modal_longpress_cb, which belongs to the CLOCK/TIMER/ALARM/WiFi carousel.
+static lv_obj_t *usb_zone(lv_obj_t *p,int x,int y,int w,int h,lv_event_cb_t cb)
+{
+  lv_obj_t *z=lv_obj_create(p);
+  lv_obj_set_size(z,w,h); lv_obj_set_pos(z,x,y);
+  lv_obj_set_style_bg_opa(z,LV_OPA_TRANSP,0);
+  lv_obj_set_style_border_width(z,0,0); lv_obj_set_style_pad_all(z,0,0);
+  lv_obj_set_style_radius(z,0,0); lv_obj_set_style_shadow_width(z,0,0);
+  lv_obj_clear_flag(z,LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(z,cb,LV_EVENT_PRESSED,nullptr);
+  lv_obj_add_event_cb(z,usb_modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
+  return z;
+}
+
+static void open_usb_editor()
+{
+  if (usb_editor_cont) { lv_obj_del(usb_editor_cont); usb_editor_cont=nullptr; }
+  se_usb_lbl = se_usb_desc = nullptr;
+  for (int i=0;i<3;i++) se_usb_dot[i]=nullptr;
+  usb_editor_sel = cfg.usb_persona;
+
+  usb_editor_cont=lv_obj_create(usb_modal_cont);
+  lv_obj_set_size(usb_editor_cont,320,172); lv_obj_set_pos(usb_editor_cont,0,0);
+  lv_obj_set_style_bg_color(usb_editor_cont,lv_color_make(8,12,28),0);
+  lv_obj_set_style_bg_opa(usb_editor_cont,LV_OPA_COVER,0);
+  lv_obj_set_style_border_width(usb_editor_cont,0,0);
+  lv_obj_set_style_pad_all(usb_editor_cont,0,0);
+  lv_obj_set_style_radius(usb_editor_cont,0,0);
+  lv_obj_clear_flag(usb_editor_cont,LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(usb_editor_cont,usb_modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
+
+  lv_obj_t*title=lv_label_create(usb_editor_cont);
+  lv_label_set_text(title,LV_SYMBOL_USB "  USB mode");
+  lv_obj_set_style_text_font(title,&lv_font_montserrat_14,0);
+  lv_obj_set_style_text_color(title,lv_color_make(180,180,220),0);
+  lv_obj_align(title,LV_ALIGN_TOP_MID,0,8);
+
+  lv_obj_t*larr=lv_label_create(usb_editor_cont);
+  lv_label_set_text(larr,LV_SYMBOL_LEFT);
+  lv_obj_set_style_text_font(larr,&lv_font_montserrat_48,0);
+  lv_obj_set_style_text_color(larr,lv_color_make(80,100,180),0);
+  lv_obj_align(larr,LV_ALIGN_LEFT_MID,6,0);
+
+  lv_obj_t*rarr=lv_label_create(usb_editor_cont);
+  lv_label_set_text(rarr,LV_SYMBOL_RIGHT);
+  lv_obj_set_style_text_font(rarr,&lv_font_montserrat_48,0);
+  lv_obj_set_style_text_color(rarr,lv_color_make(80,100,180),0);
+  lv_obj_align(rarr,LV_ALIGN_RIGHT_MID,-6,0);
+
+  // 16pt, not the 48pt the WiFi editor uses — "HID+CDC" clips at 48pt.
+  se_usb_lbl=lv_label_create(usb_editor_cont);
+  lv_obj_set_style_text_font(se_usb_lbl,&lv_font_montserrat_16,0);
+  lv_obj_align(se_usb_lbl,LV_ALIGN_CENTER,0,-16);
+
+  se_usb_desc=lv_label_create(usb_editor_cont);
+  lv_obj_set_style_text_font(se_usb_desc,&lv_font_montserrat_14,0);
+  lv_obj_set_style_text_color(se_usb_desc,lv_color_make(160,160,180),0);
+  lv_obj_align(se_usb_desc,LV_ALIGN_CENTER,0,22);
+
+  for (int i=0;i<3;i++) {
+    se_usb_dot[i]=lv_label_create(usb_editor_cont);
+    lv_obj_set_style_text_font(se_usb_dot[i],&dejavu_mono_14,0);
+    lv_obj_set_pos(se_usb_dot[i],144+i*14,128);
+  }
+
+  const int WZ_TOP=30, WZ_BOT=150;
+  const int WZ_L=96,   WZ_R=224;
+  usb_zone(usb_editor_cont,0,   WZ_TOP,WZ_L,     WZ_BOT-WZ_TOP,se_usb_prev);
+  usb_zone(usb_editor_cont,WZ_R,WZ_TOP,320-WZ_R, WZ_BOT-WZ_TOP,se_usb_next);
+
+  lv_obj_t*hint=lv_label_create(usb_editor_cont);
+  lv_label_set_text(hint,"hold to save & exit");
+  lv_obj_set_style_text_color(hint,lv_color_make(100,100,120),0);
+  lv_obj_set_style_text_opa(hint,LV_OPA_60,0);
+  lv_obj_align(hint,LV_ALIGN_BOTTOM_MID,0,-4);
+  usb_editor_refresh();
+}
+
+static void close_usb_editor()
+{
+  if (usb_editor_sel == cfg.usb_persona) {
+    // Nothing chosen — skip the SD write and reboot entirely, so entering
+    // the editor just to look costs nothing (mirrors close_wifi_editor()).
+    Serial.println("[USB] persona unchanged");
+    return;
+  }
+  cfg.usb_persona = usb_editor_sel;
+  save_config();
+  usb_persona_nvs_save(cfg.usb_persona);
+  Serial.printf("[USB] persona -> %d, restarting to re-enumerate\n", cfg.usb_persona);
+  Serial.flush();
+  delay(150);
+  ESP.restart();
+}
+
+static void usb_carousel_tap_cb(lv_event_t *e)
+{ if (lv_event_get_code(e)==LV_EVENT_CLICKED) open_usb_editor(); }
+
+static void usb_carousel_build()
+{
+  if (usb_editor_cont) { lv_obj_del(usb_editor_cont); usb_editor_cont=nullptr; }
+  se_usb_lbl = se_usb_desc = nullptr;
+  for (int i=0;i<3;i++) se_usb_dot[i]=nullptr;
+  lv_obj_clean(usb_modal_cont);
+
+  lv_obj_add_event_cb(usb_modal_cont,usb_modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
+
+  static const char *names[3] = {"HID", "HID+CDC", "Serial"};
+  const lv_color_t cols[3] = {lv_color_make(200,140,60), lv_color_make(80,200,120), lv_color_make(80,180,220)};
+  const uint8_t s = (cfg.usb_persona > USB_SERIAL_ONLY) ? USB_HID_SERIAL : cfg.usb_persona;
+  char desc[28]; snprintf(desc,sizeof(desc),"Currently: %s",names[s]);
+
+  // Single item — no left/right paging zones yet, unlike the 4-item main
+  // carousel. The chrome (icon/name/desc/dot/hint) still matches it exactly.
+  lv_obj_t*icon=lv_label_create(usb_modal_cont);
+  lv_label_set_text(icon,LV_SYMBOL_USB);
+  lv_obj_set_style_text_font(icon,&lv_font_montserrat_48,0);
+  lv_obj_set_style_text_color(icon,cols[s],0);
+  lv_obj_align(icon,LV_ALIGN_CENTER,0,-28);
+
+  lv_obj_t*name_lbl=lv_label_create(usb_modal_cont);
+  lv_label_set_text(name_lbl,"USB Mode");
+  lv_obj_set_style_text_font(name_lbl,&lv_font_montserrat_16,0);
+  lv_obj_set_style_text_color(name_lbl,lv_color_white(),0);
+  lv_obj_align(name_lbl,LV_ALIGN_CENTER,0,18);
+
+  lv_obj_t*desc_lbl=lv_label_create(usb_modal_cont);
+  lv_label_set_text(desc_lbl,desc);
+  lv_obj_set_style_text_font(desc_lbl,&lv_font_montserrat_14,0);
+  lv_obj_set_style_text_color(desc_lbl,cols[s],0);
+  lv_obj_align(desc_lbl,LV_ALIGN_CENTER,0,40);
+
+  {
+    lv_obj_t *z = lv_obj_create(usb_modal_cont);
+    lv_obj_set_size(z,320,172); lv_obj_set_pos(z,0,0);
+    lv_obj_set_style_bg_opa(z,LV_OPA_TRANSP,0);
+    lv_obj_set_style_border_width(z,0,0); lv_obj_set_style_pad_all(z,0,0);
+    lv_obj_set_style_radius(z,0,0); lv_obj_set_style_shadow_width(z,0,0);
+    lv_obj_clear_flag(z,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(z,usb_carousel_tap_cb,LV_EVENT_CLICKED,nullptr);
+    lv_obj_add_event_cb(z,usb_modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
+  }
+
+  lv_obj_t*hint=lv_label_create(usb_modal_cont);
+  lv_label_set_text(hint,"tap in or hold to exit");
+  lv_obj_set_style_text_color(hint,lv_color_make(80,80,100),0);
+  lv_obj_set_style_text_opa(hint,LV_OPA_60,0);
+  lv_obj_set_style_text_font(hint,&dejavu_mono_14,0);
+  lv_obj_align(hint,LV_ALIGN_BOTTOM_MID,0,-18);
+
+  lv_obj_t*dot=lv_label_create(usb_modal_cont);
+  lv_obj_set_style_text_font(dot,&dejavu_mono_14,0);
+  lv_label_set_text(dot,"\xe2\x97\x8f");
+  lv_obj_set_style_text_color(dot,lv_color_white(),0);
+  lv_obj_align(dot,LV_ALIGN_BOTTOM_MID,0,-2);
+}
+
+static void usb_modal_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e)!=LV_EVENT_LONG_PRESSED) return;
+  lv_indev_wait_release(lv_indev_get_act());
+  if (!usb_editor_cont) {
+    se_usb_lbl = se_usb_desc = nullptr;
+    for (int i=0;i<3;i++) se_usb_dot[i]=nullptr;
+    if (usb_modal_cont) { lv_obj_del(usb_modal_cont); usb_modal_cont=nullptr; }
+    return;
+  }
+  close_usb_editor();          // unchanged: falls through. changed: ESP.restart(), never returns.
+  usb_editor_cont = nullptr;
+  usb_carousel_build();
+}
+
+// ── Open the carousel (called from the analog-clock long-press) ──────────────
+static void show_usb_carousel(void)
+{
+  if (usb_modal_cont || modal_cont || overlay_cont) return;
+
+  usb_modal_cont=lv_obj_create(lv_scr_act());
+  lv_obj_set_size(usb_modal_cont,LV_PCT(100),LV_PCT(100));
+  lv_obj_align(usb_modal_cont,LV_ALIGN_CENTER,0,0);
+  lv_obj_set_style_bg_color(usb_modal_cont,lv_color_make(8,12,28),0);
+  lv_obj_set_style_bg_opa(usb_modal_cont,LV_OPA_COVER,0);
+  lv_obj_set_style_border_width(usb_modal_cont,0,0);
+  lv_obj_set_style_pad_all(usb_modal_cont,0,0);
+  lv_obj_set_style_radius(usb_modal_cont,0,0);
+  lv_obj_clear_flag(usb_modal_cont,LV_OBJ_FLAG_SCROLLABLE);
+  usb_carousel_build();
+}
+
+// ── Mouse jiggler ──────────────────────────────────────────────────────────
+// Runs only while the top-left smile-GIF overlay (zone_ul_cb) is open, and
+// only once cfg.usb_persona actually brought the HID interface up at boot.
+static lv_timer_t *hid_jiggle_timer  = nullptr;
+static uint32_t     hid_gif_open_at  = 0;
+static uint32_t     hid_next_move_at = 0;
+static bool          hid_armed        = false;
+
+// Splits (total_dx,total_dy) into a few small relative HID reports instead of
+// one teleporting jump — the last step carries the rounding remainder so the
+// full distance is always delivered even when steps doesn't divide evenly.
+static void hid_send_nudge(int total_dx, int total_dy)
+{
+  int steps = random(2, 5);
+  int rem_dx = total_dx, rem_dy = total_dy;
+  for (int i = 0; i < steps; i++) {
+    int left = steps - i;
+    int sx = (left == 1) ? rem_dx : rem_dx / left;
+    int sy = (left == 1) ? rem_dy : rem_dy / left;
+    rem_dx -= sx; rem_dy -= sy;
+    UsbJiggleMouse.move((int8_t)sx, (int8_t)sy);
+  }
+}
+
+static void hid_jiggle_move_cb(lv_timer_t *t)
+{
+  uint32_t now = millis();
+  if (!hid_armed) {
+    if (now - hid_gif_open_at < 5000) return;   // the mandated 5s delay
+    hid_armed        = true;
+    hid_next_move_at = now + (uint32_t)random(4000, 12000);
+    return;
+  }
+  if ((int32_t)(now - hid_next_move_at) < 0) return;
+
+  int dx = (int)random(-9, 10), dy = (int)random(-9, 10);
+  if (dx == 0 && dy == 0) dx = 3;
+  hid_send_nudge(dx, dy);     // out
+  hid_send_nudge(-dx, -dy);   // and back — the pointer never actually drifts
+
+  // Randomised interval, and an occasional extra-long gap, so the cadence
+  // doesn't read as a perfect metronome — sized only for "don't let the OS
+  // go idle", not tuned against any particular monitoring product.
+  uint32_t interval = (uint32_t)random(15000, 45000);
+  if (random(0, 4) == 0) interval += (uint32_t)random(20000, 40000);
+  hid_next_move_at = now + interval;
+}
+
+static void hid_jiggle_arm()
+{
+  if (cfg.usb_persona == USB_SERIAL_ONLY) return;   // HID not enabled this boot
+  if (hid_jiggle_timer) return;                      // already running
+  hid_gif_open_at  = millis();
+  hid_armed        = false;
+  hid_jiggle_timer = lv_timer_create(hid_jiggle_move_cb, 1000, nullptr);
+  Serial.println("[HID] jiggle armed, 5s delay");
+}
+
+static void hid_jiggle_stop()
+{
+  if (hid_jiggle_timer) { lv_timer_del(hid_jiggle_timer); hid_jiggle_timer = nullptr; }
+  hid_armed = false;
+}
+
+// ── USB bring-up — called once, at the very top of setup() ───────────────────
+// Brings up exactly the interfaces cfg's persisted persona asks for, before
+// USB.begin() ever runs, so a "HID only" choice really does mean zero CDC
+// interface in the descriptor the host sees on first enumeration — not CDC
+// present-but-silent. Reads the persona from the NVS mirror rather than cfg
+// (see usb_persona_nvs_save()) because load_config() hasn't run yet this early.
+static void usb_persona_begin()
+{
+  Preferences p;
+  p.begin("usbcfg", true);
+  uint8_t persona = p.getUChar("persona", USB_HID_SERIAL);
+  p.end();
+
+  // Recovery hatch: hold BOOT through power-up to force Serial-only for this
+  // boot only (the saved persona on disk is untouched), so a HID-only choice
+  // can never permanently lock out reflashing. See board_config.h for the
+  // GPIO0 assumption this relies on.
+  pinMode(BOARD_USB_BOOT_PIN, INPUT_PULLUP);
+  bool recovery = (digitalRead(BOARD_USB_BOOT_PIN) == LOW);
+  if (recovery) persona = USB_SERIAL_ONLY;
+
+  bool want_serial = (persona != USB_HID_ONLY);
+  bool want_hid    = (persona != USB_SERIAL_ONLY);
+
+  if (want_serial) Serial.begin(115200);
+  if (want_hid)    UsbJiggleMouse.begin();
+  USB.begin();
+
+  if (want_serial) {
+    delay(500);   // give the serial monitor time to connect
+    Serial.printf("[USB] persona=%u hid=%d serial=%d%s\n",
+                  persona, want_hid, want_serial, recovery ? " (BOOT recovery)" : "");
+  }
+}
+#endif // BOARD_HAS_USB_HID
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  ANALOG CLOCK  (upper-right zone)
@@ -9304,11 +9747,29 @@ static void aclock_refresh_cb(lv_timer_t * /*t*/)
   if (overlay_cont) lv_obj_invalidate(overlay_cont);
 }
 
+#if BOARD_HAS_USB_HID
+// Long-press on the open analog clock opens the USB-mode carousel. Tears the
+// overlay down itself (mirrors show_math_challenge()'s bypass of
+// overlay_close_event_cb) rather than stacking a second full-screen modal
+// on top of a live DRAW_MAIN callback.
+static void aclock_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  lv_indev_wait_release(lv_indev_get_act());
+  if (aclock_timer) { lv_timer_del(aclock_timer); aclock_timer = nullptr; }
+  if (overlay_cont) { lv_obj_del(overlay_cont); overlay_cont = nullptr; }
+  show_usb_carousel();
+}
+#endif
+
 static void show_analog_clock()
 {
   if (overlay_cont) return;
   overlay_cont = make_overlay(lv_color_make(4, 8, 24));  // deep navy
   lv_obj_add_event_cb(overlay_cont, aclock_draw_cb, LV_EVENT_DRAW_MAIN, nullptr);
+#if BOARD_HAS_USB_HID
+  lv_obj_add_event_cb(overlay_cont, aclock_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+#endif
   // Refresh every 60 s so clock stays accurate; also invalidates on open
   aclock_timer = lv_timer_create(aclock_refresh_cb, 60000, nullptr);
   Serial.println("[CLOCK] Analog clock opened");
@@ -9405,8 +9866,12 @@ void setup()
     if (rtc_now < 1735689600UL) boot_from_sleep = false;
   }
 
+#if BOARD_HAS_USB_HID
+  usb_persona_begin();   // decides HID/CDC before USB.begin() — see definition
+#else
   Serial.begin(115200);
   delay(500);  // give serial monitor time to connect
+#endif
   Serial.println("\n\n========== BOOT ==========");
   Serial.printf("[BOOT] %s  fw %s\n", BOARD_NAME, FW_VERSION);
   Serial.printf("[BOOT] PSRAM %s  internal FS %s\n",

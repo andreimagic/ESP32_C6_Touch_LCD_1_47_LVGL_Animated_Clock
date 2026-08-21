@@ -26,10 +26,16 @@
 #   Partition       = 8M w/ spiffs -> PartitionScheme=default_8MB  (3MB APP)
 #   CPU 160MHz / QIO / 80MHz / JTAG Disabled / Zigbee Disabled
 #
-# ESP32-S3 — three traps, all of which change the produced binary:
+# ESP32-S3 — four traps, all of which change the produced binary:
 #   * USBMode=default is USB-OTG (TinyUSB), NOT hwcdc. Waveshare's setup page
 #     pictures "Hardware CDC and JTAG", but the working board is on USB-OTG.
 #     USBMode sets build.usb_mode, so the two are genuinely different firmware.
+#   * CDCOnBoot=default is Disabled, NOT cdc/Enabled — deliberately, unlike the
+#     C6. The USB-persona feature (BOARD_HAS_USB_HID) brings up its own
+#     USBCDC/USBHIDMouse instances at runtime from cfg.usb_persona, in
+#     usb_persona_begin(); if CDCOnBoot were Enabled the core would auto-start
+#     a CDC interface before setup() runs, making a true HID-only enumeration
+#     (no serial interface at all) impossible.
 #   * PSRAM=opi is load-bearing. The GIF canvas is allocated from
 #     MALLOC_CAP_8BIT, which only includes the 8MB PSRAM when it is enabled;
 #     without it the S3 has less headroom than the C6.

@@ -320,10 +320,12 @@ complete default one on first boot, including the `[clock]`, `[animation]` and
 without a valid config has no valid credentials either, and on internal flash the
 web UI is the only way to set them.
 
-> **A cardless S3 has no GIFs yet.** Nothing currently copies animations onto the
-> FFat partition, so a cardless board boots, writes its default config, and shows
-> `GIF not found on Internal flash (FFat)` where an animation would be. Insert a
-> card, or wait for the provisioning feature on the [Roadmap](#roadmap).
+> **A cardless S3 needs its GIFs put on flash once.** Boot the board with a card
+> in the slot and the animations are mirrored onto the FFat partition
+> automatically at step `[7a]`, after which the card can come out for good. On a
+> board that has never seen a card, upload them through the
+> [file manager](#file-manager) at `/files` instead. Until either has happened it
+> shows `GIF not found on Internal flash (FFat)` where an animation would be.
 
 ### GIF Requirements
 
@@ -398,6 +400,15 @@ duration = 10
 [menu]
 # Mutes/unmutes Apps Menu math sounds and game audio only
 sounds = true
+
+[usb]
+# S3 only — ignored on C6 (no USB-OTG peripheral). See "USB Mode — Mouse
+# Jiggler" below. Changing this outside the on-device editor still requires a
+# reboot to take effect, same as changing it from the touchscreen.
+# hid        = mouse only, no serial port
+# hid_serial = mouse + Serial debug output (default)
+# serial     = Serial debug only, no mouse
+mode = hid_serial
 
 [birthdays]
 # Comma-separated list of birthdays in DD-MM-YYYY format.
@@ -692,7 +703,26 @@ The exact same generator (same ticket algorithm, ported to `docs/bingo.js`) is a
 ## Sub-screens
 
 ### Analog Clock (upper-right tap)
-Top-right corner shows an Analog clock, view stays opened and refreshes every minute to display the correct time. Clicking on it will return  to the regular Time view. A filled sector centered on the clock center that starts at the top of the hour (12 o’clock) and sweeps clockwise to the current minute position, visually like a pie chart showing elapsed minutes in the current hour. 
+Top-right corner shows an Analog clock, view stays opened and refreshes every minute to display the correct time. Clicking on it will return  to the regular Time view. A filled sector centered on the clock center that starts at the top of the hour (12 o’clock) and sweeps clockwise to the current minute position, visually like a pie chart showing elapsed minutes in the current hour.
+
+**Long-press** on the open analog clock (S3 only) opens the [USB Mode carousel](#usb-mode--mouse-jiggler-s3-only).
+
+### USB Mode — Mouse Jiggler (S3 only)
+Reached by a long-press on the open analog clock (above). Not present on the C6 build at all — the C6 has no USB-OTG peripheral, only USB-Serial-JTAG, which cannot present USB HID, so `BOARD_HAS_USB_HID` compiles the whole feature out rather than merely hiding it.
+
+A single-item carousel, styled like the [Carousel Settings Menu](#carousel-settings-menu), opens a 3-way picker (left/right to cycle, hold to save & exit — same interaction as the WiFi mode editor):
+
+| Mode | Host sees | Serial debug output |
+|---|---|---|
+| **HID** | mouse only, no serial port | none |
+| **HID + Serial** *(default)* | mouse + a serial port | yes |
+| **Serial** | serial port only, no mouse | yes |
+
+Changing the mode reboots the device — USB can't swap what it's presenting to the host without a full re-enumeration, so a change is saved and applied on the next boot rather than live. Persisted as `[usb] mode` in `config.ini` (`hid` / `hid_serial` / `serial`).
+
+**Mouse jiggler.** In any HID-enabled mode, opening the smile GIF (top-left tap, see [below](#gif-animations-upper-taps)) arms a timer that, after a 5-second delay, starts sending small randomised relative mouse movements — enough to keep a PC from going idle/locking, without visibly disrupting anything. It stops the moment the GIF overlay closes: tapping back to the clock, or long-pressing into the [math gateway](#math-challenge)/apps carousel.
+
+**Recovery hatch.** If you pick `HID` and want Serial back for reflashing, hold the **BOOT** button through power-up — the device boots Serial-only for that boot only, without touching the saved mode. (Assumes BOOT is wired to GPIO0, standard for ESP32-S3 dev boards; the C6 variant of this board wires BOOT to GPIO9 instead, so this hasn't been taken for granted — see `board_config.h`.)
 
 ### Status (lower-left tap)
 Title shows today's date (e.g. `Mon 23 Mar 2026`) when the RTC holds a valid time, falling back to `Status` on a fresh unconfigured boot.
@@ -882,7 +912,7 @@ An on-device number caller for playing classic 1–90 bingo with printed tickets
 
 #### Sounds toggle
 
-The sixth carousel item. Tap to mute/unmute all apps menu and game audio. The setting is saved to `config.ini` under `[menu] sounds`. This does **not** affect alarm, timer, or metronome sounds.
+The last carousel item — ninth on a board with an IMU, sixth on one without, since the three tilt-steered games are dropped from the carousel at runtime where no accelerometer answers. Tap to mute/unmute all apps menu and game audio. The setting is saved to `config.ini` under `[menu] sounds`. This does **not** affect alarm, timer, or metronome sounds.
 
 ---
 
@@ -1117,7 +1147,7 @@ esptool --chip esp32s3 write-flash 0x0 firmware-<version>-esp32s3-full.bin
    | Setting | ESP32-C6 | ESP32-S3 |
    |---|---|---|
    | **Board** | `ESP32C6 Dev Module` | `ESP32S3 Dev Module` |
-   | **USB CDC On Boot** | `Enabled` | `Enabled` |
+   | **USB CDC On Boot** | `Enabled` | **`Disabled`** |
    | **USB Mode** | — | **`USB-OTG (TinyUSB)`** |
    | **PSRAM** | — | **`OPI PSRAM`** |
    | **Flash Size** | `8MB (64Mb)` | `16MB (128Mb)` |
@@ -1131,11 +1161,20 @@ esptool --chip esp32s3 write-flash 0x0 firmware-<version>-esp32s3-full.bin
    | Core Debug Level | `None` | `None` |
    | **Erase All Flash Before Upload** | `Disabled` | `Disabled` |
 
-   > **USB CDC On Boot must be Enabled** — without it the Serial Monitor will not receive any output and the device may not be recognised on the port.
+   > **USB CDC On Boot must be Enabled on the C6** — without it the Serial Monitor will not receive any output and the device may not be recognised on the port.
    > **Flash Size and Partition Scheme must match** — the 3MB APP partition is required to fit the firmware with LVGL v9 and all libraries.
 
-   Three S3-specific traps, all of which change the produced binary:
+   Four S3-specific traps, all of which change the produced binary:
 
+   > **USB CDC On Boot must be `Disabled` on the S3 — the opposite of the C6.**
+   > The USB-persona feature (see [USB mode / mouse jiggler](#usb-mode--mouse-jiggler-s3-only))
+   > brings its own CDC/HID interfaces up at runtime from the touchscreen menu's
+   > choice; if this were Enabled, the core would auto-start a CDC interface
+   > before `setup()` even runs, so a "HID only" choice could never truly hide
+   > the serial port from the host. Serial output still works normally in the
+   > default HID+Serial persona — it just starts a moment later, from inside
+   > the sketch instead of before it.
+   >
    > **USB Mode must be `USB-OTG (TinyUSB)`, not `Hardware CDC and JTAG`.**
    > Waveshare's setup page pictures Hardware CDC, but the working configuration
    > is USB-OTG. This setting feeds `build.usb_mode`, so the two genuinely
@@ -1187,7 +1226,7 @@ guard counts the collected `-full.bin` images against the number of entries in
 
 ```
 ========== BOOT ==========
-[BOOT] ESP32-C6-Touch-LCD-1.47  fw v3.0.0
+[BOOT] ESP32-C6-Touch-LCD-1.47  fw v3.1.0
 [BOOT] PSRAM no  internal FS no
 [BOOT] Wake cause: cold boot / RESET button
 [1] Pulling CS pins HIGH...
@@ -1236,7 +1275,7 @@ read: 8161
 That is a C6 with a card inserted. An S3 differs in four places:
 
 ```
-[BOOT] ESP32-S3-Touch-LCD-1.47  fw v3.0.0
+[BOOT] ESP32-S3-Touch-LCD-1.47  fw v3.1.0
 [BOOT] PSRAM yes  internal FS yes (FFat)
 ...
 [4b] No IMU on this board — tilt control disabled.
@@ -1269,7 +1308,7 @@ which takes a few seconds — expect a one-off pause on the very first cardless 
 | Black screen after boot | Display init failed | Check SPI wiring; confirm `gfx->begin() OK` in serial log |
 | **S3:** compile error `unsupported target` | Wrong board selected in the IDE | `board_config.h` only knows ESP32-C6 and ESP32-S3; pick `ESP32S3 Dev Module` |
 | **S3:** no serial output at all | `USB Mode` set to `Hardware CDC and JTAG` | Set **USB Mode = `USB-OTG (TinyUSB)`** and re-upload — see [Option B](#option-b--build-from-source) |
-| **S3:** `Not enough RAM for GIF` | `PSRAM` left `Disabled` | Set **PSRAM = `OPI PSRAM`**; the boot log must say `PSRAM yes` |
+| **S3:** `PSRAM not enabled` on screen, or `[GIF] ... PSRAM is not enabled` in the serial log | `PSRAM` left `Disabled` | Set **PSRAM = `OPI PSRAM`** and re-upload; the boot log must then say `PSRAM yes`. Do **not** resize the GIF — the asset is fine, the build was not |
 | **S3:** config and GIFs vanished after upload | **Erase All Flash Before Sketch Upload** was Enabled | Keep it `Disabled`; it wipes the FFat partition holding both |
 | **S3:** three games missing from the carousel | Working as intended — no IMU | Tennis Letters, Letters Rain and Snake Letters steer only by tilt |
 | **S3:** linker warning `missing .note.GNU-stack section implies executable stack` | Comes from the Xtensa toolchain's own `libgcc` (`_floatdidf.o`), not this sketch | Harmless — ignore it. It appears on every S3 build with the pinned core and does not affect the firmware |
@@ -1277,7 +1316,7 @@ which takes a few seconds — expect a one-off pause on the very first cardless 
 | `GIF not found` | Wrong filename or path | Path is case-sensitive: `/cruzr_emotions/cruzr_smile.gif` |
 | Birthday GIF not showing | `happybirthday.gif` absent or wrong date format | Place the file at `/cruzr_emotions/happybirthday.gif` (160×86 px); verify `dates` entries are `DD-MM-YYYY` |
 | GIF shows but wrong size | GIF not resized | Resize to 160 × 86 px using ezgif.com/resize |
-| `Not enough RAM for GIF` | GIF still full-size | Must be 160 × 86 px — see [GIF Requirements](#gif-requirements) |
+| `Not enough RAM — resize GIF to 160x86` on screen, or `[GIF] need ~84KB, only N available` in the serial log | GIF still full-size | Must be 160 × 86 px — see [GIF Requirements](#gif-requirements). **On the S3, check the `PSRAM` row above first** — the firmware only names the GIF once it has confirmed PSRAM is up |
 | Clock shows `--:--` permanently | No WiFi, no log, no manual set | Set date+time via Carousel → Clock editor |
 | Clock shows wrong time after RESET | Log entry is old | Set time manually or re-enable WiFi for NTP sync |
 | Clock 1 hour off after DST change | Old `gmt_offset` config or missing `tz` key | Replace `gmt_offset` with `tz = CET-1CEST,M3.5.0,M10.5.0/3` in `config.ini` |
@@ -1363,8 +1402,8 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v2.7.0 | ✅ released | Bingo! — on-device 1–90 number caller (tap/tilt to draw, cycle-and-reveal animation, call-history popup); web-served printable UK/housie ticket sheets at `/bingo`, linked from the Web Configuration page; same generator mirrored on the docs site at `/bingo.html` |
 | v2.7.1 | ✅ released | WiFi configuration redesign — three-way `[wifi] mode = wifi\|ap\|off` (replaces the old on/off toggle) with a carousel sub-screen selector; non-blocking connect state machine with credential-rejection → automatic AP rescue and exponential backoff for unreachable networks (`WiFiMulti` removed); AP hotspot is now **open** and named `ESP32-Clock-XXXXXX` per device — the PIN authorises only the web UI's mutating actions; alarm always fires with a drift-warning overlay instead of the GIF when no time-sync source is available (AP/Off mode, or NTP timeout), and the 5-minute early-wake margin is skipped entirely outside WiFi mode |
 | v2.7.2 | ✅ released | Three-stage CI/CD pipeline — compile validation against a pinned toolchain, an `FW_VERSION` guard that fails any PR reusing a released version, and automatic tag-and-release on `main` — plus a weekly canary that rebuilds against the latest upstream core and libraries. One shared tune engine now backs the apps menu and every game, fixing two tune bugs |
-| v3.0.0 | 🚀 new | **ESP32-S3 support** — one sketch, two boards, all hardware differences in `board_config.h`; storage abstraction that falls back from SD card to the S3's internal FFat partition (with a generated default `config.ini` on a virgin device); tilt-only games and emotion cycling hidden at runtime where no IMU answers; **swipe left/right to adjust brightness** on every board; atomic config writes (temp file + rename); AP SSID MAC read from eFuse instead of the not-yet-created softAP netif; missing-GIF paths reported instead of rendering a blank screen; **web file manager** at `/files` — browse, download, delete and upload on either storage backend, with a three-layer free-space guard; **dual-target CI and releases** — every release ships a binary set per board, built from one shared target definition |
-| — | 🔭 planned | **Internal-flash provisioning** — copy GIFs to FFat on first boot when a card is present, plus a web upload endpoint, so a cardless S3 is fully usable |
+| v3.0.0 | ✅ released | **ESP32-S3 support** — one sketch, two boards, all hardware differences in `board_config.h`; storage abstraction that falls back from SD card to the S3's internal FFat partition (with a generated default `config.ini` on a virgin device); **internal-flash provisioning** — GIFs on the card are mirrored onto FFat at boot, so a board provisioned once from a card keeps its animations with the card removed; tilt-only games and emotion cycling hidden at runtime where no IMU answers; **swipe left/right to adjust brightness** on every board; atomic config writes (temp file + rename); AP SSID MAC read from eFuse instead of the not-yet-created softAP netif; missing-GIF paths reported instead of rendering a blank screen; **web file manager** at `/files` — browse, download, delete and upload on either storage backend, with a three-layer free-space guard; **dual-target CI and releases** — every release ships a binary set per board, built from one shared target definition |
+| v3.1.0 | 🚀 new | **USB Mode / mouse jiggler (S3 only)** — the board can present itself as a USB HID mouse and nudge the cursor at randomised intervals to keep a host awake; three-way persona (`HID` / `HID+Serial` / `Serial`) chosen from a carousel reached by long-pressing the analog clock, persisted as `[usb] mode` and applied on the next boot, since a composite USB descriptor cannot be swapped live; jiggling runs only while the smile GIF is open, starting 5 s after it opens; **hold BOOT through power-up** to force Serial-only for one boot, so a HID-only choice can never lock out reflashing. Requires **USB CDC On Boot = `Disabled`** on the S3 — the opposite of the C6 — because the sketch now brings its own CDC/HID interfaces up itself. Compiled out entirely on the C6, which has no USB-OTG peripheral. Also: a GIF that will not fit now names a disabled **PSRAM** build setting directly instead of blaming the asset size |
 
 ## License
 

@@ -13,7 +13,7 @@
     "name": "ESP32-S3 Touch LCD 1.47",
     "slug": "esp32s3-lcd147",
     "chip": "esp32s3",
-    "fqbn": "esp32:esp32:esp32s3:JTAGAdapter=default,PSRAM=opi,CDCOnBoot=cdc,USBMode=default,PartitionScheme=app3M_fat9M_16MB,CPUFreq=240,FlashMode=qio,FlashSize=16M,ZigbeeMode=default,DebugLevel=none",
+    "fqbn": "esp32:esp32:esp32s3:JTAGAdapter=default,PSRAM=opi,CDCOnBoot=default,USBMode=default,PartitionScheme=app3M_fat9M_16MB,CPUFreq=240,FlashMode=qio,FlashSize=16M,ZigbeeMode=default,DebugLevel=none",
     "core-version": "3.3.11",
     "lvgl-version": "9.5.0",
     "gfx-version": "1.6.7",

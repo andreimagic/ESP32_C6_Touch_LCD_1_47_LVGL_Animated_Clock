@@ -67,6 +67,14 @@
   #define BOARD_HAS_IMU     1     // QMI8658A at 0x6B, shares I2C with touch
   #define BOARD_SD_SHARES_LCD_BUS 1
 
+  // No USB-OTG/device peripheral on this chip — only USB-Serial-JTAG, which
+  // cannot present USB HID. The USB mouse-jiggler feature self-disables here.
+  #define BOARD_HAS_USB_HID 0
+
+  // No PSRAM on this chip at all, so a GIF that doesn't fit really is about the
+  // asset size here — there is no menu option that could add headroom.
+  #define BOARD_EXPECTS_PSRAM 0
+
   // PartitionScheme=default_8MB leaves 1.5MB of SPIFFS, not FAT, and the two
   // 3.19MB OTA slots leave no room to grow one. So there is no internal
   // filesystem to fall back to here: an SD card is required.
@@ -113,6 +121,24 @@
 
   #define BOARD_HAS_IMU     0     // no IMU on this board — tilt features self-disable
   #define BOARD_SD_SHARES_LCD_BUS 0
+
+  // Native USB-OTG peripheral — can present a composite CDC/HID device.
+  // NOTE: assumes the BOOT button is wired to GPIO0 (standard on ESP32-S3
+  // dev boards, and nothing else in this file claims GPIO0). The C6 variant
+  // of this board wires BOOT to GPIO9 instead (see README), so this has not
+  // been taken for granted — verify against the S3 schematic if the USB
+  // recovery hatch (hold BOOT through power-up to force Serial-only) doesn't
+  // respond on real hardware.
+  #define BOARD_HAS_USB_HID 1
+  #define BOARD_USB_BOOT_PIN 0
+
+  // 8MB OPI PSRAM, which the GIF canvas depends on (see show_gif_fullscreen()).
+  // It only joins the heap when Tools -> PSRAM is set to "OPI PSRAM"; left
+  // Disabled, the core never gets -DBOARD_HAS_PSRAM and never calls psramInit(),
+  // so the canvas falls back to internal SRAM and no longer fits. This flag lets
+  // that shortfall be reported as the misconfiguration it usually is rather than
+  // as an oversized asset.
+  #define BOARD_EXPECTS_PSRAM 1
 
   // PartitionScheme=app3M_fat9M_16MB provides a 9.9MB 'ffat' partition, so the
   // firmware can run with no card at all. STORAGE falls back to it when no SD

@@ -183,6 +183,9 @@ struct AppConfig {
 // Same directory as the paths above, without the LVGL drive letter — filesystem
 // calls (SD./FFat./STORAGE->) never take one.
 #define GIF_DIR_FS        "/cruzr_emotions"
+// macroPad scripts (S3 only, see BOARD_HAS_USB_HID). Created on demand so the
+// web file manager always has a destination, even on a virgin filesystem.
+#define SCRIPTS_DIR_FS    "/scripts"
 
 // ─── Forward declarations ─────────────────────────────────────────────────────
 static void home_screen_init(void);
@@ -215,6 +218,7 @@ static void usb_persona_begin(void);
 static void show_usb_carousel(void);
 static void hid_jiggle_arm(void);
 static void hid_jiggle_stop(void);
+static void scripts_dir_ensure(void);
 #endif
 
 
@@ -9250,8 +9254,34 @@ static lv_obj_t *se_usb_lbl      = nullptr;
 static lv_obj_t *se_usb_desc     = nullptr;
 static lv_obj_t *se_usb_dot[3]   = {nullptr, nullptr, nullptr};
 
+// The carousel now pages between two items. USB Mode stays index 0 so the
+// long-press lands on the same screen it always did; macroPad sits next to it.
+enum UsbCarouselItem : int { UCI_USB_MODE = 0, UCI_MACROPAD = 1, UCI_COUNT = 2 };
+static int usb_carousel_idx = UCI_USB_MODE;
+
+// ── macroPad — script list ──────────────────────────────────────────────────
+// Scaffold: lists SCRIPTS_DIR_FS and navigates it. Selecting a script does not
+// type anything yet — the keyboard interface is deliberately not brought up in
+// this step, so flashing it cannot change what the host sees on the USB bus.
+//
+// The cap is a fixed array rather than a dynamic list because this runs on the
+// same heap the GIF canvas needs; 24 entries is 1.5KB and cannot fragment it.
+// Files beyond the cap are counted, not silently dropped — see scripts_scan().
+#define SCRIPTS_MAX      24
+#define SCRIPT_NAME_MAX  40
+
+struct ScriptEntry { char name[SCRIPT_NAME_MAX]; uint32_t chars; };
+static ScriptEntry scripts_list[SCRIPTS_MAX];
+static int  scripts_n         = 0;
+static bool scripts_truncated = false;
+
+static lv_obj_t *macro_list_cont = nullptr;
+static int       macro_idx       = 0;
+
 static void usb_carousel_build(void);
 static void usb_modal_longpress_cb(lv_event_t *e);
+static void open_macropad_list(void);
+static void macro_list_build(void);
 
 static void usb_editor_refresh()
 {
@@ -9378,11 +9408,21 @@ static void close_usb_editor()
 }
 
 static void usb_carousel_tap_cb(lv_event_t *e)
-{ if (lv_event_get_code(e)==LV_EVENT_CLICKED) open_usb_editor(); }
+{
+  if (lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
+  if (usb_carousel_idx==UCI_USB_MODE) open_usb_editor();
+  else                                open_macropad_list();
+}
+
+static void usb_carousel_left_cb(lv_event_t*e)
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){usb_carousel_idx=(usb_carousel_idx+UCI_COUNT-1)%UCI_COUNT;usb_carousel_build();} }
+static void usb_carousel_right_cb(lv_event_t*e)
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){usb_carousel_idx=(usb_carousel_idx+1)%UCI_COUNT;usb_carousel_build();} }
 
 static void usb_carousel_build()
 {
   if (usb_editor_cont) { lv_obj_del(usb_editor_cont); usb_editor_cont=nullptr; }
+  if (macro_list_cont) { lv_obj_del(macro_list_cont); macro_list_cont=nullptr; }
   se_usb_lbl = se_usb_desc = nullptr;
   for (int i=0;i<3;i++) se_usb_dot[i]=nullptr;
   lv_obj_clean(usb_modal_cont);
@@ -9392,18 +9432,46 @@ static void usb_carousel_build()
   static const char *names[3] = {"HID", "HID+CDC", "Serial"};
   const lv_color_t cols[3] = {lv_color_make(200,140,60), lv_color_make(80,200,120), lv_color_make(80,180,220)};
   const uint8_t s = (cfg.usb_persona > USB_SERIAL_ONLY) ? USB_HID_SERIAL : cfg.usb_persona;
-  char desc[28]; snprintf(desc,sizeof(desc),"Currently: %s",names[s]);
 
-  // Single item — no left/right paging zones yet, unlike the 4-item main
-  // carousel. The chrome (icon/name/desc/dot/hint) still matches it exactly.
+  // Per-item chrome. USB Mode colours itself by the active persona, exactly as
+  // it did when this was a single-item carousel; macroPad has no state to show
+  // at rest, so it takes a fixed accent.
+  const char *icon_txt, *item_name;
+  lv_color_t  accent;
+  char        desc[32];
+  if (usb_carousel_idx==UCI_USB_MODE) {
+    icon_txt = LV_SYMBOL_USB;  item_name = "USB Mode";  accent = cols[s];
+    snprintf(desc,sizeof(desc),"Currently: %s",names[s]);
+  } else {
+    icon_txt = LV_SYMBOL_KEYBOARD;  item_name = "macroPad";
+    accent   = lv_color_make(150,130,220);
+    snprintf(desc,sizeof(desc),"Type a saved script");
+  }
+
+  // Left arrow + zone
+  lv_obj_t*larr=lv_label_create(usb_modal_cont);
+  lv_label_set_text(larr,LV_SYMBOL_LEFT);
+  lv_obj_set_style_text_font(larr,&lv_font_montserrat_48,0);
+  lv_obj_set_style_text_color(larr,lv_color_make(80,100,180),0);
+  lv_obj_align(larr,LV_ALIGN_LEFT_MID,6,0);
+  usb_zone(usb_modal_cont,0,0,60,172,usb_carousel_left_cb);
+
+  // Right arrow + zone
+  lv_obj_t*rarr=lv_label_create(usb_modal_cont);
+  lv_label_set_text(rarr,LV_SYMBOL_RIGHT);
+  lv_obj_set_style_text_font(rarr,&lv_font_montserrat_48,0);
+  lv_obj_set_style_text_color(rarr,lv_color_make(80,100,180),0);
+  lv_obj_align(rarr,LV_ALIGN_RIGHT_MID,-6,0);
+  usb_zone(usb_modal_cont,260,0,60,172,usb_carousel_right_cb);
+
   lv_obj_t*icon=lv_label_create(usb_modal_cont);
-  lv_label_set_text(icon,LV_SYMBOL_USB);
+  lv_label_set_text(icon,icon_txt);
   lv_obj_set_style_text_font(icon,&lv_font_montserrat_48,0);
-  lv_obj_set_style_text_color(icon,cols[s],0);
+  lv_obj_set_style_text_color(icon,accent,0);
   lv_obj_align(icon,LV_ALIGN_CENTER,0,-28);
 
   lv_obj_t*name_lbl=lv_label_create(usb_modal_cont);
-  lv_label_set_text(name_lbl,"USB Mode");
+  lv_label_set_text(name_lbl,item_name);
   lv_obj_set_style_text_font(name_lbl,&lv_font_montserrat_16,0);
   lv_obj_set_style_text_color(name_lbl,lv_color_white(),0);
   lv_obj_align(name_lbl,LV_ALIGN_CENTER,0,18);
@@ -9411,12 +9479,14 @@ static void usb_carousel_build()
   lv_obj_t*desc_lbl=lv_label_create(usb_modal_cont);
   lv_label_set_text(desc_lbl,desc);
   lv_obj_set_style_text_font(desc_lbl,&lv_font_montserrat_14,0);
-  lv_obj_set_style_text_color(desc_lbl,cols[s],0);
+  lv_obj_set_style_text_color(desc_lbl,accent,0);
   lv_obj_align(desc_lbl,LV_ALIGN_CENTER,0,40);
 
+  // Centre tap zone, inset so it cannot swallow the paging arrows — same split
+  // the main carousel uses (60 / 200 / 60).
   {
     lv_obj_t *z = lv_obj_create(usb_modal_cont);
-    lv_obj_set_size(z,320,172); lv_obj_set_pos(z,0,0);
+    lv_obj_set_size(z,200,172); lv_obj_set_pos(z,60,0);
     lv_obj_set_style_bg_opa(z,LV_OPA_TRANSP,0);
     lv_obj_set_style_border_width(z,0,0); lv_obj_set_style_pad_all(z,0,0);
     lv_obj_set_style_radius(z,0,0); lv_obj_set_style_shadow_width(z,0,0);
@@ -9432,17 +9502,225 @@ static void usb_carousel_build()
   lv_obj_set_style_text_font(hint,&dejavu_mono_14,0);
   lv_obj_align(hint,LV_ALIGN_BOTTOM_MID,0,-18);
 
-  lv_obj_t*dot=lv_label_create(usb_modal_cont);
-  lv_obj_set_style_text_font(dot,&dejavu_mono_14,0);
-  lv_label_set_text(dot,"\xe2\x97\x8f");
-  lv_obj_set_style_text_color(dot,lv_color_white(),0);
-  lv_obj_align(dot,LV_ALIGN_BOTTOM_MID,0,-2);
+  // Position dots — two of them, centred on the same baseline the 4-dot main
+  // carousel uses (its row spans 137..179, centre ~162).
+  for (int i=0;i<UCI_COUNT;i++) {
+    lv_obj_t*dot=lv_label_create(usb_modal_cont);
+    lv_obj_set_style_text_font(dot,&dejavu_mono_14,0);
+    lv_label_set_text(dot, i==usb_carousel_idx ? "\xe2\x97\x8f" : "\xe2\x97\x8b"); // "●" : "○"
+    lv_obj_set_style_text_color(dot,
+      i==usb_carousel_idx?lv_color_white():lv_color_make(80,80,100),0);
+    lv_obj_set_pos(dot,151+i*14,156);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  macroPad — script listing (S3 only)
+// ══════════════════════════════════════════════════════════════════════════════
+//  Reached from the USB carousel's second item. Lists SCRIPTS_DIR_FS and pages
+//  through it; selecting a script does not type anything yet.
+//
+//  The directory is created on demand rather than assumed, so the web file
+//  manager always has somewhere to upload to even on a virgin filesystem, and
+//  an empty directory is a first-class state rather than an error.
+// ══════════════════════════════════════════════════════════════════════════════
+
+static void scripts_dir_ensure()
+{
+  if (!storageAvailable || !STORAGE)     return;
+  if (STORAGE->exists(SCRIPTS_DIR_FS))   return;
+  if (STORAGE->mkdir(SCRIPTS_DIR_FS))
+    Serial.printf("[MACRO] created %s on %s\n", SCRIPTS_DIR_FS, storage_label());
+  else
+    Serial.printf("[MACRO] could not create %s on %s\n", SCRIPTS_DIR_FS, storage_label());
+}
+
+// Deliberately no extension filter: script files are whatever the user uploaded
+// (.txt, .art, no extension at all), so filtering would hide valid content.
+// Directories are skipped — the listing is one level deep by design.
+static void scripts_scan()
+{
+  scripts_n = 0; scripts_truncated = false;
+  if (!storageAvailable || !STORAGE) return;
+  scripts_dir_ensure();
+
+  File d = STORAGE->open(SCRIPTS_DIR_FS);
+  if (!d) return;
+  if (!d.isDirectory()) { d.close(); return; }
+
+  File e = d.openNextFile();
+  while (e) {
+    const bool  isdir = e.isDirectory();
+    const char *bn    = e.name();          // basename on core 3.x; path() carries the dir
+    const uint32_t sz = isdir ? 0 : (uint32_t)e.size();
+    if (!isdir && bn && bn[0]) {
+      if (scripts_n < SCRIPTS_MAX) {
+        // name() points into the File, so copy before close() invalidates it.
+        strncpy(scripts_list[scripts_n].name, bn, SCRIPT_NAME_MAX - 1);
+        scripts_list[scripts_n].name[SCRIPT_NAME_MAX - 1] = '\0';
+        scripts_list[scripts_n].chars = sz;
+        scripts_n++;
+      } else {
+        scripts_truncated = true;         // counted, not silently dropped
+      }
+    }
+    e.close();
+    e = d.openNextFile();
+  }
+  d.close();
+
+  Serial.printf("[MACRO] %s on %s: %d script%s%s\n",
+                SCRIPTS_DIR_FS, storage_label(), scripts_n,
+                scripts_n == 1 ? "" : "s",
+                scripts_truncated ? " (more present, list capped)" : "");
+}
+
+static void macro_left_cb(lv_event_t*e)
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED && scripts_n>1){macro_idx=(macro_idx+scripts_n-1)%scripts_n;macro_list_build();} }
+static void macro_right_cb(lv_event_t*e)
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED && scripts_n>1){macro_idx=(macro_idx+1)%scripts_n;macro_list_build();} }
+
+// Step 2 seam. The countdown popup and the keyboard playback loop attach here.
+// Until then a selection is reported on serial and nothing else happens, so the
+// scaffold cannot produce keystrokes on the host.
+static void macro_item_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
+  if (scripts_n == 0 || macro_idx >= scripts_n) return;
+  Serial.printf("[MACRO] selected %s (%u chars) — playback not implemented yet\n",
+                scripts_list[macro_idx].name, (unsigned)scripts_list[macro_idx].chars);
+}
+
+static void macro_list_build()
+{
+  if (!macro_list_cont) return;
+  lv_obj_clean(macro_list_cont);
+  lv_obj_add_event_cb(macro_list_cont,usb_modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
+
+  lv_obj_t*title=lv_label_create(macro_list_cont);
+  lv_label_set_text(title,LV_SYMBOL_KEYBOARD "  macroPad");
+  lv_obj_set_style_text_font(title,&lv_font_montserrat_14,0);
+  lv_obj_set_style_text_color(title,lv_color_make(180,180,220),0);
+  lv_obj_align(title,LV_ALIGN_TOP_MID,0,8);
+
+  // ── Empty state ───────────────────────────────────────────────────────────
+  // No tap zone is created at all, so the placeholder cannot be selected and
+  // macro_idx can never address a file that is not there.
+  if (scripts_n == 0) {
+    lv_obj_t*msg=lv_label_create(macro_list_cont);
+    lv_label_set_text(msg,"No scripts yet");
+    lv_obj_set_style_text_font(msg,&lv_font_montserrat_16,0);
+    lv_obj_set_style_text_color(msg,lv_color_make(140,140,160),0);
+    lv_obj_align(msg,LV_ALIGN_CENTER,0,-12);
+
+    lv_obj_t*sub=lv_label_create(macro_list_cont);
+    lv_label_set_text_fmt(sub,"upload to %s via the web UI",SCRIPTS_DIR_FS);
+    lv_obj_set_style_text_font(sub,&lv_font_montserrat_14,0);
+    lv_obj_set_style_text_color(sub,lv_color_make(100,100,120),0);
+    lv_label_set_long_mode(sub,LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(sub,280);
+    lv_obj_set_style_text_align(sub,LV_TEXT_ALIGN_CENTER,0);
+    lv_obj_align(sub,LV_ALIGN_CENTER,0,20);
+
+    lv_obj_t*h=lv_label_create(macro_list_cont);
+    lv_label_set_text(h,"hold to go back");
+    lv_obj_set_style_text_color(h,lv_color_make(100,100,120),0);
+    lv_obj_set_style_text_opa(h,LV_OPA_60,0);
+    lv_obj_align(h,LV_ALIGN_BOTTOM_MID,0,-4);
+    return;
+  }
+
+  // ── Populated ─────────────────────────────────────────────────────────────
+  if (scripts_n > 1) {
+    lv_obj_t*larr=lv_label_create(macro_list_cont);
+    lv_label_set_text(larr,LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_font(larr,&lv_font_montserrat_48,0);
+    lv_obj_set_style_text_color(larr,lv_color_make(80,100,180),0);
+    lv_obj_align(larr,LV_ALIGN_LEFT_MID,6,0);
+    usb_zone(macro_list_cont,0,30,60,120,macro_left_cb);
+
+    lv_obj_t*rarr=lv_label_create(macro_list_cont);
+    lv_label_set_text(rarr,LV_SYMBOL_RIGHT);
+    lv_obj_set_style_text_font(rarr,&lv_font_montserrat_48,0);
+    lv_obj_set_style_text_color(rarr,lv_color_make(80,100,180),0);
+    lv_obj_align(rarr,LV_ALIGN_RIGHT_MID,-6,0);
+    usb_zone(macro_list_cont,260,30,60,120,macro_right_cb);
+  }
+
+  lv_obj_t*name_lbl=lv_label_create(macro_list_cont);
+  lv_label_set_text(name_lbl,scripts_list[macro_idx].name);
+  lv_obj_set_style_text_font(name_lbl,&lv_font_montserrat_16,0);
+  lv_obj_set_style_text_color(name_lbl,lv_color_white(),0);
+  lv_label_set_long_mode(name_lbl,LV_LABEL_LONG_DOT);
+  lv_obj_set_width(name_lbl,190);
+  lv_obj_set_style_text_align(name_lbl,LV_TEXT_ALIGN_CENTER,0);
+  lv_obj_align(name_lbl,LV_ALIGN_CENTER,0,-14);
+
+  lv_obj_t*sub=lv_label_create(macro_list_cont);
+  lv_label_set_text_fmt(sub,"%u chars",(unsigned)scripts_list[macro_idx].chars);
+  lv_obj_set_style_text_font(sub,&lv_font_montserrat_14,0);
+  lv_obj_set_style_text_color(sub,lv_color_make(150,130,220),0);
+  lv_obj_align(sub,LV_ALIGN_CENTER,0,14);
+
+  // Centre tap zone, inset like the carousel's so it cannot swallow the arrows.
+  {
+    lv_obj_t *z = lv_obj_create(macro_list_cont);
+    lv_obj_set_size(z,200,120); lv_obj_set_pos(z,60,30);
+    lv_obj_set_style_bg_opa(z,LV_OPA_TRANSP,0);
+    lv_obj_set_style_border_width(z,0,0); lv_obj_set_style_pad_all(z,0,0);
+    lv_obj_set_style_radius(z,0,0); lv_obj_set_style_shadow_width(z,0,0);
+    lv_obj_clear_flag(z,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(z,macro_item_tap_cb,LV_EVENT_CLICKED,nullptr);
+    lv_obj_add_event_cb(z,usb_modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
+  }
+
+  // A counter rather than position dots: the list can hold up to SCRIPTS_MAX
+  // entries and a row of 24 dots would be unreadable at this size.
+  lv_obj_t*pos=lv_label_create(macro_list_cont);
+  if (scripts_truncated) lv_label_set_text_fmt(pos,"%d/%d+",macro_idx+1,scripts_n);
+  else                   lv_label_set_text_fmt(pos,"%d/%d", macro_idx+1,scripts_n);
+  lv_obj_set_style_text_font(pos,&dejavu_mono_14,0);
+  lv_obj_set_style_text_color(pos,lv_color_make(80,80,100),0);
+  lv_obj_align(pos,LV_ALIGN_BOTTOM_MID,0,-2);
+
+  lv_obj_t*hint=lv_label_create(macro_list_cont);
+  lv_label_set_text(hint,"hold to go back");
+  lv_obj_set_style_text_color(hint,lv_color_make(80,80,100),0);
+  lv_obj_set_style_text_opa(hint,LV_OPA_60,0);
+  lv_obj_set_style_text_font(hint,&dejavu_mono_14,0);
+  lv_obj_align(hint,LV_ALIGN_BOTTOM_MID,0,-18);
+}
+
+static void open_macropad_list()
+{
+  if (macro_list_cont) { lv_obj_del(macro_list_cont); macro_list_cont=nullptr; }
+  scripts_scan();
+  macro_idx = 0;
+
+  macro_list_cont=lv_obj_create(usb_modal_cont);
+  lv_obj_set_size(macro_list_cont,320,172); lv_obj_set_pos(macro_list_cont,0,0);
+  lv_obj_set_style_bg_color(macro_list_cont,lv_color_make(8,12,28),0);
+  lv_obj_set_style_bg_opa(macro_list_cont,LV_OPA_COVER,0);
+  lv_obj_set_style_border_width(macro_list_cont,0,0);
+  lv_obj_set_style_pad_all(macro_list_cont,0,0);
+  lv_obj_set_style_radius(macro_list_cont,0,0);
+  lv_obj_clear_flag(macro_list_cont,LV_OBJ_FLAG_SCROLLABLE);
+  macro_list_build();
 }
 
 static void usb_modal_longpress_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e)!=LV_EVENT_LONG_PRESSED) return;
   lv_indev_wait_release(lv_indev_get_act());
+
+  // macroPad list is one level deeper than the carousel, so a hold there steps
+  // back to the carousel rather than closing the modal outright.
+  if (macro_list_cont) {
+    lv_obj_del(macro_list_cont); macro_list_cont=nullptr;
+    usb_carousel_build();
+    return;
+  }
+
   if (!usb_editor_cont) {
     se_usb_lbl = se_usb_desc = nullptr;
     for (int i=0;i<3;i++) se_usb_dot[i]=nullptr;
@@ -9458,6 +9736,7 @@ static void usb_modal_longpress_cb(lv_event_t *e)
 static void show_usb_carousel(void)
 {
   if (usb_modal_cont || modal_cont || overlay_cont) return;
+  usb_carousel_idx = UCI_USB_MODE;   // always open on the item the long-press used to reach
 
   usb_modal_cont=lv_obj_create(lv_scr_act());
   lv_obj_set_size(usb_modal_cont,LV_PCT(100),LV_PCT(100));
@@ -10114,6 +10393,14 @@ void setup()
   // interruption. No-ops in well under a millisecond once flash matches the card.
   Serial.println("[7a] Checking internal flash against card...");
   provision_internal_flash();
+#endif
+
+#if BOARD_HAS_USB_HID
+  // ── Step 7a2: macroPad script directory ───────────────────────────────────
+  // Created at boot rather than on first menu entry so the web file manager has
+  // a destination to upload into without the user having to open the carousel
+  // first. Runs after provisioning so it lands on whichever backend won.
+  scripts_dir_ensure();
 #endif
 
   // ── Step 7b: WiFi + NTP ───────────────────────────────────────────────────

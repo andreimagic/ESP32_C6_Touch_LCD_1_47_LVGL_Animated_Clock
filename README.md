@@ -835,12 +835,15 @@ A random arithmetic problem (+ − × ÷, result always < 100) is shown in large
 
 Nine games plus a sounds toggle, navigated with **◀ ▶**. **Tap** to enter, **long-press** to go back.
 
-> **On a board with no IMU, four of the nine are hidden.** Tennis Letters,
-> Letters Rain, Snake Letters and ToneQuest steer *only* by tilt, so rather than
-> ship them unplayable the carousel skips them in both directions, leaving six
-> reachable entries. A persisted carousel position pointing at a hidden app is
-> normalised when the carousel is built, so it can never strand you on an
-> unreachable entry.
+> **On a board with no IMU, three of the nine are hidden.** Tennis Letters,
+> Letters Rain and Snake Letters steer *only* by tilt, so rather than ship them
+> unplayable the carousel skips them in both directions, leaving seven reachable
+> entries. A persisted carousel position pointing at a hidden app is normalised
+> when the carousel is built, so it can never strand you on an unreachable entry.
+>
+> **ToneQuest is the exception** — it swaps input method rather than hiding,
+> taking four-way swipes where there is no accelerometer to tilt. See its
+> section below.
 >
 > The position dots below the title are drawn one per *reachable* entry and the
 > row is re-centred on its own width, so on an S3 you get six dots rather than
@@ -963,9 +966,9 @@ A Simon-says tone-memory game, ported from the [Arduino original](https://github
 └────────────────────────────────┘
 ```
 
-- **Level the device to begin.** The ball is a bubble level: tilt moves it, and the sub-note reads `level the device` until you hold it inside the centre ring for 700 ms. Every new game starts here.
+- **Level the device to begin.** The ball is a bubble level: tilt moves it, and the sub-note reads `level the device` until you hold it inside the centre ring for 700 ms. Every new game starts here. *(Swipe build: the sub-note reads `tap to begin . then swipe` and a tap opens the round — there is nothing to level.)*
 - **Watch.** The sequence plays back — each step lights its edge as a semicircle that fades out like a sunset, and sounds that edge's tone. Level 1 is four moves.
-- **Repeat it.** Roll the ball into each wall in the order just shown. The ball has to come back near the centre between moves (the original joystick's spring return), which is also what stops one long sweep from registering two edges.
+- **Repeat it.** Roll the ball into each wall in the order just shown. The ball has to come back near the centre between moves (the original joystick's spring return), which is also what stops one long sweep from registering two edges. *(Swipe build: swipe up / down / left / right instead. LVGL delivers at most one gesture per press, so a swipe is inherently one move and no spring return is needed.)*
 - **Advance.** A clean sequence plays the success melody, adds one move and starts the next level. The pattern is drawn once per game and only ever revealed a prefix at a time, so level N is always level N−1 plus one new move.
 - **Or don't.** A wrong wall plays the failure tune and opens a popup with the level reached and the best ever. Tap it to play again — back to levelling the device — or long-press to exit.
 - **The game never ends.** There is no win state; the score *is* the level you reach. Best is persisted to `config.ini` under `[tonequest] high_score` and shown on the carousel card once it is above zero.
@@ -985,13 +988,35 @@ A Simon-says tone-memory game, ported from the [Arduino original](https://github
 | `start_moves` | `4` | Sequence length at level 1 (1–16). |
 | `flash_ms` | `420` | How long each edge stays lit, and its tone sounds, during playback (80–2000). |
 | `gap_ms` | `220` | Silence between playback steps (20–2000). |
-| `tilt_percent` | `55` | Percent of 1 g of tilt that pins the ball against a wall (30–100). Lower is twitchier and needs less wrist; higher demands a firmer tilt. |
+| `tilt_percent` | `55` | Percent of 1 g of tilt that pins the ball against a wall (30–100). Lower is twitchier and needs less wrist; higher demands a firmer tilt. Ignored in the swipe build. |
+
+#### ToneQuest without an IMU — the swipe build
+
+ToneQuest is the only carousel app that changes input method instead of disappearing where no accelerometer answers. Everything else about the game is identical: same pattern, same levels, same tones, same scoring. Only the way you answer changes.
+
+| | Tilt build (C6) | Swipe build (S3, or a C6 whose IMU went missing) |
+|---|---|---|
+| **Start gate** | Hold the ball in the ring for 700 ms | Tap anywhere |
+| **Answering** | Roll the ball into a wall | Swipe up / down / left / right |
+| **Between moves** | Ball must return near centre | Nothing — one gesture per press is already one move |
+| **The ball** | Follows tilt continuously | Flies to the wall it was sent to and comes back, on both playback and input |
+| **`tilt_percent`** | Sets how much wrist a wall costs | Ignored |
+
+Three LVGL behaviours are handled explicitly in `tq_gesture_cb` / `tq_longpress_cb`, and all three bite silently if you skip them:
+
+1. **`LV_OBJ_FLAG_GESTURE_BUBBLE` must be cleared on the tap zone.** `indev_gesture()` walks *up* from the pressed object for as long as that flag is set, and LVGL sets it on everything created with a parent — so left alone the walk sails past `apps_cont` and delivers to the screen, and the callback never runs.
+2. **`LONG_PRESSED` still fires on a slow swipe.** `pr_timestamp` is stamped on press and cleared only on release or press-lost; movement never resets it. A swipe taking longer than `long_press_time` (400 ms) would otherwise quit the game mid-move. `gesture_dir` is the tell — cleared on every new press, set the moment a gesture is recognised — so the long-press handler bails when it is set.
+3. **`CLICKED` still fires after a gesture.** Only matters for the tap gate, which is guarded on both the phase and `gesture_dir`.
+
+The gesture threshold is LVGL's default `LV_INDEV_DEF_GESTURE_LIMIT` of 50 px. On a 320×172 panel that is generous horizontally and about 9 mm of travel vertically; `lv_indev_set_gesture_min_distance()` can lower it if vertical swipes feel cramped.
+
+> Scores are not comparable between the two builds — swiping is quicker than tilting, with no return leg. Nothing breaks, since the high score is per-device in `config.ini`, but `Best: 12` means different things on a C6 and an S3.
 
 **Implementation note:** the domes are full circles inside wrapper objects sized to exactly the half that should be visible — LVGL clips children to their parent, so the other half simply never draws. The gradient runs the whole circle, which puts the wall on the 50 % white/hue mix and the crown on the pure hue: white-hot at the horizon, saturated at the top, like a setting sun.
 
 #### Sounds toggle
 
-The last carousel item — tenth on a board with an IMU, sixth on one without, since the three tilt-steered games are dropped from the carousel at runtime where no accelerometer answers. Tap to mute/unmute all apps menu and game audio. The setting is saved to `config.ini` under `[menu] sounds`. This does **not** affect alarm, timer, or metronome sounds.
+The last carousel item — tenth on a board with an IMU, seventh on one without, since the three tilt-steered games are dropped from the carousel at runtime where no accelerometer answers. Tap to mute/unmute all apps menu and game audio. The setting is saved to `config.ini` under `[menu] sounds`. This does **not** affect alarm, timer, or metronome sounds.
 
 ---
 
@@ -1487,7 +1512,7 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v3.0.0 | ✅ released | **ESP32-S3 support** — one sketch, two boards, all hardware differences in `board_config.h`; storage abstraction that falls back from SD card to the S3's internal FFat partition (with a generated default `config.ini` on a virgin device); **internal-flash provisioning** — GIFs on the card are mirrored onto FFat at boot, so a board provisioned once from a card keeps its animations with the card removed; tilt-only games and emotion cycling hidden at runtime where no IMU answers; **swipe left/right to adjust brightness** on every board; atomic config writes (temp file + rename); AP SSID MAC read from eFuse instead of the not-yet-created softAP netif; missing-GIF paths reported instead of rendering a blank screen; **web file manager** at `/files` — browse, download, delete and upload on either storage backend, with a three-layer free-space guard; **dual-target CI and releases** — every release ships a binary set per board, built from one shared target definition |
 | v3.1.0 | ✅ released | **USB Mode / mouse jiggler (S3 only)** — the board can present itself as a USB HID mouse and nudge the cursor at randomised intervals to keep a host awake; three-way persona (`HID` / `HID+Serial` / `Serial`) chosen from a carousel reached by long-pressing the analog clock, persisted as `[usb] mode` and applied on the next boot, since a composite USB descriptor cannot be swapped live; jiggling runs only while the smile GIF is open, starting 5 s after it opens; **hold BOOT through power-up** to force Serial-only for one boot, so a HID-only choice can never lock out reflashing. Requires **USB CDC On Boot = `Disabled`** on the S3 — the opposite of the C6 — because the sketch now brings its own CDC/HID interfaces up itself. Compiled out entirely on the C6, which has no USB-OTG peripheral. Also: a GIF that will not fit now names a disabled **PSRAM** build setting directly instead of blaming the asset size |
 | v3.2.0 | ✅ released | **macroPad — ASCII art over USB (S3 only)** — the clock enumerates as a USB keyboard and types a stored text file into whatever window has focus, one keystroke at a time, so the mechanism is visible rather than magic. Ships with three `.art` samples (`ASCII_house`, `ASCII_hut`, `ASCII_penguin`) in `sd_card_root/scripts/`; drop a new file in `/scripts` and it appears in the menu, no toolchain involved. Also: the **mouse jiggler**'s return path is now a mirror of its outbound one — the same step magnitudes replayed backwards rather than a freshly randomised split — so host pointer acceleration applies equally to both legs and the cursor stops creeping over long sessions. Second item on the USB carousel; scripts live in `/scripts` on whichever storage backend is active, listed with no extension filter and created automatically at boot so the [file manager](#file-manager) always has an upload target. Tap a script for a **3-second countdown** — time to click into the target window, since the device cannot know what has focus — then a progress bar tracks position in the file and **tapping the screen stops it part-way**. Only the trailing line ending is stripped, so leading indentation survives intact for ASCII art. The keyboard registers on the same composite descriptor as the jiggler's mouse, so the HID personas now enumerate **mouse and keyboard** on one port; a `Serial`-only boot has no keyboard and says so instead of counting down to nothing. Compiled out entirely on the C6 |
-| v3.3.0 | 🚀 new | **ToneQuest** — a Simon-says tone-memory game, ported from the [Arduino original](https://github.com/andreimagic/ToneQuest_Game) where a joystick picked the directions and four LEDs echoed them. The joystick is now the IMU and the LEDs are four "sunset" domes rising from the screen edges, but the direction→tone table is the original one note for note (UP D4, DOWN C4, LEFT E4, RIGHT F4). Every game opens on a **bubble level**: hold the ball inside the centre ring for 700 ms and the round begins. Then watch the sequence play back — each step lights its edge as a semicircle that fades out like a setting sun — and roll the ball into the same walls in the same order, coming back near the centre between moves the way the original joystick sprang back. Level 1 is four moves and every level adds one, revealed as a prefix of one pattern drawn per game, so level N is always level N−1 plus one new move. There is no win state: the score *is* the level you reach, persisted as `[tonequest] high_score` and tunable via `start_moves` / `flash_ms` / `gap_ms` / `tilt_percent`. Sits between Bingo! and the sounds toggle; tilt-only, so it is hidden on a board with no IMU |
+| v3.3.0 | 🚀 new | **ToneQuest** — a Simon-says tone-memory game, ported from the [Arduino original](https://github.com/andreimagic/ToneQuest_Game) where a joystick picked the directions and four LEDs echoed them. The joystick is now the IMU and the LEDs are four "sunset" domes rising from the screen edges, but the direction→tone table is the original one note for note (UP D4, DOWN C4, LEFT E4, RIGHT F4). Every game opens on a **bubble level**: hold the ball inside the centre ring for 700 ms and the round begins. Then watch the sequence play back — each step lights its edge as a semicircle that fades out like a setting sun — and roll the ball into the same walls in the same order, coming back near the centre between moves the way the original joystick sprang back. Level 1 is four moves and every level adds one, revealed as a prefix of one pattern drawn per game, so level N is always level N−1 plus one new move. There is no win state: the score *is* the level you reach, persisted as `[tonequest] high_score` and tunable via `start_moves` / `flash_ms` / `gap_ms` / `tilt_percent`. Sits between Bingo! and the sounds toggle. Unlike the other tilt games it does **not** hide where no accelerometer answers &mdash; it takes four-way **swipes** instead, with the ball flying to the wall it was sent to so the screen still reads the same, making it the first app here that swaps input method per board rather than disappearing |
 
 ## License
 

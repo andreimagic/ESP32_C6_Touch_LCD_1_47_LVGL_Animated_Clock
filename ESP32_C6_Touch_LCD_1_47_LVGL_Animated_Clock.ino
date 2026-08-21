@@ -5565,23 +5565,24 @@ static int         apps_idx       = 0;   // 0=RPS 1=Dice 2=Coin 3=Metro 4=Tennis
 #define APPS_COUNT 10
 
 // ── Gyro-dependent apps ──────────────────────────────────────────────────────
-// Tennis Letters (4), Letters Rain (5), Snake Letters (6) and ToneQuest (8)
-// steer entirely by tilt: their field tap opens the pause popup, it does not
-// move anything. With no accelerometer they are unplayable, so they are dropped
-// from the carousel rather than shipped as dead entries.
+// Tennis Letters (4), Letters Rain (5) and Snake Letters (6) steer entirely by
+// tilt: their field tap opens the pause popup, it does not move anything. With
+// no accelerometer they are unplayable, so they are dropped from the carousel
+// rather than shipped as dead entries.
 //
 // Deliberately NOT hidden:
 //   RPS (0) / Dice (1) — tap-driven; the gyro is only a shake-to-reroll extra.
 //   Bingo (7)          — bn_tap_cb calls numbers on tap; tilt is the alternate.
-//
-// ToneQuest (8) joins them: the ball IS the input device, so with no
-// accelerometer there is no way to answer a single prompt.
+//   ToneQuest (8)      — the only app that swaps input method rather than
+//                        hiding. With an IMU the ball is a bubble level; with
+//                        none it takes four-way swipes instead, which answer a
+//                        prompt just as precisely. See tq_swipe_mode.
 //
 // The test is runtime (imuReady), not compile-time, so it also covers a C6
 // whose QMI8658 fails to answer at boot. On the S3 the IMU code is compiled
 // out and imuReady is permanently false, so the effect is the same.
 static inline bool app_needs_imu(int idx)
-{ return idx == 4 || idx == 5 || idx == 6 || idx == 8; }
+{ return idx == 4 || idx == 5 || idx == 6; }
 
 static inline bool app_is_available(int idx)
 { return imuReady || !app_needs_imu(idx); }
@@ -9000,10 +9001,19 @@ static void bn_game_start()
 //    │ Level: 3                Best: 7│   ← status bar, y = 148
 //    └────────────────────────────────┘
 //
+//  Two input modes, picked at game start from imuReady:
+//    TILT  — the ball is a bubble level. Roll it into a wall to answer.
+//    SWIPE — no accelerometer (every S3, and a C6 whose QMI8658 went missing).
+//            Four-way swipes answer instead, and the ball flies to the wall it
+//            was sent to so the screen still reads the same. LVGL delivers at
+//            most one gesture per press, so a swipe is inherently one move and
+//            the whole spring-return dance below is simply not needed.
+//
 //  Phases:
 //    LEVEL — a bubble-level gate. The ball tracks tilt; hold it inside the
 //            ring for TQ_LEVEL_HOLD_MS and the round begins. This is also
 //            what re-centres the player's wrist before every new game.
+//            In swipe mode there is nothing to level, so it is a tap gate.
 //    DEMO  — the sequence plays back: each step lights its dome (fading out
 //            like a sunset) and sounds its tone. Input is ignored throughout.
 //    INPUT — roll the ball into each edge in the order just shown. A correct
@@ -9064,6 +9074,7 @@ static int  tq_demo_i     = 0;          // playback cursor
 static bool tq_demo_lit   = false;      // playback is mid-flash rather than mid-gap
 static int  tq_phase      = TQ_P_LEVEL;
 static bool tq_running    = false;
+static bool tq_swipe_mode = false;      // no IMU: gestures drive the game
 static bool tq_armed      = false;      // ball has returned home; next wall counts
 static bool tq_beat_high  = false;      // this run set a new record
 static uint32_t tq_hold_t0 = 0;         // millis() the ball entered the ring, 0 = outside
@@ -9088,6 +9099,7 @@ static lv_timer_t *tq_tone_timer = nullptr;  // one-shot: silence an input flash
 static void tq_start_round(void);
 static void tq_show_popup(void);
 static void tq_poll_cb(lv_timer_t *t);
+static void tq_input(int dir);
 
 // ── Buzzer: the tune player's own primitives, driven a note at a time ────────
 // menu_tone() blocks for the length of the note, which would hold the flash off
@@ -9113,6 +9125,34 @@ static void tq_tone_off_cb(lv_timer_t *t)
   tq_buzz_off();
 }
 
+// ── Swipe mode: throw the ball at the wall and let it come back ──────────────
+// The ball has no tilt to follow here, so without this it would sit inert in
+// the middle and the game would lose the thing that makes it look like itself.
+// One animation with a reverse leg covers out-and-back in exactly the flash
+// length, so the ball lands as the dome peaks and is home as the tone ends.
+static void tq_ball_fly(int dir)
+{
+  if (!tq_ball) return;
+
+  const bool vertical = (dir == TQ_UP || dir == TQ_DOWN);
+  const int  home     = vertical ? TQ_CY - TQ_BALL_D / 2 : TQ_CX - TQ_BALL_D / 2;
+  int        wall;
+  if (vertical) wall = (dir == TQ_UP)   ? 0 : TQ_FIELD_H - TQ_BALL_D;
+  else          wall = (dir == TQ_LEFT) ? 0 : TQ_FIELD_W - TQ_BALL_D;
+
+  lv_anim_t a;
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, tq_ball);
+  if (vertical)
+    lv_anim_set_exec_cb(&a, [](void *o, int32_t v) { lv_obj_set_y((lv_obj_t *)o, v); });
+  else
+    lv_anim_set_exec_cb(&a, [](void *o, int32_t v) { lv_obj_set_x((lv_obj_t *)o, v); });
+  lv_anim_set_values(&a, home, wall);
+  lv_anim_set_duration(&a, cfg.tq_flash_ms / 2);
+  lv_anim_set_reverse_duration(&a, cfg.tq_flash_ms / 2);
+  lv_anim_start(&a);
+}
+
 // ── Light one dome and fade it out over the length of its tone ───────────────
 // lv_anim_start() drops any animation already running on the same var+exec
 // pair, so re-flashing an edge before its fade has finished simply restarts it.
@@ -9128,6 +9168,10 @@ static void tq_flash(int dir)
   lv_anim_set_values(&a, LV_OPA_COVER, LV_OPA_TRANSP);
   lv_anim_set_duration(&a, cfg.tq_flash_ms);
   lv_anim_start(&a);
+
+  // Playback and input both come through here, so this one line gives the
+  // swipe build a moving ball in both phases.
+  if (tq_swipe_mode) tq_ball_fly(dir);
 }
 
 // ── Status bar ───────────────────────────────────────────────────────────────
@@ -9150,10 +9194,15 @@ static void tq_stop_timers()
 static void tq_stop()
 {
   bool was_running = tq_running;
-  tq_running = false;
-  tq_phase   = TQ_P_LEVEL;
+  tq_running    = false;
+  tq_swipe_mode = false;
+  tq_phase      = TQ_P_LEVEL;
   tq_stop_timers();
-  if (was_running) tq_buzz_off();   // a flash may have been mid-tone
+  // tune_stop(), not tq_buzz_off(): a level-clear or game-over melody runs on
+  // the shared tune_timer, which outlives this game. Muting the pin alone
+  // leaves that timer sounding the next note — over the carousel, and at the
+  // 2000 Hz tq_buzz_off() restores. Same call tl_stop/lr_stop/sn_stop make.
+  if (was_running) tune_stop();
   tq_ring    = nullptr;
   tq_ball    = nullptr;
   tq_note    = nullptr;
@@ -9391,6 +9440,60 @@ static void tq_poll_cb(lv_timer_t * /*t*/)
   tq_input(hit);
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  SWIPE INPUT  —  the no-IMU path
+//
+//  Three LVGL behaviours have to be handled here, none of them optional:
+//
+//  1. GESTURE_BUBBLE. indev_gesture() walks *up* from the pressed object for as
+//     long as that flag is set, and LVGL sets it on everything created with a
+//     parent. Left alone the walk sails past apps_cont and delivers to the
+//     screen, so the callback never runs. Clearing it on the tap zone ends the
+//     walk there. (Same lesson as brightness_swipe_cb, one screen up.)
+//
+//  2. LONG_PRESSED still fires on a slow swipe. pr_timestamp is stamped on
+//     press and cleared only on release or press-lost — movement never resets
+//     it — so a swipe that takes longer than long_press_time would otherwise
+//     quit the game mid-move. gesture_dir is the tell: it is cleared on every
+//     new press and set the moment a gesture is recognised.
+//
+//  3. CLICKED still fires after a gesture. Harmless while it only has to reach
+//     the tap gate, which is guarded on both the phase and gesture_dir.
+// ══════════════════════════════════════════════════════════════════════════════
+
+static void tq_gesture_cb(lv_event_t * /*e*/)
+{
+  if (!tq_running || !tq_swipe_mode || tq_phase != TQ_P_INPUT) return;
+
+  int dir;
+  switch (lv_indev_get_gesture_dir(lv_indev_get_act())) {
+    case LV_DIR_TOP:    dir = TQ_UP;    break;
+    case LV_DIR_BOTTOM: dir = TQ_DOWN;  break;
+    case LV_DIR_LEFT:   dir = TQ_LEFT;  break;
+    case LV_DIR_RIGHT:  dir = TQ_RIGHT; break;
+    default: return;
+  }
+  tq_input(dir);
+}
+
+// Swipe mode's start gate — there is no device to level, so a tap opens the
+// round instead. Ignored in tilt mode, where tq_poll_cb owns the gate.
+static void tq_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (!tq_running || !tq_swipe_mode || tq_phase != TQ_P_LEVEL) return;
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_NONE) return;  // that was a swipe
+  tq_start_round();
+}
+
+// Exit, unless the press that produced it was a swipe (see 2. above).
+static void tq_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_NONE) return;
+  apps_longpress_cb(e);
+}
+
 // ── Game-over popup ──────────────────────────────────────────────────────────
 static void tq_popup_tap_cb(lv_event_t *e)
 {
@@ -9401,6 +9504,7 @@ static void tq_popup_tap_cb(lv_event_t *e)
 static void tq_popup_longpress_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_NONE) return;  // a swipe, not a hold
   lv_indev_wait_release(lv_indev_get_act());
   tq_stop();                       // apps_carousel_build() reaps the popup below
   app_subphase = 0;
@@ -9505,7 +9609,11 @@ static void tq_build_dome(int dir, int wx, int wy, int ww, int wh,
 static void tq_game_start()
 {
   tq_stop_timers();
-  tq_buzz_off();
+  // The popup is raised while tune_play_failure() is still running, so "tap:
+  // play again" routinely lands here mid-tune. Cancel it rather than mute it,
+  // or it keeps playing over the new game's start gate and collides with the
+  // first playback tone.
+  tune_stop();
 
   // Whole pattern up front, revealed a prefix at a time — so level N is always
   // level N-1 plus one new move, never a reshuffle.
@@ -9516,6 +9624,7 @@ static void tq_game_start()
   tq_demo_i    = 0;
   tq_demo_lit  = false;
   tq_phase     = TQ_P_LEVEL;
+  tq_swipe_mode = !imuReady;   // no accelerometer: gestures answer instead
   tq_armed     = false;
   tq_beat_high = false;
   tq_hold_t0   = 0;
@@ -9531,8 +9640,25 @@ static void tq_game_start()
   app_subphase = 1;
 
   // Tap zone first, at the bottom of the z-order: nothing above it is
-  // clickable, so it is what receives the long-press that exits the game.
-  app_tapzone(apps_cont, nullptr);
+  // clickable, so every press lands here whichever input mode is live.
+  //
+  // Built by hand rather than through app_tapzone() because it needs a
+  // long-press handler that can tell a swipe from a hold, and GESTURE_BUBBLE
+  // cleared so the gesture walk stops here. Being a child of apps_cont it is
+  // rebuilt with every game, so these callbacks cannot accumulate the way one
+  // registered on apps_cont itself would.
+  lv_obj_t *zone = lv_obj_create(apps_cont);
+  lv_obj_set_size(zone, TQ_FIELD_W, 172);
+  lv_obj_set_pos(zone, 0, 0);
+  lv_obj_set_style_bg_opa(zone, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(zone, 0, 0);
+  lv_obj_set_style_pad_all(zone, 0, 0);
+  lv_obj_set_style_radius(zone, 0, 0);
+  lv_obj_clear_flag(zone, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(zone, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_event_cb(zone, tq_tap_cb,       LV_EVENT_CLICKED,      nullptr);
+  lv_obj_add_event_cb(zone, tq_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+  lv_obj_add_event_cb(zone, tq_gesture_cb,   LV_EVENT_GESTURE,      nullptr);
 
   // Four domes, each a circle centred on the middle of its wall
   tq_build_dome(TQ_UP,    TQ_CX - TQ_DOME_R, 0,
@@ -9570,9 +9696,10 @@ static void tq_game_start()
   lv_obj_clear_flag(tq_ball, LV_OBJ_FLAG_CLICKABLE);
   tq_ball_tint = 0;
 
-  // Sub-note — only up while the player is levelling the device
+  // Sub-note — only up while the player is at the start gate
   tq_note = lv_label_create(apps_cont);
-  lv_label_set_text(tq_note, "level the device");
+  lv_label_set_text(tq_note, tq_swipe_mode ? "tap to begin  .  then swipe"
+                                           : "level the device");
   lv_obj_set_style_text_font(tq_note, &dejavu_mono_14, 0);
   lv_obj_set_style_text_color(tq_note, lv_color_make(120, 130, 170), 0);
   lv_obj_align(tq_note, LV_ALIGN_TOP_MID, 0, TQ_CY + TQ_RING_D / 2 + 8);

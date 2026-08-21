@@ -65,7 +65,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v3.2.0"
+#define FW_VERSION      "v3.3.0"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -136,6 +136,11 @@ struct AppConfig {
   bool sn_horizontal_walls         = false;      // [snake] horizontal_walls
   int  sn_distractions             = 3;         // [snake] distractions (letters that kill on touch)
   int  sn_next_level_score         = 10;        // [snake] next_level_score (score at which distractions appear)
+  int  tq_high_score               = 0;         // [tonequest] high_score (highest level completed)
+  int  tq_start_moves              = 4;         // [tonequest] start_moves (sequence length at level 1)
+  int  tq_flash_ms                 = 420;       // [tonequest] flash_ms (dome lit + tone, per playback step)
+  int  tq_gap_ms                   = 220;       // [tonequest] gap_ms (silence between playback steps)
+  int  tq_tilt_percent             = 55;        // [tonequest] tilt_percent (% of 1 g that pins the ball to an edge)
   // [birthdays] dates — up to 8 entries in DD-MM-YYYY format.
   // Only day & month are compared; the year is kept as reference in the file.
   // Default: empty (no birthday greetings).
@@ -858,6 +863,13 @@ vertical_walls = true
 horizontal_walls = false
 distractions = 3
 next_level_score = 10
+
+[tonequest]
+high_score = 0
+start_moves = 4
+flash_ms = 420
+gap_ms = 220
+tilt_percent = 55
 )INI";
 
 // ── Create config.ini when the active storage has none ───────────────────────
@@ -1425,6 +1437,32 @@ static void load_config()
       }
     }
 
+    // ── [tonequest] ──────────────────────────────────────────────────────────
+    else if (strcmp(section, "tonequest") == 0) {
+      if (strcmp(key, "high_score") == 0) {
+        cfg.tq_high_score = atoi(val);
+        Serial.printf("[CFG]   tonequest.high_score      = %d\n", cfg.tq_high_score);
+      }
+      else if (strcmp(key, "start_moves") == 0) {
+        cfg.tq_start_moves = max(1, min(16, atoi(val)));
+        Serial.printf("[CFG]   tonequest.start_moves     = %d\n", cfg.tq_start_moves);
+      }
+      else if (strcmp(key, "flash_ms") == 0) {
+        cfg.tq_flash_ms = max(80, min(2000, atoi(val)));
+        Serial.printf("[CFG]   tonequest.flash_ms        = %d\n", cfg.tq_flash_ms);
+      }
+      else if (strcmp(key, "gap_ms") == 0) {
+        cfg.tq_gap_ms = max(20, min(2000, atoi(val)));
+        Serial.printf("[CFG]   tonequest.gap_ms          = %d\n", cfg.tq_gap_ms);
+      }
+      else if (strcmp(key, "tilt_percent") == 0) {
+        // Below 30 the ball pins to an edge from an almost flat device and the
+        // levelling gate becomes unwinnable; above 100 an edge is out of reach.
+        cfg.tq_tilt_percent = max(30, min(100, atoi(val)));
+        Serial.printf("[CFG]   tonequest.tilt_percent    = %d\n", cfg.tq_tilt_percent);
+      }
+    }
+
     // ── [birthdays] ──────────────────────────────────────────────────────────
     // dates = DD-MM-YYYY,DD-MM-YYYY,...   (up to 8 entries)
     // Only the day and month are used for comparison; the year is stored for
@@ -1593,7 +1631,8 @@ static void save_config()
           strncmp(trimmed,"[usb]",         5)==0 ||
           strncmp(trimmed,"[tennis]",      8)==0 ||
           strncmp(trimmed,"[letter_rain]",13)==0 ||
-          strncmp(trimmed,"[snake]",       7)==0) { inManaged=true;  continue; }
+          strncmp(trimmed,"[snake]",       7)==0 ||
+          strncmp(trimmed,"[tonequest]",  11)==0) { inManaged=true;  continue; }
       if (*trimmed == '[')                    { inManaged=false; }
       if (inManaged)                            continue;
 
@@ -1676,6 +1715,14 @@ static void save_config()
   fw.printf("vertical_walls = %s\n",       cfg.sn_vertical_walls   ? "true" : "false");
   fw.printf("horizontal_walls = %s\n",     cfg.sn_horizontal_walls ? "true" : "false");
   fw.printf("distractions = %d\n",         cfg.sn_distractions);
+  fw.printf("next_level_score = %d\n",     cfg.sn_next_level_score);
+
+  fw.print("\n[tonequest]\n");
+  fw.printf("high_score = %d\n",           cfg.tq_high_score);
+  fw.printf("start_moves = %d\n",          cfg.tq_start_moves);
+  fw.printf("flash_ms = %d\n",             cfg.tq_flash_ms);
+  fw.printf("gap_ms = %d\n",               cfg.tq_gap_ms);
+
   // ── Verify before swapping ────────────────────────────────────────────────
   // The print()/printf() calls above are unchecked individually — there are
   // around fifty and testing each would drown the function. Instead the final
@@ -1688,8 +1735,8 @@ static void save_config()
   // over a good config.ini — precisely the failure temp-then-swap exists to
   // prevent, and unrecoverable on a board running from internal flash.
   char tail[48];
-  const int  tail_len = snprintf(tail, sizeof(tail), "next_level_score = %d\n",
-                                 cfg.sn_next_level_score);
+  const int  tail_len = snprintf(tail, sizeof(tail), "tilt_percent = %d\n",
+                                 cfg.tq_tilt_percent);
   const bool tail_ok  = tail_len > 0 &&
                         fw.write((const uint8_t *)tail, (size_t)tail_len) == (size_t)tail_len;
   const size_t claimed = fw.position();
@@ -1716,8 +1763,8 @@ static void save_config()
     return;
   }
 
-  Serial.printf("[CFG] Saved to %s (wifi/alarm/timer/menu/tennis/letter_rain/snake).\n",
-                storage_label());
+  Serial.printf("[CFG] Saved to %s (wifi/alarm/timer/menu/tennis/letter_rain/"
+                "snake/tonequest).\n", storage_label());
   
   // Save the current timestamp to the log file as well
   log_last_seen();
@@ -1871,6 +1918,53 @@ static void seed_snake_config()
   fa.printf("next_level_score = %d\n",     cfg.sn_next_level_score);
   fa.close();
   Serial.println("[CFG] [snake] section seeded into config.ini.");
+}
+
+// ── Ensure [tonequest] section exists in config.ini ───────────────────────────
+// Called once at boot after load_config(). If the section is absent (fresh SD
+// card, or a card carrying a config.ini written before this game shipped), it
+// appends the block with current cfg defaults so the web UI always shows all
+// ToneQuest settings from the very first power-on.
+static void seed_tonequest_config()
+{
+  if (!storageAvailable || !STORAGE) return;
+
+  File fr = STORAGE->open("/config.ini", FILE_READ);
+  if (!fr) return;  // no file at all — save_config() will create it later
+  bool found = false;
+  char line[64];
+  while (fr.available() && !found) {
+    int len = 0;
+    while (fr.available() && len < (int)sizeof(line) - 1) {
+      char ch = fr.read();
+      if (ch == '\n') break;
+      if (ch == '\r') continue;  // strip CR
+      line[len++] = ch;
+    }
+    line[len] = '\0';
+    char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, "[tonequest]", 11) == 0) { found = true; }
+  }
+  fr.close();
+
+  if (found) {
+    Serial.println("[CFG] [tonequest] section already present.");
+    return;
+  }
+
+  // Append the section with current (default) values
+  File fa = STORAGE->open("/config.ini", FILE_APPEND);
+  if (!fa) { Serial.println("[CFG] seed_tonequest_config: cannot open for append"); return; }
+  fa.println();
+  fa.println("[tonequest]");
+  fa.printf("high_score = %d\n",           cfg.tq_high_score);
+  fa.printf("start_moves = %d\n",          cfg.tq_start_moves);
+  fa.printf("flash_ms = %d\n",             cfg.tq_flash_ms);
+  fa.printf("gap_ms = %d\n",               cfg.tq_gap_ms);
+  fa.printf("tilt_percent = %d\n",         cfg.tq_tilt_percent);
+  fa.close();
+  Serial.println("[CFG] [tonequest] section seeded into config.ini.");
 }
 
 // ── Generate a random 6-digit PIN at boot ─────────────────────────────────────
@@ -5466,24 +5560,28 @@ static void menu_tone_hi()   { menu_tone(NOTE_HI, 80); }
 
 // ── Apps state ────────────────────────────────────────────────────────────────
 // apps_cont declared globally above wifi_poll_cb
-static int         apps_idx       = 0;   // 0=RPS 1=Dice 2=Coin 3=Metro 4=Tennis 5=Rain 6=Snake 7=Bingo 8=Sound
-#define APPS_COUNT 9
+static int         apps_idx       = 0;   // 0=RPS 1=Dice 2=Coin 3=Metro 4=Tennis 5=Rain
+                                         // 6=Snake 7=Bingo 8=ToneQuest 9=Sound
+#define APPS_COUNT 10
 
 // ── Gyro-dependent apps ──────────────────────────────────────────────────────
-// Tennis Letters (4), Letters Rain (5) and Snake Letters (6) steer entirely by
-// tilt: their field tap opens the pause popup, it does not move anything. With
-// no accelerometer they are unplayable, so they are dropped from the carousel
-// rather than shipped as dead entries.
+// Tennis Letters (4), Letters Rain (5), Snake Letters (6) and ToneQuest (8)
+// steer entirely by tilt: their field tap opens the pause popup, it does not
+// move anything. With no accelerometer they are unplayable, so they are dropped
+// from the carousel rather than shipped as dead entries.
 //
 // Deliberately NOT hidden:
 //   RPS (0) / Dice (1) — tap-driven; the gyro is only a shake-to-reroll extra.
 //   Bingo (7)          — bn_tap_cb calls numbers on tap; tilt is the alternate.
 //
+// ToneQuest (8) joins them: the ball IS the input device, so with no
+// accelerometer there is no way to answer a single prompt.
+//
 // The test is runtime (imuReady), not compile-time, so it also covers a C6
 // whose QMI8658 fails to answer at boot. On the S3 the IMU code is compiled
 // out and imuReady is permanently false, so the effect is the same.
 static inline bool app_needs_imu(int idx)
-{ return idx == 4 || idx == 5 || idx == 6; }
+{ return idx == 4 || idx == 5 || idx == 6 || idx == 8; }
 
 static inline bool app_is_available(int idx)
 { return imuReady || !app_needs_imu(idx); }
@@ -5521,6 +5619,8 @@ static void lr_game_start(void);
 static void lr_stop(void);
 static void bn_game_start(void);
 static void bn_stop(void);
+static void tq_game_start(void);
+static void tq_stop(void);
 
 // ── Math problem generator ────────────────────────────────────────────────────
 static void math_generate(char *buf, int blen, int opts[4])
@@ -5680,6 +5780,7 @@ static void apps_close()
   lr_stop();
   sn_stop();
   bn_stop();
+  tq_stop();
   if (apps_cont) { lv_obj_del(apps_cont); apps_cont = nullptr; }
   app_subphase = 0;
 }
@@ -5696,6 +5797,7 @@ static void apps_longpress_cb(lv_event_t *e)
     lr_stop();
     sn_stop();
     bn_stop();
+    tq_stop();
     app_subphase = 0;
     apps_carousel_build();
   } else {
@@ -8876,6 +8978,630 @@ static void bn_game_start()
 //  END BINGO!
 // ══════════════════════════════════════════════════════════════════════════════
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  TONEQUEST  (apps_idx == 8)
+//
+//  A Simon-says tone-memory game, ported from the Arduino original
+//  (github.com/andreimagic/ToneQuest_Game) where a joystick picked the four
+//  directions and four LEDs echoed them. Here the joystick is the IMU and the
+//  LEDs are four "sunset" domes that rise from the screen edges — but the
+//  direction→tone table is the original one, note for note:
+//
+//      UP = D4 (294 Hz)   DOWN = C4 (262 Hz)
+//      LEFT = E4 (330 Hz) RIGHT = F4 (349 Hz)
+//
+//  Screen layout (320×172), everything above the status bar:
+//
+//    ┌──────────── ▄▄▄▄▄ ─────────────┐   ← UP dome (amber)
+//    │ ▌                            ▐ │
+//    │ ▌LEFT          ○      RIGHT  ▐ │   ← target ring + ball
+//    │ ▌(green)              (blue) ▐ │
+//    ├──────────── ▀▀▀▀▀ ─────────────┤   ← DOWN dome (rose), y = 146
+//    │ Level: 3                Best: 7│   ← status bar, y = 148
+//    └────────────────────────────────┘
+//
+//  Phases:
+//    LEVEL — a bubble-level gate. The ball tracks tilt; hold it inside the
+//            ring for TQ_LEVEL_HOLD_MS and the round begins. This is also
+//            what re-centres the player's wrist before every new game.
+//    DEMO  — the sequence plays back: each step lights its dome (fading out
+//            like a sunset) and sounds its tone. Input is ignored throughout.
+//    INPUT — roll the ball into each edge in the order just shown. A correct
+//            full sequence advances the level and adds one move; a wrong edge
+//            ends the game.
+//
+//  The pattern is generated once per game and only ever revealed a prefix at a
+//  time (level + start_moves - 1 steps), exactly as the Arduino original did —
+//  so every level is the previous one plus one new move, never a reshuffle.
+//
+//  There is no win state: the game runs until a mistake. The score is the
+//  level reached, and the best is persisted to config.ini under [tonequest].
+// ══════════════════════════════════════════════════════════════════════════════
+
+#define TQ_FIELD_W       320   // px — full screen width
+#define TQ_FIELD_H       146   // px — playfield height; the status bar owns the rest
+#define TQ_STATUS_Y      148   // px — matches Tennis/Rain/Snake/Bingo
+#define TQ_CX            (TQ_FIELD_W / 2)   // 160
+#define TQ_CY            (TQ_FIELD_H / 2)   // 73
+#define TQ_BALL_D         14   // px, diameter
+#define TQ_RING_D         44   // px, diameter — 15 px of slack around the ball
+#define TQ_DOME_R         50   // px — radius of the edge domes (half is clipped away)
+#define TQ_EDGE_TOL        6   // px from the wall that still counts as touching it
+#define TQ_HOME_F      0.45f  // fraction of full tilt to fall back inside to re-arm
+#define TQ_POLL_MS        40   // ms — IMU/ball tick, ~25 fps
+#define TQ_SMOOTH       0.35f  // ball follow factor per tick (1.0 = no smoothing)
+#define TQ_LEVEL_HOLD_MS 700   // ms the ball must sit in the ring to start a round
+#define TQ_LEAD_IN_MS    600   // ms of quiet before a sequence plays back
+#define TQ_NEXT_LEVEL_MS 1500  // ms between the win tune and the next playback
+#define TQ_MAX_MOVES      64   // sequence buffer; the level counter keeps rising past it
+
+// Travel from centre to wall, in px, for each axis. The two differ because the
+// playfield does, and using one gain for both would make the side walls need
+// three times the tilt the top and bottom do.
+#define TQ_SPAN_X        (TQ_CX - TQ_BALL_D / 2)   // 153
+#define TQ_SPAN_Y        (TQ_CY - TQ_BALL_D / 2)   // 66
+
+enum { TQ_UP = 0, TQ_DOWN, TQ_LEFT, TQ_RIGHT };
+enum { TQ_P_LEVEL = 0, TQ_P_DEMO, TQ_P_INPUT, TQ_P_OVER };
+
+// Direction → tone. The original ToneQuest table, unchanged.
+static const uint16_t TQ_TONE[4] = { NOTE_D4, NOTE_C4, NOTE_E4, NOTE_F4 };
+
+// Direction → dome hue. The gradient always runs white-hot at the wall to this
+// colour at the dome's crown, which is what gives the sunset read.
+static const uint8_t TQ_HUE[4][3] = {
+  {255, 150,  20},   // UP    — amber
+  {235,  60, 140},   // DOWN  — rose
+  { 50, 200, 110},   // LEFT  — green
+  { 50, 140, 255},   // RIGHT — blue
+};
+
+static int  tq_pattern[TQ_MAX_MOVES];   // the full sequence, drawn once per game
+static int  tq_level      = 1;          // current level == current score
+static int  tq_moves      = 4;          // steps revealed this level
+static int  tq_step       = 0;          // how many the player has repeated correctly
+static int  tq_demo_i     = 0;          // playback cursor
+static bool tq_demo_lit   = false;      // playback is mid-flash rather than mid-gap
+static int  tq_phase      = TQ_P_LEVEL;
+static bool tq_running    = false;
+static bool tq_armed      = false;      // ball has returned home; next wall counts
+static bool tq_beat_high  = false;      // this run set a new record
+static uint32_t tq_hold_t0 = 0;         // millis() the ball entered the ring, 0 = outside
+
+static float tq_bx = TQ_CX, tq_by = TQ_CY;   // ball centre, px
+static int   tq_ball_ix = -1, tq_ball_iy = -1;  // last position actually pushed to LVGL
+static int   tq_ball_tint = -1;                 // last ball colour applied
+static int   tq_ring_tint = -1;                 // last ring colour applied
+
+static lv_obj_t   *tq_dome[4]   = { nullptr, nullptr, nullptr, nullptr };
+static lv_obj_t   *tq_ring      = nullptr;
+static lv_obj_t   *tq_ball      = nullptr;
+static lv_obj_t   *tq_note      = nullptr;   // "Level the device" sub-note
+static lv_obj_t   *tq_lvl_lbl   = nullptr;   // status bar — left
+static lv_obj_t   *tq_hi_lbl    = nullptr;   // status bar — right
+static lv_obj_t   *tq_pop       = nullptr;   // game-over popup
+static lv_timer_t *tq_poll_timer = nullptr;  // IMU + ball
+static lv_timer_t *tq_demo_timer = nullptr;  // sequence playback
+static lv_timer_t *tq_step_timer = nullptr;  // one-shot: win / lose / next level
+static lv_timer_t *tq_tone_timer = nullptr;  // one-shot: silence an input flash
+
+static void tq_start_round(void);
+static void tq_show_popup(void);
+static void tq_poll_cb(lv_timer_t *t);
+
+// ── Buzzer: the tune player's own primitives, driven a note at a time ────────
+// menu_tone() blocks for the length of the note, which would hold the flash off
+// screen until the tone had already finished. These let the dome and its tone
+// start together and be stopped by whatever timer owns the beat.
+static void tq_buzz_on(int freq)
+{
+  if (!cfg.menu_sounds) return;
+  ledcChangeFrequency(BUZZER_PIN, freq, 8);
+  ledcWrite(BUZZER_PIN, 96);
+}
+
+static void tq_buzz_off()
+{
+  ledcWrite(BUZZER_PIN, 0);
+  ledcChangeFrequency(BUZZER_PIN, 2000, 8);   // restore alarm freq
+}
+
+static void tq_tone_off_cb(lv_timer_t *t)
+{
+  lv_timer_del(t);
+  tq_tone_timer = nullptr;
+  tq_buzz_off();
+}
+
+// ── Light one dome and fade it out over the length of its tone ───────────────
+// lv_anim_start() drops any animation already running on the same var+exec
+// pair, so re-flashing an edge before its fade has finished simply restarts it.
+static void tq_flash(int dir)
+{
+  if (dir < 0 || dir > 3 || !tq_dome[dir]) return;
+  lv_anim_t a;
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, tq_dome[dir]);
+  lv_anim_set_exec_cb(&a, [](void *obj, int32_t v) {
+    lv_obj_set_style_bg_opa((lv_obj_t *)obj, (lv_opa_t)v, 0);
+  });
+  lv_anim_set_values(&a, LV_OPA_COVER, LV_OPA_TRANSP);
+  lv_anim_set_duration(&a, cfg.tq_flash_ms);
+  lv_anim_start(&a);
+}
+
+// ── Status bar ───────────────────────────────────────────────────────────────
+static void tq_status_refresh()
+{
+  if (tq_lvl_lbl) lv_label_set_text_fmt(tq_lvl_lbl, "Level: %d", tq_level);
+  if (tq_hi_lbl)  lv_label_set_text_fmt(tq_hi_lbl,  "Best: %d",  cfg.tq_high_score);
+}
+
+// ── Timers ───────────────────────────────────────────────────────────────────
+static void tq_stop_timers()
+{
+  if (tq_poll_timer) { lv_timer_del(tq_poll_timer); tq_poll_timer = nullptr; }
+  if (tq_demo_timer) { lv_timer_del(tq_demo_timer); tq_demo_timer = nullptr; }
+  if (tq_step_timer) { lv_timer_del(tq_step_timer); tq_step_timer = nullptr; }
+  if (tq_tone_timer) { lv_timer_del(tq_tone_timer); tq_tone_timer = nullptr; }
+}
+
+// ── Stop ToneQuest (called from apps_close / apps_longpress_cb) ──────────────
+static void tq_stop()
+{
+  bool was_running = tq_running;
+  tq_running = false;
+  tq_phase   = TQ_P_LEVEL;
+  tq_stop_timers();
+  if (was_running) tq_buzz_off();   // a flash may have been mid-tone
+  tq_ring    = nullptr;
+  tq_ball    = nullptr;
+  tq_note    = nullptr;
+  tq_lvl_lbl = nullptr;
+  tq_hi_lbl  = nullptr;
+  tq_pop     = nullptr;
+  for (int i = 0; i < 4; i++) tq_dome[i] = nullptr;
+}
+
+// ── Playback ─────────────────────────────────────────────────────────────────
+// One repeating timer alternating flash and gap, re-periodised on every tick.
+// tq_demo_lit says which half of the beat just ended.
+static void tq_demo_tick_cb(lv_timer_t *t)
+{
+  if (!tq_running || !apps_cont) { lv_timer_del(t); tq_demo_timer = nullptr; return; }
+
+  if (tq_demo_lit) {
+    // Flash just ended — silence it and open the gap before the next step.
+    tq_buzz_off();
+    tq_demo_lit = false;
+    tq_demo_i++;
+    if (tq_demo_i >= tq_moves) {          // whole sequence shown — hand over
+      lv_timer_del(t);
+      tq_demo_timer = nullptr;
+      tq_phase      = TQ_P_INPUT;
+      tq_step       = 0;
+      tq_armed      = false;              // come home first, then play
+      return;
+    }
+    lv_timer_set_period(t, cfg.tq_gap_ms);
+  } else {
+    tq_flash(tq_pattern[tq_demo_i]);
+    tq_buzz_on(TQ_TONE[tq_pattern[tq_demo_i]]);
+    tq_demo_lit = true;
+    lv_timer_set_period(t, cfg.tq_flash_ms);
+  }
+}
+
+// ── Start a round: reveal this level's prefix of the pattern ─────────────────
+static void tq_start_round()
+{
+  if (!tq_running) return;
+  tq_moves    = min(TQ_MAX_MOVES, cfg.tq_start_moves + tq_level - 1);
+  tq_demo_i   = 0;
+  tq_demo_lit = false;
+  tq_phase    = TQ_P_DEMO;
+  // tq_input() drops the ball timer on the move that ends a level, so the
+  // player cannot keep nudging the ball into walls while the round is being
+  // judged. Every round therefore has to put it back.
+  if (imuReady && !tq_poll_timer)
+    tq_poll_timer = lv_timer_create(tq_poll_cb, TQ_POLL_MS, nullptr);
+  if (tq_note) lv_obj_add_flag(tq_note, LV_OBJ_FLAG_HIDDEN);
+  tq_status_refresh();
+  if (tq_demo_timer) lv_timer_del(tq_demo_timer);
+  tq_demo_timer = lv_timer_create(tq_demo_tick_cb, TQ_LEAD_IN_MS, nullptr);
+}
+
+// ── Deferred: next level's playback, after the win tune has had the buzzer ───
+static void tq_next_level_cb(lv_timer_t *t)
+{
+  lv_timer_del(t);
+  tq_step_timer = nullptr;
+  tq_start_round();
+}
+
+// ── Deferred: level cleared ──────────────────────────────────────────────────
+// Runs one flash-length after the final correct move so the move's own tone is
+// heard in full before tune_play_success() takes the buzzer over.
+static void tq_win_cb(lv_timer_t *t)
+{
+  lv_timer_del(t);
+  tq_step_timer = nullptr;
+  if (!tq_running) return;
+
+  if (tq_tone_timer) { lv_timer_del(tq_tone_timer); tq_tone_timer = nullptr; }
+  tq_buzz_off();
+  tune_play_success();
+
+  tq_level++;
+  if (tq_level - 1 > cfg.tq_high_score) {   // the level just cleared is the score
+    cfg.tq_high_score = tq_level - 1;
+    tq_beat_high      = true;
+    save_config();
+  }
+  tq_status_refresh();
+
+  tq_step_timer = lv_timer_create(tq_next_level_cb, TQ_NEXT_LEVEL_MS, nullptr);
+  lv_timer_set_repeat_count(tq_step_timer, 1);
+}
+
+// ── Deferred: wrong edge ─────────────────────────────────────────────────────
+static void tq_lose_cb(lv_timer_t *t)
+{
+  lv_timer_del(t);
+  tq_step_timer = nullptr;
+  if (!tq_running) return;
+
+  if (tq_tone_timer) { lv_timer_del(tq_tone_timer); tq_tone_timer = nullptr; }
+  tq_buzz_off();
+  tune_play_failure();
+  tq_show_popup();
+}
+
+// ── A wall was touched: sound it, then judge it ──────────────────────────────
+static void tq_input(int dir)
+{
+  tq_flash(dir);
+  tq_buzz_on(TQ_TONE[dir]);
+  if (tq_tone_timer) lv_timer_del(tq_tone_timer);
+  tq_tone_timer = lv_timer_create(tq_tone_off_cb, cfg.tq_flash_ms, nullptr);
+  lv_timer_set_repeat_count(tq_tone_timer, 1);
+
+  const bool correct = (dir == tq_pattern[tq_step]);
+  if (correct && tq_step + 1 < tq_moves) { tq_step++; return; }
+
+  // Either the sequence is complete or the run is over — in both cases input
+  // stops here and a deferred beat decides what happens, so the move the player
+  // just made still gets its own tone and fade first.
+  tq_phase = TQ_P_OVER;
+  if (tq_poll_timer) { lv_timer_del(tq_poll_timer); tq_poll_timer = nullptr; }
+  if (tq_step_timer)   lv_timer_del(tq_step_timer);
+  tq_step_timer = lv_timer_create(correct ? tq_win_cb : tq_lose_cb,
+                                  cfg.tq_flash_ms + 150, nullptr);
+  lv_timer_set_repeat_count(tq_step_timer, 1);
+}
+
+// ── Ball tint helpers — only touch the style when the state actually changes,
+//    since every setter invalidates and this runs 25 times a second ──────────
+static void tq_set_ball_tint(int tint)
+{
+  if (tint == tq_ball_tint || !tq_ball) return;
+  tq_ball_tint = tint;
+  // 0 = home/armed (white), 1 = away and not yet re-armed (dim)
+  lv_obj_set_style_bg_color(tq_ball,
+    tint ? lv_color_make(110, 118, 150) : lv_color_white(), 0);
+}
+
+static void tq_set_ring_tint(int tint)
+{
+  if (tint == tq_ring_tint || !tq_ring) return;
+  tq_ring_tint = tint;
+  // 0 = idle (blue), 1 = ball settled inside, levelling (green)
+  lv_obj_set_style_border_color(tq_ring,
+    tint ? lv_color_make(80, 220, 120) : lv_color_make(80, 100, 180), 0);
+}
+
+// ── Ball / IMU tick ──────────────────────────────────────────────────────────
+// Bubble-level mapping, with the axis signs every other tilt game in this
+// sketch already uses: accelY > 0 pushes left, accelX > 0 pushes down. Tilting
+// to the stop (tilt_percent of 1 g) puts the ball exactly against the wall.
+static void tq_poll_cb(lv_timer_t * /*t*/)
+{
+  if (!imuReady || !tq_running || !apps_cont || !tq_ball) return;
+
+  imu.update();
+  imu.getAccel(&accelData);
+
+  const float full = (float)cfg.tq_tilt_percent / 100.0f;
+  float tx = (float)TQ_CX - (accelData.accelY / full) * (float)TQ_SPAN_X;
+  float ty = (float)TQ_CY + (accelData.accelX / full) * (float)TQ_SPAN_Y;
+
+  tq_bx += (tx - tq_bx) * TQ_SMOOTH;
+  tq_by += (ty - tq_by) * TQ_SMOOTH;
+
+  const float r = TQ_BALL_D / 2.0f;
+  if (tq_bx < r)                    tq_bx = r;
+  if (tq_bx > TQ_FIELD_W - r)       tq_bx = TQ_FIELD_W - r;
+  if (tq_by < r)                    tq_by = r;
+  if (tq_by > TQ_FIELD_H - r)       tq_by = TQ_FIELD_H - r;
+
+  const int ix = (int)(tq_bx - r);
+  const int iy = (int)(tq_by - r);
+  if (ix != tq_ball_ix || iy != tq_ball_iy) {
+    tq_ball_ix = ix; tq_ball_iy = iy;
+    lv_obj_set_pos(tq_ball, ix, iy);
+  }
+
+  const float dx = tq_bx - (float)TQ_CX;
+  const float dy = tq_by - (float)TQ_CY;
+  const float d2 = dx * dx + dy * dy;
+
+  // Displacement as a fraction of each axis' own travel. The playfield is
+  // twice as wide as it is tall, so a plain pixel radius would mean two
+  // different amounts of wrist depending on which way you tilted.
+  const float nx = dx / (float)TQ_SPAN_X;   // -1..1
+  const float ny = dy / (float)TQ_SPAN_Y;
+
+  // ── Levelling gate ────────────────────────────────────────────────────────
+  if (tq_phase == TQ_P_LEVEL) {
+    const float inner = (TQ_RING_D - TQ_BALL_D) / 2.0f;   // ball fully inside the ring
+    if (d2 <= inner * inner) {
+      if (tq_hold_t0 == 0) tq_hold_t0 = millis();
+      tq_set_ring_tint(1);
+      if (millis() - tq_hold_t0 >= TQ_LEVEL_HOLD_MS) {
+        tq_hold_t0 = 0;
+        tq_set_ring_tint(0);
+        tq_start_round();
+      }
+    } else {
+      tq_hold_t0 = 0;
+      tq_set_ring_tint(0);
+    }
+    return;
+  }
+
+  if (tq_phase != TQ_P_INPUT) return;
+
+  // ── Spring return ─────────────────────────────────────────────────────────
+  // The original's joystick recentred itself between moves. Here the player
+  // has to bring the ball home before the next wall counts, which is also what
+  // stops one long sweep from registering two edges.
+  if (!tq_armed) {
+    tq_set_ball_tint(1);
+    if (nx * nx + ny * ny <= TQ_HOME_F * TQ_HOME_F) {
+      tq_armed = true;
+      tq_set_ball_tint(0);
+    }
+    return;
+  }
+  tq_set_ball_tint(0);
+
+  // Dominant axis wins, so a corner resolves to one edge rather than whichever
+  // happens to be tested first (same rule Snake Letters uses for its heading).
+  int hit = -1;
+  if (fabsf(ny) >= fabsf(nx)) {
+    if      (tq_by <= r + TQ_EDGE_TOL)                hit = TQ_UP;
+    else if (tq_by >= TQ_FIELD_H - r - TQ_EDGE_TOL)   hit = TQ_DOWN;
+  } else {
+    if      (tq_bx <= r + TQ_EDGE_TOL)                hit = TQ_LEFT;
+    else if (tq_bx >= TQ_FIELD_W - r - TQ_EDGE_TOL)   hit = TQ_RIGHT;
+  }
+  if (hit < 0) return;
+
+  tq_armed = false;
+  tq_input(hit);
+}
+
+// ── Game-over popup ──────────────────────────────────────────────────────────
+static void tq_popup_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  tq_game_start();                 // straight back to the levelling gate
+}
+
+static void tq_popup_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  lv_indev_wait_release(lv_indev_get_act());
+  tq_stop();                       // apps_carousel_build() reaps the popup below
+  app_subphase = 0;
+  apps_carousel_build();
+}
+
+static void tq_show_popup()
+{
+  if (!apps_cont || tq_pop) return;
+
+  lv_obj_t *pop = lv_obj_create(apps_cont);
+  tq_pop = pop;
+  lv_obj_set_size(pop, 240, 110);
+  lv_obj_align(pop, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(pop, lv_color_make(10, 14, 34), 0);
+  lv_obj_set_style_bg_opa(pop, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(pop, lv_color_make(120, 160, 220), 0);
+  lv_obj_set_style_border_width(pop, 2, 0);
+  lv_obj_set_style_radius(pop, 8, 0);
+  lv_obj_set_style_pad_all(pop, 0, 0);
+  lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(pop, tq_popup_tap_cb,       LV_EVENT_CLICKED,      nullptr);
+  lv_obj_add_event_cb(pop, tq_popup_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+
+  // Title
+  lv_obj_t *title = lv_label_create(pop);
+  if (tq_beat_high) {
+    lv_label_set_text(title, "New High Score!");
+    lv_obj_set_style_text_color(title, lv_color_make(255, 220, 60), 0);
+  } else {
+    lv_label_set_text(title, "Game Over");
+    lv_obj_set_style_text_color(title, lv_color_make(220, 80, 80), 0);
+  }
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
+
+  // Score line — the level they fell on, and how far they got through it
+  lv_obj_t *score_lbl = lv_label_create(pop);
+  lv_label_set_text_fmt(score_lbl, "Level %d  (%d/%d)", tq_level, tq_step, tq_moves);
+  lv_obj_set_style_text_font(score_lbl, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(score_lbl, lv_color_white(), 0);
+  lv_obj_align(score_lbl, LV_ALIGN_CENTER, 0, -8);
+
+  // Best score line
+  lv_obj_t *hi_lbl = lv_label_create(pop);
+  lv_label_set_text_fmt(hi_lbl, "Best: %d", cfg.tq_high_score);
+  lv_obj_set_style_text_font(hi_lbl, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(hi_lbl, lv_color_make(160, 200, 255), 0);
+  lv_obj_align(hi_lbl, LV_ALIGN_CENTER, 0, 16);
+
+  // Hint
+  lv_obj_t *hint = lv_label_create(pop);
+  lv_label_set_text(hint, "tap: play again  hold: exit");
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(hint, lv_color_make(80, 80, 120), 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
+}
+
+// ── Build one edge dome ──────────────────────────────────────────────────────
+// A full circle inside a wrapper that is exactly the half we want to see: LVGL
+// clips children to their parent, so the half hanging outside simply never
+// draws and what is left is a semicircle sitting flat on the wall.
+//
+// The gradient runs the length of the whole circle, so the wall — which is the
+// circle's own centre line — lands on the 50% mix of white and the direction's
+// hue, and the crown lands on the pure hue. White is therefore placed at
+// whichever end of the gradient the wall is nearer: the start for UP and LEFT,
+// the end for DOWN and RIGHT.
+static void tq_build_dome(int dir, int wx, int wy, int ww, int wh,
+                          int cx, int cy, lv_grad_dir_t gdir, bool white_first)
+{
+  lv_obj_t *wrap = lv_obj_create(apps_cont);
+  lv_obj_set_size(wrap, ww, wh);
+  lv_obj_set_pos(wrap, wx, wy);
+  lv_obj_set_style_bg_opa(wrap, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(wrap, 0, 0);
+  lv_obj_set_style_pad_all(wrap, 0, 0);
+  lv_obj_set_style_radius(wrap, 0, 0);
+  lv_obj_clear_flag(wrap, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(wrap, LV_OBJ_FLAG_CLICKABLE);   // taps fall through to the tap zone
+
+  lv_obj_t *dome = lv_obj_create(wrap);
+  lv_obj_set_size(dome, TQ_DOME_R * 2, TQ_DOME_R * 2);
+  lv_obj_set_pos(dome, cx, cy);
+  lv_obj_set_style_radius(dome, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_border_width(dome, 0, 0);
+  lv_obj_set_style_pad_all(dome, 0, 0);
+  lv_obj_clear_flag(dome, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(dome, LV_OBJ_FLAG_CLICKABLE);
+
+  const lv_color_t hue   = lv_color_make(TQ_HUE[dir][0], TQ_HUE[dir][1], TQ_HUE[dir][2]);
+  const lv_color_t white = lv_color_white();
+  lv_obj_set_style_bg_color(dome,      white_first ? white : hue,   0);
+  lv_obj_set_style_bg_grad_color(dome, white_first ? hue   : white, 0);
+  lv_obj_set_style_bg_grad_dir(dome, gdir, 0);
+  lv_obj_set_style_bg_opa(dome, LV_OPA_TRANSP, 0);   // dark until it flashes
+
+  tq_dome[dir] = dome;   // the animation drives the circle, not the wrapper
+}
+
+// ── Start / restart ToneQuest ────────────────────────────────────────────────
+static void tq_game_start()
+{
+  tq_stop_timers();
+  tq_buzz_off();
+
+  // Whole pattern up front, revealed a prefix at a time — so level N is always
+  // level N-1 plus one new move, never a reshuffle.
+  for (int i = 0; i < TQ_MAX_MOVES; i++) tq_pattern[i] = random(4);
+  tq_level     = 1;
+  tq_moves     = min(TQ_MAX_MOVES, cfg.tq_start_moves);
+  tq_step      = 0;
+  tq_demo_i    = 0;
+  tq_demo_lit  = false;
+  tq_phase     = TQ_P_LEVEL;
+  tq_armed     = false;
+  tq_beat_high = false;
+  tq_hold_t0   = 0;
+  tq_bx        = TQ_CX;
+  tq_by        = TQ_CY;
+  tq_ball_ix   = -1;   // force the first lv_obj_set_pos through
+  tq_ball_iy   = -1;
+  tq_ball_tint = -1;
+  tq_ring_tint = -1;
+  tq_pop       = nullptr;
+
+  lv_obj_clean(apps_cont);
+  app_subphase = 1;
+
+  // Tap zone first, at the bottom of the z-order: nothing above it is
+  // clickable, so it is what receives the long-press that exits the game.
+  app_tapzone(apps_cont, nullptr);
+
+  // Four domes, each a circle centred on the middle of its wall
+  tq_build_dome(TQ_UP,    TQ_CX - TQ_DOME_R, 0,
+                TQ_DOME_R * 2, TQ_DOME_R, 0, -TQ_DOME_R, LV_GRAD_DIR_VER, true);
+  tq_build_dome(TQ_DOWN,  TQ_CX - TQ_DOME_R, TQ_FIELD_H - TQ_DOME_R,
+                TQ_DOME_R * 2, TQ_DOME_R, 0, 0,          LV_GRAD_DIR_VER, false);
+  tq_build_dome(TQ_LEFT,  0, TQ_CY - TQ_DOME_R,
+                TQ_DOME_R, TQ_DOME_R * 2, -TQ_DOME_R, 0, LV_GRAD_DIR_HOR, true);
+  tq_build_dome(TQ_RIGHT, TQ_FIELD_W - TQ_DOME_R, TQ_CY - TQ_DOME_R,
+                TQ_DOME_R, TQ_DOME_R * 2, 0, 0,          LV_GRAD_DIR_HOR, false);
+
+  // Target ring
+  tq_ring = lv_obj_create(apps_cont);
+  lv_obj_set_size(tq_ring, TQ_RING_D, TQ_RING_D);
+  lv_obj_set_pos(tq_ring, TQ_CX - TQ_RING_D / 2, TQ_CY - TQ_RING_D / 2);
+  lv_obj_set_style_radius(tq_ring, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_opa(tq_ring, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(tq_ring, 2, 0);
+  lv_obj_set_style_border_color(tq_ring, lv_color_make(80, 100, 180), 0);
+  lv_obj_set_style_pad_all(tq_ring, 0, 0);
+  lv_obj_clear_flag(tq_ring, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(tq_ring, LV_OBJ_FLAG_CLICKABLE);
+  tq_ring_tint = 0;
+
+  // Ball
+  tq_ball = lv_obj_create(apps_cont);
+  lv_obj_set_size(tq_ball, TQ_BALL_D, TQ_BALL_D);
+  lv_obj_set_pos(tq_ball, TQ_CX - TQ_BALL_D / 2, TQ_CY - TQ_BALL_D / 2);
+  lv_obj_set_style_radius(tq_ball, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(tq_ball, lv_color_white(), 0);
+  lv_obj_set_style_bg_opa(tq_ball, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(tq_ball, 0, 0);
+  lv_obj_set_style_pad_all(tq_ball, 0, 0);
+  lv_obj_clear_flag(tq_ball, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(tq_ball, LV_OBJ_FLAG_CLICKABLE);
+  tq_ball_tint = 0;
+
+  // Sub-note — only up while the player is levelling the device
+  tq_note = lv_label_create(apps_cont);
+  lv_label_set_text(tq_note, "level the device");
+  lv_obj_set_style_text_font(tq_note, &dejavu_mono_14, 0);
+  lv_obj_set_style_text_color(tq_note, lv_color_make(120, 130, 170), 0);
+  lv_obj_align(tq_note, LV_ALIGN_TOP_MID, 0, TQ_CY + TQ_RING_D / 2 + 8);
+
+  // Status bar: Level (left) / Best (right)
+  tq_lvl_lbl = lv_label_create(apps_cont);
+  lv_obj_set_style_text_font(tq_lvl_lbl, &dejavu_mono_14, 0);
+  lv_obj_set_style_text_color(tq_lvl_lbl, lv_color_make(180, 180, 100), 0);
+  lv_obj_set_style_text_align(tq_lvl_lbl, LV_TEXT_ALIGN_LEFT, 0);
+  lv_obj_set_pos(tq_lvl_lbl, 4, TQ_STATUS_Y);
+  lv_obj_set_size(tq_lvl_lbl, 160, 16);
+
+  tq_hi_lbl = lv_label_create(apps_cont);
+  lv_obj_set_style_text_font(tq_hi_lbl, &dejavu_mono_14, 0);
+  lv_obj_set_style_text_color(tq_hi_lbl, lv_color_make(180, 180, 100), 0);
+  lv_obj_set_style_text_align(tq_hi_lbl, LV_TEXT_ALIGN_RIGHT, 0);
+  lv_obj_set_pos(tq_hi_lbl, 156, TQ_STATUS_Y);
+  lv_obj_set_size(tq_hi_lbl, 160, 16);
+
+  tq_running = true;
+  tq_status_refresh();
+  if (imuReady)
+    tq_poll_timer = lv_timer_create(tq_poll_cb, TQ_POLL_MS, nullptr);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  END TONEQUEST
+// ══════════════════════════════════════════════════════════════════════════════
+
 // ── App start tap: coin only (rps+dice use their own starters) ────────────────
 static void app_start_tap_cb(lv_event_t *e)
 {
@@ -8886,7 +9612,7 @@ static void app_start_tap_cb(lv_event_t *e)
 // ── Game start screen ─────────────────────────────────────────────────────────
 static void app_screen_start()
 {
-  if (apps_idx >= 9) return;
+  if (apps_idx >= APPS_COUNT) return;
   app_anim_stop();
 
   if (apps_idx == 3) {
@@ -8917,6 +9643,10 @@ static void app_screen_start()
     bn_game_start();
     return;
   }
+  if (apps_idx == 8) {
+    tq_game_start();
+    return;
+  }
 
   // ── Coin: tap anywhere to flip ────────────────────────────────────────────
   lv_obj_clean(apps_cont);
@@ -8942,7 +9672,7 @@ static void app_screen_start()
 static void apps_tap_enter_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-  if (apps_idx == 8) {
+  if (apps_idx == 9) {
     cfg.menu_sounds = !cfg.menu_sounds;
     save_config();
     if (cfg.menu_sounds) menu_tone_hi();  // confirm it's on
@@ -8964,7 +9694,7 @@ static void apps_carousel_build()
   lv_obj_clean(apps_cont);
   app_subphase = 0;
 
-  static const struct { const char *name; const char *desc; } items[9] = {
+  static const struct { const char *name; const char *desc; } items[APPS_COUNT] = {
     {"Rock Paper Scissors", "An interactive ASCII Game"},
     {"Rolling Dice",        "An interactive ASCII Dice"},
     {"Flip a Coin",         "An interactive ASCII Coin"},
@@ -8973,7 +9703,8 @@ static void apps_carousel_build()
     {nullptr,               nullptr},  // item 5 = Letters Rain    (rendered inline)
     {nullptr,               nullptr},  // item 6 = Snake Letters   (rendered inline)
     {nullptr,               nullptr},  // item 7 = Bingo!          (rendered inline)
-    {nullptr,               nullptr},  // item 8 = Sounds toggle   (rendered inline)
+    {nullptr,               nullptr},  // item 8 = ToneQuest       (rendered inline)
+    {nullptr,               nullptr},  // item 9 = Sounds toggle   (rendered inline)
   };
 
   // Left arrow + zone
@@ -9004,7 +9735,7 @@ static void apps_carousel_build()
     lv_obj_add_event_cb(z,apps_right_cb,LV_EVENT_PRESSED,nullptr);
     lv_obj_add_event_cb(z,apps_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr); }
 
-  if (apps_idx == 8) {
+  if (apps_idx == 9) {
     // ── Sounds toggle (inline, mirrors WiFi toggle in settings) ──────────
     lv_obj_t *sicon = lv_label_create(apps_cont);
     lv_label_set_text(sicon, cfg.menu_sounds ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE);
@@ -9019,6 +9750,34 @@ static void apps_carousel_build()
       cfg.menu_sounds ? lv_color_make(80,200,120) : lv_color_make(180,60,60), 0);
     lv_obj_align(sdesc, LV_ALIGN_CENTER, 0, 28);
     // se_flash(sicon); se_flash(sdesc);
+  } else if (apps_idx == 8) {
+    // ── ToneQuest ─────────────────────────────────────────────────────────
+    lv_obj_t *name_lbl = lv_label_create(apps_cont);
+    lv_label_set_text(name_lbl, "ToneQuest");
+    lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(name_lbl, lv_color_white(), 0);
+    lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(name_lbl, 180);
+    lv_obj_set_style_text_align(name_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(name_lbl, LV_ALIGN_CENTER, 0, -14);
+
+    lv_obj_t *desc_lbl = lv_label_create(apps_cont);
+    lv_label_set_text(desc_lbl, "Repeat the tones!");
+    lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
+    lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
+    // se_flash(name_lbl); se_flash(desc_lbl);
+
+    if (cfg.tq_high_score > 0) {
+      lv_obj_t *hs_lbl = lv_label_create(apps_cont);
+      char hs_buf[32];
+      snprintf(hs_buf, sizeof(hs_buf), "Best: level %d", cfg.tq_high_score);
+      lv_label_set_text(hs_lbl, hs_buf);
+      lv_obj_set_style_text_font(hs_lbl, &lv_font_montserrat_14, 0);
+      lv_obj_set_style_text_color(hs_lbl, lv_color_make(255, 210, 60), 0);
+      lv_obj_align(hs_lbl, LV_ALIGN_CENTER, 0, 44);
+      // se_flash(hs_lbl);
+    }
   } else if (apps_idx == 7) {
     // ── Bingo! ────────────────────────────────────────────────────────────
     lv_obj_t *name_lbl = lv_label_create(apps_cont);
@@ -9150,7 +9909,7 @@ static void apps_carousel_build()
 
   // Hint above dots
   lv_obj_t *hint = lv_label_create(apps_cont);
-  lv_label_set_text(hint, apps_idx == 8 ? "tap to toggle  .  hold to exit"
+  lv_label_set_text(hint, apps_idx == 9 ? "tap to toggle  .  hold to exit"
                                         : "tap to play  .  hold to exit");
   lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(hint, lv_color_make(70, 70, 95), 0);
@@ -9159,9 +9918,9 @@ static void apps_carousel_build()
 
   // Position dots — one per app that is actually reachable on this hardware.
   // apps_step() skips anything app_is_available() rejects, so drawing a dot per
-  // raw index would leave unreachable dots that can never light up (3 of them
+  // raw index would leave unreachable dots that can never light up (4 of them
   // with no IMU). Count the row first, then centre it on its own width at the
-  // 14 px pitch: 9 dots land back on x=97, as before.
+  // 14 px pitch, so the row stays centred whichever entries are reachable.
   int dot_n = 0;
   for (int i = 0; i < APPS_COUNT; i++) if (app_is_available(i)) dot_n++;
   int dot_x0 = ((int)screenWidth - dot_n * 14) / 2;
@@ -10605,6 +11364,7 @@ void setup()
     seed_tennis_config();       // append [tennis] section if not yet present
     seed_letter_rain_config();  // append [letter_rain] section if not yet present
     seed_snake_config();        // append [snake] section if not yet present
+    seed_tonequest_config();    // append [tonequest] section if not yet present
 
     // RTC recovery reads /last_seen.txt, which is card-only — so this is a
     // no-op when running from internal flash. Skip it on an alarm wake so a

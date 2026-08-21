@@ -65,7 +65,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v3.1.0"
+#define FW_VERSION      "v3.2.0"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -164,9 +164,15 @@ struct AppConfig {
   #include <USB.h>
   #include <USBCDC.h>
   #include <USBHIDMouse.h>
+  #include <USBHIDKeyboard.h>
   #include <Preferences.h>
   static USBCDC             ClockUSBSerial;
   static USBHIDRelativeMouse UsbJiggleMouse;
+  // Registers on the same shared TinyUSB `hid` object the mouse uses, so the
+  // host still sees ONE composite device on one port — not a second endpoint.
+  // Note this widens what the HID personas mean: they now enumerate a mouse
+  // AND a keyboard, where before PR #39 they were mouse-only.
+  static USBHIDKeyboard     UsbMacroKeyboard;
   #undef Serial
   #define Serial ClockUSBSerial
 #endif
@@ -9269,6 +9275,7 @@ static int usb_carousel_idx = UCI_USB_MODE;
 // Files beyond the cap are counted, not silently dropped — see scripts_scan().
 #define SCRIPTS_MAX      24
 #define SCRIPT_NAME_MAX  40
+#define SCRIPTS_PATH_MAX (sizeof(SCRIPTS_DIR_FS) + SCRIPT_NAME_MAX + 1)
 
 struct ScriptEntry { char name[SCRIPT_NAME_MAX]; uint32_t chars; };
 static ScriptEntry scripts_list[SCRIPTS_MAX];
@@ -9282,6 +9289,7 @@ static void usb_carousel_build(void);
 static void usb_modal_longpress_cb(lv_event_t *e);
 static void open_macropad_list(void);
 static void macro_list_build(void);
+static void macro_countdown_cancel(void);
 
 static void usb_editor_refresh()
 {
@@ -9422,6 +9430,7 @@ static void usb_carousel_right_cb(lv_event_t*e)
 static void usb_carousel_build()
 {
   if (usb_editor_cont) { lv_obj_del(usb_editor_cont); usb_editor_cont=nullptr; }
+  macro_countdown_cancel();   // child of macro_list_cont — must go first
   if (macro_list_cont) { lv_obj_del(macro_list_cont); macro_list_cont=nullptr; }
   se_usb_lbl = se_usb_desc = nullptr;
   for (int i=0;i<3;i++) se_usb_dot[i]=nullptr;
@@ -9575,20 +9584,275 @@ static void scripts_scan()
                 scripts_truncated ? " (more present, list capped)" : "");
 }
 
+// ══ Playback ════════════════════════════════════════════════════════════════
+//  Typing is driven from loop(), never from an LVGL event callback. The typing
+//  loop has to pump lv_timer_handler() itself — otherwise the progress bar
+//  never repaints and a cancel tap is never seen, because the whole run blocks.
+//  Calling lv_timer_handler() re-entrantly from inside a callback is not safe,
+//  so the countdown only raises a flag and loop() does the work at top level.
+// ════════════════════════════════════════════════════════════════════════════
+
+#define MACRO_LINE_DELAY_MS 15   // raise if a target app drops characters
+#define MACRO_COUNTDOWN_SEC 3    // time to click into the target window
+
+static volatile bool macro_play_pending = false;
+static volatile bool macro_abort        = false;
+static char          macro_play_name[SCRIPT_NAME_MAX] = {0};
+
+static lv_obj_t   *macro_play_cont = nullptr;
+static lv_obj_t   *macro_play_bar  = nullptr;
+static lv_obj_t   *macro_play_sub  = nullptr;
+
+static lv_obj_t   *macro_cd_popup = nullptr;   // full-screen scrim + card
+static lv_obj_t   *macro_cd_lbl   = nullptr;
+static lv_timer_t *macro_cd_timer = nullptr;
+static int         macro_cd_count = MACRO_COUNTDOWN_SEC;
+
+static void macro_countdown_cancel()
+{
+  if (macro_cd_timer) { lv_timer_del(macro_cd_timer); macro_cd_timer=nullptr; }
+  if (macro_cd_popup) { lv_obj_del(macro_cd_popup);   macro_cd_popup=nullptr; }
+  macro_cd_lbl   = nullptr;
+  macro_cd_count = MACRO_COUNTDOWN_SEC;
+}
+
+static void macro_countdown_cancel_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
+  Serial.println("[MACRO] countdown cancelled");
+  macro_countdown_cancel();
+}
+
+static void macro_countdown_tick_cb(lv_timer_t * /*t*/)
+{
+  macro_cd_count--;
+  if (macro_cd_lbl) lv_label_set_text_fmt(macro_cd_lbl,"Typing in %d...",macro_cd_count);
+  if (macro_cd_count <= 0) {
+    macro_countdown_cancel();     // card goes away first, so it never overlaps playback
+    macro_play_pending = true;    // loop() picks this up on its next pass
+  }
+}
+
+// Same 240x90 card as the shutdown popup, with its own state and its own tick —
+// nothing here can reach shutdown_execute(). The card sits on a full-screen
+// scrim so a tap anywhere cancels, and so the list's paging zones underneath
+// cannot be hit while the countdown is running.
+static void macro_show_countdown()
+{
+  if (macro_cd_popup || !macro_list_cont) return;
+  macro_cd_count = MACRO_COUNTDOWN_SEC;
+
+  macro_cd_popup = lv_obj_create(macro_list_cont);
+  lv_obj_set_size(macro_cd_popup, 320, 172);
+  lv_obj_set_pos(macro_cd_popup, 0, 0);
+  lv_obj_set_style_bg_color(macro_cd_popup, lv_color_black(), 0);
+  lv_obj_set_style_bg_opa(macro_cd_popup, LV_OPA_70, 0);
+  lv_obj_set_style_border_width(macro_cd_popup, 0, 0);
+  lv_obj_set_style_pad_all(macro_cd_popup, 0, 0);
+  lv_obj_set_style_radius(macro_cd_popup, 0, 0);
+  lv_obj_clear_flag(macro_cd_popup, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(macro_cd_popup, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(macro_cd_popup, macro_countdown_cancel_cb, LV_EVENT_CLICKED, nullptr);
+
+  lv_obj_t *card = lv_obj_create(macro_cd_popup);
+  lv_obj_set_size(card, 240, 90);
+  lv_obj_align(card, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(card, lv_color_make(20, 20, 40), 0);
+  lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(card, lv_color_make(80, 80, 160), 0);
+  lv_obj_set_style_border_width(card, 1, 0);
+  lv_obj_set_style_radius(card, 8, 0);
+  lv_obj_set_style_pad_all(card, 0, 0);
+  lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(card, macro_countdown_cancel_cb, LV_EVENT_CLICKED, nullptr);
+
+  macro_cd_lbl = lv_label_create(card);
+  lv_label_set_text_fmt(macro_cd_lbl, "Typing in %d...", macro_cd_count);
+  lv_obj_set_style_text_font(macro_cd_lbl, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(macro_cd_lbl, lv_color_make(220, 220, 255), 0);
+  lv_obj_align(macro_cd_lbl, LV_ALIGN_CENTER, 0, -26);
+
+  // The device cannot know which window has focus on the host, so say what the
+  // countdown is for rather than just counting down.
+  lv_obj_t *why = lv_label_create(card);
+  lv_label_set_text(why, "click into the target window");
+  lv_obj_set_style_text_font(why, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(why, lv_color_make(140, 140, 170), 0);
+  lv_obj_align(why, LV_ALIGN_CENTER, 0, -6);
+
+  lv_obj_t *btn = lv_btn_create(card);
+  lv_obj_set_size(btn, 90, 28);
+  lv_obj_align(btn, LV_ALIGN_CENTER, 0, 24);
+  lv_obj_set_style_bg_color(btn, lv_color_make(180, 60, 60), 0);
+  lv_obj_set_style_radius(btn, 6, 0);
+  lv_obj_add_event_cb(btn, macro_countdown_cancel_cb, LV_EVENT_CLICKED, nullptr);
+
+  lv_obj_t *btn_lbl = lv_label_create(btn);
+  lv_label_set_text(btn_lbl, "Cancel");
+  lv_obj_set_style_text_font(btn_lbl, &lv_font_montserrat_14, 0);
+  lv_obj_center(btn_lbl);
+
+  macro_cd_timer = lv_timer_create(macro_countdown_tick_cb, 1000, nullptr);
+}
+
+// Serial-only persona brought up no keyboard this boot, so a countdown would
+// run down to nothing. Say why instead.
+static void macro_show_no_hid()
+{
+  if (macro_cd_popup || !macro_list_cont) return;
+
+  macro_cd_popup = lv_obj_create(macro_list_cont);
+  lv_obj_set_size(macro_cd_popup, 320, 172);
+  lv_obj_set_pos(macro_cd_popup, 0, 0);
+  lv_obj_set_style_bg_color(macro_cd_popup, lv_color_black(), 0);
+  lv_obj_set_style_bg_opa(macro_cd_popup, LV_OPA_70, 0);
+  lv_obj_set_style_border_width(macro_cd_popup, 0, 0);
+  lv_obj_set_style_pad_all(macro_cd_popup, 0, 0);
+  lv_obj_clear_flag(macro_cd_popup, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(macro_cd_popup, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(macro_cd_popup, macro_countdown_cancel_cb, LV_EVENT_CLICKED, nullptr);
+
+  lv_obj_t *msg = lv_label_create(macro_cd_popup);
+  lv_label_set_text(msg, LV_SYMBOL_WARNING "  USB Mode is Serial - no keyboard this boot.\n"
+                         "Switch to HID or HID+CDC and reboot.");
+  lv_obj_set_style_text_font(msg, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(msg, lv_color_make(220, 200, 140), 0);
+  lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(msg, 280);
+  lv_obj_set_style_text_align(msg, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(msg, LV_ALIGN_CENTER, 0, 0);
+}
+
+static void macro_abort_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
+  macro_abort = true;               // the typing loop checks this every line
+}
+
+static void macro_play_ui_open(const char *name, uint32_t total)
+{
+  macro_play_cont = lv_obj_create(usb_modal_cont);
+  lv_obj_set_size(macro_play_cont,320,172); lv_obj_set_pos(macro_play_cont,0,0);
+  lv_obj_set_style_bg_color(macro_play_cont,lv_color_make(8,12,28),0);
+  lv_obj_set_style_bg_opa(macro_play_cont,LV_OPA_COVER,0);
+  lv_obj_set_style_border_width(macro_play_cont,0,0);
+  lv_obj_set_style_pad_all(macro_play_cont,0,0);
+  lv_obj_set_style_radius(macro_play_cont,0,0);
+  lv_obj_clear_flag(macro_play_cont,LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(macro_play_cont,LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(macro_play_cont,macro_abort_cb,LV_EVENT_CLICKED,nullptr);
+
+  lv_obj_t*t=lv_label_create(macro_play_cont);
+  lv_label_set_text_fmt(t,LV_SYMBOL_KEYBOARD "  %s",name);
+  lv_obj_set_style_text_font(t,&lv_font_montserrat_14,0);
+  lv_obj_set_style_text_color(t,lv_color_make(180,180,220),0);
+  lv_label_set_long_mode(t,LV_LABEL_LONG_DOT);
+  lv_obj_set_width(t,280);
+  lv_obj_set_style_text_align(t,LV_TEXT_ALIGN_CENTER,0);
+  lv_obj_align(t,LV_ALIGN_TOP_MID,0,14);
+
+  macro_play_bar = lv_bar_create(macro_play_cont);
+  lv_obj_set_size(macro_play_bar,240,10);
+  lv_obj_align(macro_play_bar,LV_ALIGN_CENTER,0,-4);
+  lv_bar_set_range(macro_play_bar,0,(int32_t)(total ? total : 1));
+  lv_bar_set_value(macro_play_bar,0,LV_ANIM_OFF);
+  lv_obj_set_style_bg_color(macro_play_bar,lv_color_make(30,34,60),LV_PART_MAIN);
+  lv_obj_set_style_bg_color(macro_play_bar,lv_color_make(150,130,220),LV_PART_INDICATOR);
+
+  macro_play_sub = lv_label_create(macro_play_cont);
+  lv_label_set_text_fmt(macro_play_sub,"0 written - %u left",(unsigned)total);
+  lv_obj_set_style_text_font(macro_play_sub,&lv_font_montserrat_14,0);
+  lv_obj_set_style_text_color(macro_play_sub,lv_color_make(150,150,170),0);
+  lv_obj_align(macro_play_sub,LV_ALIGN_CENTER,0,22);
+
+  lv_obj_t*h=lv_label_create(macro_play_cont);
+  lv_label_set_text(h,"tap to stop");
+  lv_obj_set_style_text_font(h,&dejavu_mono_14,0);
+  lv_obj_set_style_text_color(h,lv_color_make(80,80,100),0);
+  lv_obj_set_style_text_opa(h,LV_OPA_60,0);
+  lv_obj_align(h,LV_ALIGN_BOTTOM_MID,0,-8);
+}
+
+static void macro_play_ui_close()
+{
+  if (macro_play_cont) { lv_obj_del(macro_play_cont); macro_play_cont=nullptr; }
+  macro_play_bar = macro_play_sub = nullptr;
+}
+
+// Runs at loop() top level — see the note at the top of this block.
+static void macro_play_run()
+{
+  if (!storageAvailable || !STORAGE || !usb_modal_cont) return;
+  if (cfg.usb_persona == USB_SERIAL_ONLY)               return;
+
+  char full[SCRIPTS_PATH_MAX];
+  snprintf(full,sizeof(full),"%s/%s",SCRIPTS_DIR_FS,macro_play_name);
+  File f = STORAGE->open(full, FILE_READ);
+  if (!f) { Serial.printf("[MACRO] cannot open %s\n", full); return; }
+
+  const uint32_t total = (uint32_t)f.size();
+  macro_abort = false;
+  macro_play_ui_open(macro_play_name, total);
+  Serial.printf("[MACRO] typing %s (%u bytes)\n", macro_play_name, (unsigned)total);
+
+  uint32_t lines = 0;
+  while (f.available() && !macro_abort) {
+    String line = f.readStringUntil('\n');
+
+    // Strip the line ending ONLY. String::trim() also eats leading whitespace,
+    // which for ASCII art is the picture — every line would flush to column 0.
+    while (line.length() &&
+           (line[line.length()-1] == '\r' || line[line.length()-1] == '\n'))
+      line.remove(line.length()-1);
+
+    UsbMacroKeyboard.println(line);
+    lines++;
+    delay(MACRO_LINE_DELAY_MS);
+
+    // Progress by file position: summing typed characters drifts on a CRLF file
+    // once \r has been stripped, position() does not.
+    const uint32_t written = (uint32_t)f.position();
+    if (macro_play_bar) lv_bar_set_value(macro_play_bar,(int32_t)written,LV_ANIM_OFF);
+    if (macro_play_sub)
+      lv_label_set_text_fmt(macro_play_sub,"%u written - %u left",
+                            (unsigned)written,
+                            (unsigned)(total > written ? total - written : 0));
+
+    lv_timer_handler();   // repaint + see a cancel tap; safe at loop() level
+  }
+
+  const uint32_t done = (uint32_t)f.position();
+  f.close();
+
+  if (macro_abort)
+    Serial.printf("[MACRO] stopped by user after %u/%u bytes\n",(unsigned)done,(unsigned)total);
+  else
+    Serial.printf("[MACRO] finished - %u lines, %u bytes\n",(unsigned)lines,(unsigned)done);
+
+  macro_play_ui_close();
+  macro_list_build();     // back to the list, still on the same entry
+}
+
 static void macro_left_cb(lv_event_t*e)
 { if(lv_event_get_code(e)==LV_EVENT_PRESSED && scripts_n>1){macro_idx=(macro_idx+scripts_n-1)%scripts_n;macro_list_build();} }
 static void macro_right_cb(lv_event_t*e)
 { if(lv_event_get_code(e)==LV_EVENT_PRESSED && scripts_n>1){macro_idx=(macro_idx+1)%scripts_n;macro_list_build();} }
 
-// Step 2 seam. The countdown popup and the keyboard playback loop attach here.
-// Until then a selection is reported on serial and nothing else happens, so the
-// scaffold cannot produce keystrokes on the host.
 static void macro_item_tap_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
   if (scripts_n == 0 || macro_idx >= scripts_n) return;
-  Serial.printf("[MACRO] selected %s (%u chars) — playback not implemented yet\n",
-                scripts_list[macro_idx].name, (unsigned)scripts_list[macro_idx].chars);
+
+  // A Serial-only boot brought up no keyboard at all, so a countdown would run
+  // down to a no-op. Say why instead of appearing to work.
+  if (cfg.usb_persona == USB_SERIAL_ONLY) { macro_show_no_hid(); return; }
+
+  strncpy(macro_play_name, scripts_list[macro_idx].name, SCRIPT_NAME_MAX - 1);
+  macro_play_name[SCRIPT_NAME_MAX - 1] = '\0';
+  Serial.printf("[MACRO] selected %s (%u bytes)\n",
+                macro_play_name, (unsigned)scripts_list[macro_idx].chars);
+  macro_show_countdown();
 }
 
 static void macro_list_build()
@@ -9693,6 +9957,7 @@ static void macro_list_build()
 
 static void open_macropad_list()
 {
+  macro_countdown_cancel();
   if (macro_list_cont) { lv_obj_del(macro_list_cont); macro_list_cont=nullptr; }
   scripts_scan();
   macro_idx = 0;
@@ -9716,6 +9981,7 @@ static void usb_modal_longpress_cb(lv_event_t *e)
   // macroPad list is one level deeper than the carousel, so a hold there steps
   // back to the carousel rather than closing the modal outright.
   if (macro_list_cont) {
+    macro_countdown_cancel();   // child of macro_list_cont — must go first
     lv_obj_del(macro_list_cont); macro_list_cont=nullptr;
     usb_carousel_build();
     return;
@@ -9839,7 +10105,10 @@ static void usb_persona_begin()
   bool want_hid    = (persona != USB_SERIAL_ONLY);
 
   if (want_serial) Serial.begin(115200);
-  if (want_hid)    UsbJiggleMouse.begin();
+  if (want_hid) {
+    UsbJiggleMouse.begin();
+    UsbMacroKeyboard.begin();   // composite: same port, same descriptor
+  }
   USB.begin();
 
   if (want_serial) {
@@ -10462,6 +10731,14 @@ void setup()
 void loop()
 {
   lv_timer_handler();  // drive LVGL: renders, animations, timers
+
+#if BOARD_HAS_USB_HID
+  // macroPad playback blocks for the length of the script and pumps LVGL
+  // itself, so it must run here rather than from the countdown's timer
+  // callback — lv_timer_handler() is not re-entrant.
+  if (macro_play_pending) { macro_play_pending = false; macro_play_run(); }
+#endif
+
   // Process one pending HTTP request per loop iteration.
   // handleClient() returns immediately when no client is connected,
   // so it does not interfere with LVGL animations or the hardware-timer

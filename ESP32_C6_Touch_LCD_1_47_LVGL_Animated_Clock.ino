@@ -10024,20 +10024,40 @@ static uint32_t     hid_gif_open_at  = 0;
 static uint32_t     hid_next_move_at = 0;
 static bool          hid_armed        = false;
 
-// Splits (total_dx,total_dy) into a few small relative HID reports instead of
-// one teleporting jump — the last step carries the rounding remainder so the
-// full distance is always delivered even when steps doesn't divide evenly.
-static void hid_send_nudge(int total_dx, int total_dy)
+// Splits (total_dx,total_dy) into a few small relative HID reports instead of one
+// teleporting jump, then sends that exact sequence again reversed and negated.
+// The last step of the outbound leg carries the division remainder, so the raw
+// deltas sum to exactly zero.
+//
+// The mirroring is the point. Hosts apply pointer acceleration as a non-linear
+// function of per-report magnitude, so the same raw total delivered in a
+// different number of reports covers a different distance on screen. Drawing a
+// fresh step count for each leg — which an earlier version did — left the return
+// trip free to overshoot the outbound one and walk the cursor a little further
+// on every jiggle. Replaying the same magnitudes backwards makes whatever curve
+// the host applies apply equally to both legs.
+//
+// What this cannot fix: with the pointer already against a screen edge, the
+// outbound leg is clamped by the host and the return leg is not, which is real
+// displacement. The device has no way to know where the pointer is.
+#define HID_NUDGE_MAX_STEPS 4
+
+static void hid_send_nudge_round_trip(int total_dx, int total_dy)
 {
-  int steps = random(2, 5);
+  const int steps = random(2, HID_NUDGE_MAX_STEPS + 1);
+  int8_t sx[HID_NUDGE_MAX_STEPS], sy[HID_NUDGE_MAX_STEPS];
   int rem_dx = total_dx, rem_dy = total_dy;
+
   for (int i = 0; i < steps; i++) {
-    int left = steps - i;
-    int sx = (left == 1) ? rem_dx : rem_dx / left;
-    int sy = (left == 1) ? rem_dy : rem_dy / left;
-    rem_dx -= sx; rem_dy -= sy;
-    UsbJiggleMouse.move((int8_t)sx, (int8_t)sy);
+    const int left = steps - i;
+    const int px = (left == 1) ? rem_dx : rem_dx / left;
+    const int py = (left == 1) ? rem_dy : rem_dy / left;
+    rem_dx -= px; rem_dy -= py;
+    sx[i] = (int8_t)px; sy[i] = (int8_t)py;
+    UsbJiggleMouse.move(sx[i], sy[i]);
   }
+  for (int i = steps - 1; i >= 0; i--)
+    UsbJiggleMouse.move((int8_t)(-(int)sx[i]), (int8_t)(-(int)sy[i]));
 }
 
 static void hid_jiggle_move_cb(lv_timer_t *t)
@@ -10053,8 +10073,7 @@ static void hid_jiggle_move_cb(lv_timer_t *t)
 
   int dx = (int)random(-9, 10), dy = (int)random(-9, 10);
   if (dx == 0 && dy == 0) dx = 3;
-  hid_send_nudge(dx, dy);     // out
-  hid_send_nudge(-dx, -dy);   // and back — the pointer never actually drifts
+  hid_send_nudge_round_trip(dx, dy);   // out and back along a mirrored path
 
   // Randomised interval, and an occasional extra-long gap, so the cadence
   // doesn't read as a perfect metronome — sized only for "don't let the OS

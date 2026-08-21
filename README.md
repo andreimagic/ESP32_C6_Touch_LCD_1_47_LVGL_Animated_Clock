@@ -293,6 +293,10 @@ Format the SD card as **FAT32**. Create the following structure:
 SD root/
 ├── config.ini
 ├── last_seen.txt            ← created automatically by the firmware
+├── scripts/                 ← created automatically; macroPad reads it
+│   ├── ASCII_house.art          ← bundled sample
+│   ├── ASCII_hut.art            ← bundled sample
+│   └── ASCII_penguin.art        ← bundled sample
 └── cruzr_emotions/
     ├── cruzr_smile.gif          ← 160 × 86 px  (scheduled day animation + emotion: upright)
     ├── cruzr_sleep.gif          ← 160 × 86 px  (scheduled night animation + emotion: tilt back)
@@ -326,6 +330,11 @@ web UI is the only way to set them.
 > board that has never seen a card, upload them through the
 > [file manager](#file-manager) at `/files` instead. Until either has happened it
 > shows `GIF not found on Internal flash (FFat)` where an animation would be.
+>
+> **Provisioning covers GIFs and `config.ini` only — not `/scripts`.** macroPad
+> art is never copied from card to flash, so a board that mirrors its animations
+> and then has the card removed comes back with an empty script list. See
+> [macroPad](#macropad--ascii-art-over-usb-s3-only) for how to put art on flash.
 
 ### GIF Requirements
 
@@ -705,24 +714,45 @@ The exact same generator (same ticket algorithm, ported to `docs/bingo.js`) is a
 ### Analog Clock (upper-right tap)
 Top-right corner shows an Analog clock, view stays opened and refreshes every minute to display the correct time. Clicking on it will return  to the regular Time view. A filled sector centered on the clock center that starts at the top of the hour (12 o’clock) and sweeps clockwise to the current minute position, visually like a pie chart showing elapsed minutes in the current hour.
 
-**Long-press** on the open analog clock (S3 only) opens the [USB Mode carousel](#usb-mode--mouse-jiggler-s3-only).
+**Long-press** on the open analog clock (S3 only) opens the [USB carousel](#usb-mode--mouse-jiggler-s3-only), which holds **USB Mode** and **[macroPad](#macropad--ascii-art-over-usb-s3-only)**.
 
 ### USB Mode — Mouse Jiggler (S3 only)
 Reached by a long-press on the open analog clock (above). Not present on the C6 build at all — the C6 has no USB-OTG peripheral, only USB-Serial-JTAG, which cannot present USB HID, so `BOARD_HAS_USB_HID` compiles the whole feature out rather than merely hiding it.
 
-A single-item carousel, styled like the [Carousel Settings Menu](#carousel-settings-menu), opens a 3-way picker (left/right to cycle, hold to save & exit — same interaction as the WiFi mode editor):
+A two-item carousel, styled like the [Carousel Settings Menu](#carousel-settings-menu) — left/right to page between **USB Mode** and **macroPad**, tap to enter, hold to exit. USB Mode opens a 3-way picker (left/right to cycle, hold to save & exit — same interaction as the WiFi mode editor):
 
 | Mode | Host sees | Serial debug output |
 |---|---|---|
-| **HID** | mouse only, no serial port | none |
-| **HID + Serial** *(default)* | mouse + a serial port | yes |
-| **Serial** | serial port only, no mouse | yes |
+| **HID** | mouse **and keyboard**, no serial port | none |
+| **HID + Serial** *(default)* | mouse **and keyboard**, plus a serial port | yes |
+| **Serial** | serial port only, no mouse or keyboard | yes |
+
+Both HID interfaces register on one shared descriptor, so the host still enumerates a single composite device on a single port. The keyboard is what [macroPad](#macropad--ascii-art-over-usb-s3-only) types with; it is idle unless a script is running.
 
 Changing the mode reboots the device — USB can't swap what it's presenting to the host without a full re-enumeration, so a change is saved and applied on the next boot rather than live. Persisted as `[usb] mode` in `config.ini` (`hid` / `hid_serial` / `serial`).
 
-**Mouse jiggler.** In any HID-enabled mode, opening the smile GIF (top-left tap, see [below](#gif-animations-upper-taps)) arms a timer that, after a 5-second delay, starts sending small randomised relative mouse movements — enough to keep a PC from going idle/locking, without visibly disrupting anything. It stops the moment the GIF overlay closes: tapping back to the clock, or long-pressing into the [math gateway](#math-challenge)/apps carousel.
+**Mouse jiggler.** In any HID-enabled mode, opening the smile GIF (top-left tap, see [below](#gif-animations-upper-taps)) arms a timer that, after a 5-second delay, starts sending small randomised relative mouse movements — enough to keep a PC from going idle/locking, without visibly disrupting anything. Each nudge is sent out and then replayed backwards along the same step magnitudes, so the raw movement sums to zero and host pointer acceleration cancels between the two legs. (With the pointer already against a screen edge the outbound leg is clamped by the host and the return leg is not, so a cursor parked in a corner can still shift.) It stops the moment the GIF overlay closes: tapping back to the clock, or long-pressing into the [math gateway](#math-challenge)/apps carousel.
 
 **Recovery hatch.** If you pick `HID` and want Serial back for reflashing, hold the **BOOT** button through power-up — the device boots Serial-only for that boot only, without touching the saved mode. (Assumes BOOT is wired to GPIO0, standard for ESP32-S3 dev boards; the C6 variant of this board wires BOOT to GPIO9 instead, so this hasn't been taken for granted — see `board_config.h`.)
+
+### macroPad — ASCII art over USB (S3 only)
+The second item on the USB carousel. The clock introduces itself to the computer as a USB keyboard and *types* — one keystroke at a time, at human speed — a text file stored on the device into whatever window has focus.
+
+The point is that you can watch it happen. Open a text editor, tap a picture on the clock, and something the size of a matchbox starts drawing a penguin into your window by pressing keys. It is the same trick every USB keyboard performs, taken apart and made visible, and it is a good first answer to *"how does the computer know what I typed?"* — no toolchain, no IDE, nothing to install. Write a new `.art` file, drop it in `/scripts`, and it shows up in the menu.
+
+Three samples ship in `sd_card_root/scripts/`: **`ASCII_house.art`**, **`ASCII_hut.art`** and **`ASCII_penguin.art`**. Copy the folder to the card, or upload the files through the [file manager](#file-manager) on a cardless board.
+
+**Where scripts live.** `/scripts` on whichever backend is active (SD card, or internal flash on a cardless S3). The directory is created automatically at boot, so the [file manager](#file-manager) always has somewhere to upload to.
+
+> **Scripts do not migrate from card to internal flash.** Boot provisioning mirrors GIFs and `config.ini` only, so pulling the card out takes the art with it. To put art on flash: **remove the card**, boot from flash, then upload the files at `/files`. Uploading while a card is inserted writes to the *card*, since the file manager follows whichever backend is live — so with the card still in, you would be filling the storage you are about to remove. There is **no extension filter** — every file in the directory is listed, so `.txt`, `.art` and extensionless files all work. Subdirectories are ignored; the listing is one level deep and caps at 24 entries, showing `4/24+` when more are present.
+
+**Running one.** Tap a script to arm a 3-second countdown, then click into the target window on the host — the device cannot know what has focus, which is the whole reason for the delay. Tapping anywhere during the countdown cancels it. Once typing starts, a progress bar and a `N written · M left` readout track position in the file, and **tapping the screen stops it part-way**.
+
+**Line endings and indentation.** Only the trailing `\r`/`\n` is stripped from each line; leading whitespace is preserved exactly. That matters for ASCII art, where the indentation *is* the picture.
+
+**Choose the target window carefully.** Editors that auto-indent or reformat as you type — VS Code and most IDEs — will mangle careful ASCII spacing on their own, no matter what the device sends. Use a plain text target for anything where the alignment matters: Notepad, `nano`, a browser textarea, or **vim** (verified — in insert mode it does not reflow what arrives; `:set paste` disables `autoindent` outright if your config needs it).
+
+**No keyboard in Serial mode.** A board booted in the `Serial` persona has no keyboard interface at all, so macroPad says so rather than counting down to nothing. Switch to `HID` or `HID + Serial` and reboot.
 
 ### Status (lower-left tap)
 Title shows today's date (e.g. `Mon 23 Mar 2026`) when the RTC holds a valid time, falling back to `Status` on a fresh unconfigured boot.
@@ -1226,7 +1256,7 @@ guard counts the collected `-full.bin` images against the number of entries in
 
 ```
 ========== BOOT ==========
-[BOOT] ESP32-C6-Touch-LCD-1.47  fw v3.1.0
+[BOOT] ESP32-C6-Touch-LCD-1.47  fw v3.2.0
 [BOOT] PSRAM no  internal FS no
 [BOOT] Wake cause: cold boot / RESET button
 [1] Pulling CS pins HIGH...
@@ -1275,7 +1305,7 @@ read: 8161
 That is a C6 with a card inserted. An S3 differs in four places:
 
 ```
-[BOOT] ESP32-S3-Touch-LCD-1.47  fw v3.1.0
+[BOOT] ESP32-S3-Touch-LCD-1.47  fw v3.2.0
 [BOOT] PSRAM yes  internal FS yes (FFat)
 ...
 [4b] No IMU on this board — tilt control disabled.
@@ -1403,7 +1433,8 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v2.7.1 | ✅ released | WiFi configuration redesign — three-way `[wifi] mode = wifi\|ap\|off` (replaces the old on/off toggle) with a carousel sub-screen selector; non-blocking connect state machine with credential-rejection → automatic AP rescue and exponential backoff for unreachable networks (`WiFiMulti` removed); AP hotspot is now **open** and named `ESP32-Clock-XXXXXX` per device — the PIN authorises only the web UI's mutating actions; alarm always fires with a drift-warning overlay instead of the GIF when no time-sync source is available (AP/Off mode, or NTP timeout), and the 5-minute early-wake margin is skipped entirely outside WiFi mode |
 | v2.7.2 | ✅ released | Three-stage CI/CD pipeline — compile validation against a pinned toolchain, an `FW_VERSION` guard that fails any PR reusing a released version, and automatic tag-and-release on `main` — plus a weekly canary that rebuilds against the latest upstream core and libraries. One shared tune engine now backs the apps menu and every game, fixing two tune bugs |
 | v3.0.0 | ✅ released | **ESP32-S3 support** — one sketch, two boards, all hardware differences in `board_config.h`; storage abstraction that falls back from SD card to the S3's internal FFat partition (with a generated default `config.ini` on a virgin device); **internal-flash provisioning** — GIFs on the card are mirrored onto FFat at boot, so a board provisioned once from a card keeps its animations with the card removed; tilt-only games and emotion cycling hidden at runtime where no IMU answers; **swipe left/right to adjust brightness** on every board; atomic config writes (temp file + rename); AP SSID MAC read from eFuse instead of the not-yet-created softAP netif; missing-GIF paths reported instead of rendering a blank screen; **web file manager** at `/files` — browse, download, delete and upload on either storage backend, with a three-layer free-space guard; **dual-target CI and releases** — every release ships a binary set per board, built from one shared target definition |
-| v3.1.0 | 🚀 new | **USB Mode / mouse jiggler (S3 only)** — the board can present itself as a USB HID mouse and nudge the cursor at randomised intervals to keep a host awake; three-way persona (`HID` / `HID+Serial` / `Serial`) chosen from a carousel reached by long-pressing the analog clock, persisted as `[usb] mode` and applied on the next boot, since a composite USB descriptor cannot be swapped live; jiggling runs only while the smile GIF is open, starting 5 s after it opens; **hold BOOT through power-up** to force Serial-only for one boot, so a HID-only choice can never lock out reflashing. Requires **USB CDC On Boot = `Disabled`** on the S3 — the opposite of the C6 — because the sketch now brings its own CDC/HID interfaces up itself. Compiled out entirely on the C6, which has no USB-OTG peripheral. Also: a GIF that will not fit now names a disabled **PSRAM** build setting directly instead of blaming the asset size |
+| v3.1.0 | ✅ released | **USB Mode / mouse jiggler (S3 only)** — the board can present itself as a USB HID mouse and nudge the cursor at randomised intervals to keep a host awake; three-way persona (`HID` / `HID+Serial` / `Serial`) chosen from a carousel reached by long-pressing the analog clock, persisted as `[usb] mode` and applied on the next boot, since a composite USB descriptor cannot be swapped live; jiggling runs only while the smile GIF is open, starting 5 s after it opens; **hold BOOT through power-up** to force Serial-only for one boot, so a HID-only choice can never lock out reflashing. Requires **USB CDC On Boot = `Disabled`** on the S3 — the opposite of the C6 — because the sketch now brings its own CDC/HID interfaces up itself. Compiled out entirely on the C6, which has no USB-OTG peripheral. Also: a GIF that will not fit now names a disabled **PSRAM** build setting directly instead of blaming the asset size |
+| v3.2.0 | 🚀 new | **macroPad — ASCII art over USB (S3 only)** — the clock enumerates as a USB keyboard and types a stored text file into whatever window has focus, one keystroke at a time, so the mechanism is visible rather than magic. Ships with three `.art` samples (`ASCII_house`, `ASCII_hut`, `ASCII_penguin`) in `sd_card_root/scripts/`; drop a new file in `/scripts` and it appears in the menu, no toolchain involved. Also: the **mouse jiggler**'s return path is now a mirror of its outbound one — the same step magnitudes replayed backwards rather than a freshly randomised split — so host pointer acceleration applies equally to both legs and the cursor stops creeping over long sessions. Second item on the USB carousel; scripts live in `/scripts` on whichever storage backend is active, listed with no extension filter and created automatically at boot so the [file manager](#file-manager) always has an upload target. Tap a script for a **3-second countdown** — time to click into the target window, since the device cannot know what has focus — then a progress bar tracks position in the file and **tapping the screen stops it part-way**. Only the trailing line ending is stripped, so leading indentation survives intact for ASCII art. The keyboard registers on the same composite descriptor as the jiggler's mouse, so the HID personas now enumerate **mouse and keyboard** on one port; a `Serial`-only boot has no keyboard and says so instead of counting down to nothing. Compiled out entirely on the C6 |
 
 ## License
 

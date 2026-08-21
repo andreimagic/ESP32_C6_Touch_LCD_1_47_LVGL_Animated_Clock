@@ -65,7 +65,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v3.1.0"
+#define FW_VERSION      "v3.2.0"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -164,9 +164,15 @@ struct AppConfig {
   #include <USB.h>
   #include <USBCDC.h>
   #include <USBHIDMouse.h>
+  #include <USBHIDKeyboard.h>
   #include <Preferences.h>
   static USBCDC             ClockUSBSerial;
   static USBHIDRelativeMouse UsbJiggleMouse;
+  // Registers on the same shared TinyUSB `hid` object the mouse uses, so the
+  // host still sees ONE composite device on one port — not a second endpoint.
+  // Note this widens what the HID personas mean: they now enumerate a mouse
+  // AND a keyboard, where before PR #39 they were mouse-only.
+  static USBHIDKeyboard     UsbMacroKeyboard;
   #undef Serial
   #define Serial ClockUSBSerial
 #endif
@@ -183,6 +189,9 @@ struct AppConfig {
 // Same directory as the paths above, without the LVGL drive letter — filesystem
 // calls (SD./FFat./STORAGE->) never take one.
 #define GIF_DIR_FS        "/cruzr_emotions"
+// macroPad scripts (S3 only, see BOARD_HAS_USB_HID). Created on demand so the
+// web file manager always has a destination, even on a virgin filesystem.
+#define SCRIPTS_DIR_FS    "/scripts"
 
 // ─── Forward declarations ─────────────────────────────────────────────────────
 static void home_screen_init(void);
@@ -215,6 +224,7 @@ static void usb_persona_begin(void);
 static void show_usb_carousel(void);
 static void hid_jiggle_arm(void);
 static void hid_jiggle_stop(void);
+static void scripts_dir_ensure(void);
 #endif
 
 
@@ -9250,8 +9260,36 @@ static lv_obj_t *se_usb_lbl      = nullptr;
 static lv_obj_t *se_usb_desc     = nullptr;
 static lv_obj_t *se_usb_dot[3]   = {nullptr, nullptr, nullptr};
 
+// The carousel now pages between two items. USB Mode stays index 0 so the
+// long-press lands on the same screen it always did; macroPad sits next to it.
+enum UsbCarouselItem : int { UCI_USB_MODE = 0, UCI_MACROPAD = 1, UCI_COUNT = 2 };
+static int usb_carousel_idx = UCI_USB_MODE;
+
+// ── macroPad — script list ──────────────────────────────────────────────────
+// Scaffold: lists SCRIPTS_DIR_FS and navigates it. Selecting a script does not
+// type anything yet — the keyboard interface is deliberately not brought up in
+// this step, so flashing it cannot change what the host sees on the USB bus.
+//
+// The cap is a fixed array rather than a dynamic list because this runs on the
+// same heap the GIF canvas needs; 24 entries is 1.5KB and cannot fragment it.
+// Files beyond the cap are counted, not silently dropped — see scripts_scan().
+#define SCRIPTS_MAX      24
+#define SCRIPT_NAME_MAX  40
+#define SCRIPTS_PATH_MAX (sizeof(SCRIPTS_DIR_FS) + SCRIPT_NAME_MAX + 1)
+
+struct ScriptEntry { char name[SCRIPT_NAME_MAX]; uint32_t chars; };
+static ScriptEntry scripts_list[SCRIPTS_MAX];
+static int  scripts_n         = 0;
+static bool scripts_truncated = false;
+
+static lv_obj_t *macro_list_cont = nullptr;
+static int       macro_idx       = 0;
+
 static void usb_carousel_build(void);
 static void usb_modal_longpress_cb(lv_event_t *e);
+static void open_macropad_list(void);
+static void macro_list_build(void);
+static void macro_countdown_cancel(void);
 
 static void usb_editor_refresh()
 {
@@ -9378,11 +9416,22 @@ static void close_usb_editor()
 }
 
 static void usb_carousel_tap_cb(lv_event_t *e)
-{ if (lv_event_get_code(e)==LV_EVENT_CLICKED) open_usb_editor(); }
+{
+  if (lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
+  if (usb_carousel_idx==UCI_USB_MODE) open_usb_editor();
+  else                                open_macropad_list();
+}
+
+static void usb_carousel_left_cb(lv_event_t*e)
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){usb_carousel_idx=(usb_carousel_idx+UCI_COUNT-1)%UCI_COUNT;usb_carousel_build();} }
+static void usb_carousel_right_cb(lv_event_t*e)
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED){usb_carousel_idx=(usb_carousel_idx+1)%UCI_COUNT;usb_carousel_build();} }
 
 static void usb_carousel_build()
 {
   if (usb_editor_cont) { lv_obj_del(usb_editor_cont); usb_editor_cont=nullptr; }
+  macro_countdown_cancel();   // child of macro_list_cont — must go first
+  if (macro_list_cont) { lv_obj_del(macro_list_cont); macro_list_cont=nullptr; }
   se_usb_lbl = se_usb_desc = nullptr;
   for (int i=0;i<3;i++) se_usb_dot[i]=nullptr;
   lv_obj_clean(usb_modal_cont);
@@ -9392,18 +9441,46 @@ static void usb_carousel_build()
   static const char *names[3] = {"HID", "HID+CDC", "Serial"};
   const lv_color_t cols[3] = {lv_color_make(200,140,60), lv_color_make(80,200,120), lv_color_make(80,180,220)};
   const uint8_t s = (cfg.usb_persona > USB_SERIAL_ONLY) ? USB_HID_SERIAL : cfg.usb_persona;
-  char desc[28]; snprintf(desc,sizeof(desc),"Currently: %s",names[s]);
 
-  // Single item — no left/right paging zones yet, unlike the 4-item main
-  // carousel. The chrome (icon/name/desc/dot/hint) still matches it exactly.
+  // Per-item chrome. USB Mode colours itself by the active persona, exactly as
+  // it did when this was a single-item carousel; macroPad has no state to show
+  // at rest, so it takes a fixed accent.
+  const char *icon_txt, *item_name;
+  lv_color_t  accent;
+  char        desc[32];
+  if (usb_carousel_idx==UCI_USB_MODE) {
+    icon_txt = LV_SYMBOL_USB;  item_name = "USB Mode";  accent = cols[s];
+    snprintf(desc,sizeof(desc),"Currently: %s",names[s]);
+  } else {
+    icon_txt = LV_SYMBOL_KEYBOARD;  item_name = "macroPad";
+    accent   = lv_color_make(150,130,220);
+    snprintf(desc,sizeof(desc),"Type a saved script");
+  }
+
+  // Left arrow + zone
+  lv_obj_t*larr=lv_label_create(usb_modal_cont);
+  lv_label_set_text(larr,LV_SYMBOL_LEFT);
+  lv_obj_set_style_text_font(larr,&lv_font_montserrat_48,0);
+  lv_obj_set_style_text_color(larr,lv_color_make(80,100,180),0);
+  lv_obj_align(larr,LV_ALIGN_LEFT_MID,6,0);
+  usb_zone(usb_modal_cont,0,0,60,172,usb_carousel_left_cb);
+
+  // Right arrow + zone
+  lv_obj_t*rarr=lv_label_create(usb_modal_cont);
+  lv_label_set_text(rarr,LV_SYMBOL_RIGHT);
+  lv_obj_set_style_text_font(rarr,&lv_font_montserrat_48,0);
+  lv_obj_set_style_text_color(rarr,lv_color_make(80,100,180),0);
+  lv_obj_align(rarr,LV_ALIGN_RIGHT_MID,-6,0);
+  usb_zone(usb_modal_cont,260,0,60,172,usb_carousel_right_cb);
+
   lv_obj_t*icon=lv_label_create(usb_modal_cont);
-  lv_label_set_text(icon,LV_SYMBOL_USB);
+  lv_label_set_text(icon,icon_txt);
   lv_obj_set_style_text_font(icon,&lv_font_montserrat_48,0);
-  lv_obj_set_style_text_color(icon,cols[s],0);
+  lv_obj_set_style_text_color(icon,accent,0);
   lv_obj_align(icon,LV_ALIGN_CENTER,0,-28);
 
   lv_obj_t*name_lbl=lv_label_create(usb_modal_cont);
-  lv_label_set_text(name_lbl,"USB Mode");
+  lv_label_set_text(name_lbl,item_name);
   lv_obj_set_style_text_font(name_lbl,&lv_font_montserrat_16,0);
   lv_obj_set_style_text_color(name_lbl,lv_color_white(),0);
   lv_obj_align(name_lbl,LV_ALIGN_CENTER,0,18);
@@ -9411,12 +9488,14 @@ static void usb_carousel_build()
   lv_obj_t*desc_lbl=lv_label_create(usb_modal_cont);
   lv_label_set_text(desc_lbl,desc);
   lv_obj_set_style_text_font(desc_lbl,&lv_font_montserrat_14,0);
-  lv_obj_set_style_text_color(desc_lbl,cols[s],0);
+  lv_obj_set_style_text_color(desc_lbl,accent,0);
   lv_obj_align(desc_lbl,LV_ALIGN_CENTER,0,40);
 
+  // Centre tap zone, inset so it cannot swallow the paging arrows — same split
+  // the main carousel uses (60 / 200 / 60).
   {
     lv_obj_t *z = lv_obj_create(usb_modal_cont);
-    lv_obj_set_size(z,320,172); lv_obj_set_pos(z,0,0);
+    lv_obj_set_size(z,200,172); lv_obj_set_pos(z,60,0);
     lv_obj_set_style_bg_opa(z,LV_OPA_TRANSP,0);
     lv_obj_set_style_border_width(z,0,0); lv_obj_set_style_pad_all(z,0,0);
     lv_obj_set_style_radius(z,0,0); lv_obj_set_style_shadow_width(z,0,0);
@@ -9432,17 +9511,482 @@ static void usb_carousel_build()
   lv_obj_set_style_text_font(hint,&dejavu_mono_14,0);
   lv_obj_align(hint,LV_ALIGN_BOTTOM_MID,0,-18);
 
-  lv_obj_t*dot=lv_label_create(usb_modal_cont);
-  lv_obj_set_style_text_font(dot,&dejavu_mono_14,0);
-  lv_label_set_text(dot,"\xe2\x97\x8f");
-  lv_obj_set_style_text_color(dot,lv_color_white(),0);
-  lv_obj_align(dot,LV_ALIGN_BOTTOM_MID,0,-2);
+  // Position dots — two of them, centred on the same baseline the 4-dot main
+  // carousel uses (its row spans 137..179, centre ~162).
+  for (int i=0;i<UCI_COUNT;i++) {
+    lv_obj_t*dot=lv_label_create(usb_modal_cont);
+    lv_obj_set_style_text_font(dot,&dejavu_mono_14,0);
+    lv_label_set_text(dot, i==usb_carousel_idx ? "\xe2\x97\x8f" : "\xe2\x97\x8b"); // "●" : "○"
+    lv_obj_set_style_text_color(dot,
+      i==usb_carousel_idx?lv_color_white():lv_color_make(80,80,100),0);
+    lv_obj_set_pos(dot,151+i*14,156);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  macroPad — script listing (S3 only)
+// ══════════════════════════════════════════════════════════════════════════════
+//  Reached from the USB carousel's second item. Lists SCRIPTS_DIR_FS and pages
+//  through it; selecting a script does not type anything yet.
+//
+//  The directory is created on demand rather than assumed, so the web file
+//  manager always has somewhere to upload to even on a virgin filesystem, and
+//  an empty directory is a first-class state rather than an error.
+// ══════════════════════════════════════════════════════════════════════════════
+
+static void scripts_dir_ensure()
+{
+  if (!storageAvailable || !STORAGE)     return;
+  if (STORAGE->exists(SCRIPTS_DIR_FS))   return;
+  if (STORAGE->mkdir(SCRIPTS_DIR_FS))
+    Serial.printf("[MACRO] created %s on %s\n", SCRIPTS_DIR_FS, storage_label());
+  else
+    Serial.printf("[MACRO] could not create %s on %s\n", SCRIPTS_DIR_FS, storage_label());
+}
+
+// Deliberately no extension filter: script files are whatever the user uploaded
+// (.txt, .art, no extension at all), so filtering would hide valid content.
+// Directories are skipped — the listing is one level deep by design.
+static void scripts_scan()
+{
+  scripts_n = 0; scripts_truncated = false;
+  if (!storageAvailable || !STORAGE) return;
+  scripts_dir_ensure();
+
+  File d = STORAGE->open(SCRIPTS_DIR_FS);
+  if (!d) return;
+  if (!d.isDirectory()) { d.close(); return; }
+
+  File e = d.openNextFile();
+  while (e) {
+    const bool  isdir = e.isDirectory();
+    const char *bn    = e.name();          // basename on core 3.x; path() carries the dir
+    const uint32_t sz = isdir ? 0 : (uint32_t)e.size();
+    if (!isdir && bn && bn[0]) {
+      if (scripts_n < SCRIPTS_MAX) {
+        // name() points into the File, so copy before close() invalidates it.
+        strncpy(scripts_list[scripts_n].name, bn, SCRIPT_NAME_MAX - 1);
+        scripts_list[scripts_n].name[SCRIPT_NAME_MAX - 1] = '\0';
+        scripts_list[scripts_n].chars = sz;
+        scripts_n++;
+      } else {
+        scripts_truncated = true;         // counted, not silently dropped
+      }
+    }
+    e.close();
+    e = d.openNextFile();
+  }
+  d.close();
+
+  Serial.printf("[MACRO] %s on %s: %d script%s%s\n",
+                SCRIPTS_DIR_FS, storage_label(), scripts_n,
+                scripts_n == 1 ? "" : "s",
+                scripts_truncated ? " (more present, list capped)" : "");
+}
+
+// ══ Playback ════════════════════════════════════════════════════════════════
+//  Typing is driven from loop(), never from an LVGL event callback. The typing
+//  loop has to pump lv_timer_handler() itself — otherwise the progress bar
+//  never repaints and a cancel tap is never seen, because the whole run blocks.
+//  Calling lv_timer_handler() re-entrantly from inside a callback is not safe,
+//  so the countdown only raises a flag and loop() does the work at top level.
+// ════════════════════════════════════════════════════════════════════════════
+
+#define MACRO_LINE_DELAY_MS 15   // raise if a target app drops characters
+#define MACRO_COUNTDOWN_SEC 3    // time to click into the target window
+
+static volatile bool macro_play_pending = false;
+static volatile bool macro_abort        = false;
+static char          macro_play_name[SCRIPT_NAME_MAX] = {0};
+
+static lv_obj_t   *macro_play_cont = nullptr;
+static lv_obj_t   *macro_play_bar  = nullptr;
+static lv_obj_t   *macro_play_sub  = nullptr;
+
+static lv_obj_t   *macro_cd_popup = nullptr;   // full-screen scrim + card
+static lv_obj_t   *macro_cd_lbl   = nullptr;
+static lv_timer_t *macro_cd_timer = nullptr;
+static int         macro_cd_count = MACRO_COUNTDOWN_SEC;
+
+static void macro_countdown_cancel()
+{
+  if (macro_cd_timer) { lv_timer_del(macro_cd_timer); macro_cd_timer=nullptr; }
+  if (macro_cd_popup) { lv_obj_del(macro_cd_popup);   macro_cd_popup=nullptr; }
+  macro_cd_lbl   = nullptr;
+  macro_cd_count = MACRO_COUNTDOWN_SEC;
+}
+
+static void macro_countdown_cancel_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
+  Serial.println("[MACRO] countdown cancelled");
+  macro_countdown_cancel();
+}
+
+static void macro_countdown_tick_cb(lv_timer_t * /*t*/)
+{
+  macro_cd_count--;
+  if (macro_cd_lbl) lv_label_set_text_fmt(macro_cd_lbl,"Typing in %d...",macro_cd_count);
+  if (macro_cd_count <= 0) {
+    macro_countdown_cancel();     // card goes away first, so it never overlaps playback
+    macro_play_pending = true;    // loop() picks this up on its next pass
+  }
+}
+
+// Same 240x90 card as the shutdown popup, with its own state and its own tick —
+// nothing here can reach shutdown_execute(). The card sits on a full-screen
+// scrim so a tap anywhere cancels, and so the list's paging zones underneath
+// cannot be hit while the countdown is running.
+static void macro_show_countdown()
+{
+  if (macro_cd_popup || !macro_list_cont) return;
+  macro_cd_count = MACRO_COUNTDOWN_SEC;
+
+  macro_cd_popup = lv_obj_create(macro_list_cont);
+  lv_obj_set_size(macro_cd_popup, 320, 172);
+  lv_obj_set_pos(macro_cd_popup, 0, 0);
+  lv_obj_set_style_bg_color(macro_cd_popup, lv_color_black(), 0);
+  lv_obj_set_style_bg_opa(macro_cd_popup, LV_OPA_70, 0);
+  lv_obj_set_style_border_width(macro_cd_popup, 0, 0);
+  lv_obj_set_style_pad_all(macro_cd_popup, 0, 0);
+  lv_obj_set_style_radius(macro_cd_popup, 0, 0);
+  lv_obj_clear_flag(macro_cd_popup, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(macro_cd_popup, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(macro_cd_popup, macro_countdown_cancel_cb, LV_EVENT_CLICKED, nullptr);
+
+  lv_obj_t *card = lv_obj_create(macro_cd_popup);
+  lv_obj_set_size(card, 240, 90);
+  lv_obj_align(card, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(card, lv_color_make(20, 20, 40), 0);
+  lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(card, lv_color_make(80, 80, 160), 0);
+  lv_obj_set_style_border_width(card, 1, 0);
+  lv_obj_set_style_radius(card, 8, 0);
+  lv_obj_set_style_pad_all(card, 0, 0);
+  lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(card, macro_countdown_cancel_cb, LV_EVENT_CLICKED, nullptr);
+
+  macro_cd_lbl = lv_label_create(card);
+  lv_label_set_text_fmt(macro_cd_lbl, "Typing in %d...", macro_cd_count);
+  lv_obj_set_style_text_font(macro_cd_lbl, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(macro_cd_lbl, lv_color_make(220, 220, 255), 0);
+  lv_obj_align(macro_cd_lbl, LV_ALIGN_CENTER, 0, -26);
+
+  // The device cannot know which window has focus on the host, so say what the
+  // countdown is for rather than just counting down.
+  lv_obj_t *why = lv_label_create(card);
+  lv_label_set_text(why, "click into the target window");
+  lv_obj_set_style_text_font(why, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(why, lv_color_make(140, 140, 170), 0);
+  lv_obj_align(why, LV_ALIGN_CENTER, 0, -6);
+
+  lv_obj_t *btn = lv_btn_create(card);
+  lv_obj_set_size(btn, 90, 28);
+  lv_obj_align(btn, LV_ALIGN_CENTER, 0, 24);
+  lv_obj_set_style_bg_color(btn, lv_color_make(180, 60, 60), 0);
+  lv_obj_set_style_radius(btn, 6, 0);
+  lv_obj_add_event_cb(btn, macro_countdown_cancel_cb, LV_EVENT_CLICKED, nullptr);
+
+  lv_obj_t *btn_lbl = lv_label_create(btn);
+  lv_label_set_text(btn_lbl, "Cancel");
+  lv_obj_set_style_text_font(btn_lbl, &lv_font_montserrat_14, 0);
+  lv_obj_center(btn_lbl);
+
+  macro_cd_timer = lv_timer_create(macro_countdown_tick_cb, 1000, nullptr);
+}
+
+// Serial-only persona brought up no keyboard this boot, so a countdown would
+// run down to nothing. Say why instead.
+static void macro_show_no_hid()
+{
+  if (macro_cd_popup || !macro_list_cont) return;
+
+  macro_cd_popup = lv_obj_create(macro_list_cont);
+  lv_obj_set_size(macro_cd_popup, 320, 172);
+  lv_obj_set_pos(macro_cd_popup, 0, 0);
+  lv_obj_set_style_bg_color(macro_cd_popup, lv_color_black(), 0);
+  lv_obj_set_style_bg_opa(macro_cd_popup, LV_OPA_70, 0);
+  lv_obj_set_style_border_width(macro_cd_popup, 0, 0);
+  lv_obj_set_style_pad_all(macro_cd_popup, 0, 0);
+  lv_obj_clear_flag(macro_cd_popup, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(macro_cd_popup, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(macro_cd_popup, macro_countdown_cancel_cb, LV_EVENT_CLICKED, nullptr);
+
+  lv_obj_t *msg = lv_label_create(macro_cd_popup);
+  lv_label_set_text(msg, LV_SYMBOL_WARNING "  USB Mode is Serial - no keyboard this boot.\n"
+                         "Switch to HID or HID+CDC and reboot.");
+  lv_obj_set_style_text_font(msg, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(msg, lv_color_make(220, 200, 140), 0);
+  lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(msg, 280);
+  lv_obj_set_style_text_align(msg, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(msg, LV_ALIGN_CENTER, 0, 0);
+}
+
+static void macro_abort_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
+  macro_abort = true;               // the typing loop checks this every line
+}
+
+static void macro_play_ui_open(const char *name, uint32_t total)
+{
+  macro_play_cont = lv_obj_create(usb_modal_cont);
+  lv_obj_set_size(macro_play_cont,320,172); lv_obj_set_pos(macro_play_cont,0,0);
+  lv_obj_set_style_bg_color(macro_play_cont,lv_color_make(8,12,28),0);
+  lv_obj_set_style_bg_opa(macro_play_cont,LV_OPA_COVER,0);
+  lv_obj_set_style_border_width(macro_play_cont,0,0);
+  lv_obj_set_style_pad_all(macro_play_cont,0,0);
+  lv_obj_set_style_radius(macro_play_cont,0,0);
+  lv_obj_clear_flag(macro_play_cont,LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(macro_play_cont,LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(macro_play_cont,macro_abort_cb,LV_EVENT_CLICKED,nullptr);
+
+  lv_obj_t*t=lv_label_create(macro_play_cont);
+  lv_label_set_text_fmt(t,LV_SYMBOL_KEYBOARD "  %s",name);
+  lv_obj_set_style_text_font(t,&lv_font_montserrat_14,0);
+  lv_obj_set_style_text_color(t,lv_color_make(180,180,220),0);
+  lv_label_set_long_mode(t,LV_LABEL_LONG_DOT);
+  lv_obj_set_width(t,280);
+  lv_obj_set_style_text_align(t,LV_TEXT_ALIGN_CENTER,0);
+  lv_obj_align(t,LV_ALIGN_TOP_MID,0,14);
+
+  macro_play_bar = lv_bar_create(macro_play_cont);
+  lv_obj_set_size(macro_play_bar,240,10);
+  lv_obj_align(macro_play_bar,LV_ALIGN_CENTER,0,-4);
+  lv_bar_set_range(macro_play_bar,0,(int32_t)(total ? total : 1));
+  lv_bar_set_value(macro_play_bar,0,LV_ANIM_OFF);
+  lv_obj_set_style_bg_color(macro_play_bar,lv_color_make(30,34,60),LV_PART_MAIN);
+  lv_obj_set_style_bg_color(macro_play_bar,lv_color_make(150,130,220),LV_PART_INDICATOR);
+
+  macro_play_sub = lv_label_create(macro_play_cont);
+  lv_label_set_text_fmt(macro_play_sub,"0 written - %u left",(unsigned)total);
+  lv_obj_set_style_text_font(macro_play_sub,&lv_font_montserrat_14,0);
+  lv_obj_set_style_text_color(macro_play_sub,lv_color_make(150,150,170),0);
+  lv_obj_align(macro_play_sub,LV_ALIGN_CENTER,0,22);
+
+  lv_obj_t*h=lv_label_create(macro_play_cont);
+  lv_label_set_text(h,"tap to stop");
+  lv_obj_set_style_text_font(h,&dejavu_mono_14,0);
+  lv_obj_set_style_text_color(h,lv_color_make(80,80,100),0);
+  lv_obj_set_style_text_opa(h,LV_OPA_60,0);
+  lv_obj_align(h,LV_ALIGN_BOTTOM_MID,0,-8);
+}
+
+static void macro_play_ui_close()
+{
+  if (macro_play_cont) { lv_obj_del(macro_play_cont); macro_play_cont=nullptr; }
+  macro_play_bar = macro_play_sub = nullptr;
+}
+
+// Runs at loop() top level — see the note at the top of this block.
+static void macro_play_run()
+{
+  if (!storageAvailable || !STORAGE || !usb_modal_cont) return;
+  if (cfg.usb_persona == USB_SERIAL_ONLY)               return;
+
+  char full[SCRIPTS_PATH_MAX];
+  snprintf(full,sizeof(full),"%s/%s",SCRIPTS_DIR_FS,macro_play_name);
+  File f = STORAGE->open(full, FILE_READ);
+  if (!f) { Serial.printf("[MACRO] cannot open %s\n", full); return; }
+
+  const uint32_t total = (uint32_t)f.size();
+  macro_abort = false;
+  macro_play_ui_open(macro_play_name, total);
+  Serial.printf("[MACRO] typing %s (%u bytes)\n", macro_play_name, (unsigned)total);
+
+  uint32_t lines = 0;
+  while (f.available() && !macro_abort) {
+    String line = f.readStringUntil('\n');
+
+    // Strip the line ending ONLY. String::trim() also eats leading whitespace,
+    // which for ASCII art is the picture — every line would flush to column 0.
+    while (line.length() &&
+           (line[line.length()-1] == '\r' || line[line.length()-1] == '\n'))
+      line.remove(line.length()-1);
+
+    UsbMacroKeyboard.println(line);
+    lines++;
+    delay(MACRO_LINE_DELAY_MS);
+
+    // Progress by file position: summing typed characters drifts on a CRLF file
+    // once \r has been stripped, position() does not.
+    const uint32_t written = (uint32_t)f.position();
+    if (macro_play_bar) lv_bar_set_value(macro_play_bar,(int32_t)written,LV_ANIM_OFF);
+    if (macro_play_sub)
+      lv_label_set_text_fmt(macro_play_sub,"%u written - %u left",
+                            (unsigned)written,
+                            (unsigned)(total > written ? total - written : 0));
+
+    lv_timer_handler();   // repaint + see a cancel tap; safe at loop() level
+  }
+
+  const uint32_t done = (uint32_t)f.position();
+  f.close();
+
+  if (macro_abort)
+    Serial.printf("[MACRO] stopped by user after %u/%u bytes\n",(unsigned)done,(unsigned)total);
+  else
+    Serial.printf("[MACRO] finished - %u lines, %u bytes\n",(unsigned)lines,(unsigned)done);
+
+  macro_play_ui_close();
+  macro_list_build();     // back to the list, still on the same entry
+}
+
+static void macro_left_cb(lv_event_t*e)
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED && scripts_n>1){macro_idx=(macro_idx+scripts_n-1)%scripts_n;macro_list_build();} }
+static void macro_right_cb(lv_event_t*e)
+{ if(lv_event_get_code(e)==LV_EVENT_PRESSED && scripts_n>1){macro_idx=(macro_idx+1)%scripts_n;macro_list_build();} }
+
+static void macro_item_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
+  if (scripts_n == 0 || macro_idx >= scripts_n) return;
+
+  // A Serial-only boot brought up no keyboard at all, so a countdown would run
+  // down to a no-op. Say why instead of appearing to work.
+  if (cfg.usb_persona == USB_SERIAL_ONLY) { macro_show_no_hid(); return; }
+
+  strncpy(macro_play_name, scripts_list[macro_idx].name, SCRIPT_NAME_MAX - 1);
+  macro_play_name[SCRIPT_NAME_MAX - 1] = '\0';
+  Serial.printf("[MACRO] selected %s (%u bytes)\n",
+                macro_play_name, (unsigned)scripts_list[macro_idx].chars);
+  macro_show_countdown();
+}
+
+static void macro_list_build()
+{
+  if (!macro_list_cont) return;
+  lv_obj_clean(macro_list_cont);
+  lv_obj_add_event_cb(macro_list_cont,usb_modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
+
+  lv_obj_t*title=lv_label_create(macro_list_cont);
+  lv_label_set_text(title,LV_SYMBOL_KEYBOARD "  macroPad");
+  lv_obj_set_style_text_font(title,&lv_font_montserrat_14,0);
+  lv_obj_set_style_text_color(title,lv_color_make(180,180,220),0);
+  lv_obj_align(title,LV_ALIGN_TOP_MID,0,8);
+
+  // ── Empty state ───────────────────────────────────────────────────────────
+  // No tap zone is created at all, so the placeholder cannot be selected and
+  // macro_idx can never address a file that is not there.
+  if (scripts_n == 0) {
+    lv_obj_t*msg=lv_label_create(macro_list_cont);
+    lv_label_set_text(msg,"No scripts yet");
+    lv_obj_set_style_text_font(msg,&lv_font_montserrat_16,0);
+    lv_obj_set_style_text_color(msg,lv_color_make(140,140,160),0);
+    lv_obj_align(msg,LV_ALIGN_CENTER,0,-12);
+
+    lv_obj_t*sub=lv_label_create(macro_list_cont);
+    lv_label_set_text_fmt(sub,"upload to %s via the web UI",SCRIPTS_DIR_FS);
+    lv_obj_set_style_text_font(sub,&lv_font_montserrat_14,0);
+    lv_obj_set_style_text_color(sub,lv_color_make(100,100,120),0);
+    lv_label_set_long_mode(sub,LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(sub,280);
+    lv_obj_set_style_text_align(sub,LV_TEXT_ALIGN_CENTER,0);
+    lv_obj_align(sub,LV_ALIGN_CENTER,0,20);
+
+    lv_obj_t*h=lv_label_create(macro_list_cont);
+    lv_label_set_text(h,"hold to go back");
+    lv_obj_set_style_text_color(h,lv_color_make(100,100,120),0);
+    lv_obj_set_style_text_opa(h,LV_OPA_60,0);
+    lv_obj_align(h,LV_ALIGN_BOTTOM_MID,0,-4);
+    return;
+  }
+
+  // ── Populated ─────────────────────────────────────────────────────────────
+  if (scripts_n > 1) {
+    lv_obj_t*larr=lv_label_create(macro_list_cont);
+    lv_label_set_text(larr,LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_font(larr,&lv_font_montserrat_48,0);
+    lv_obj_set_style_text_color(larr,lv_color_make(80,100,180),0);
+    lv_obj_align(larr,LV_ALIGN_LEFT_MID,6,0);
+    usb_zone(macro_list_cont,0,30,60,120,macro_left_cb);
+
+    lv_obj_t*rarr=lv_label_create(macro_list_cont);
+    lv_label_set_text(rarr,LV_SYMBOL_RIGHT);
+    lv_obj_set_style_text_font(rarr,&lv_font_montserrat_48,0);
+    lv_obj_set_style_text_color(rarr,lv_color_make(80,100,180),0);
+    lv_obj_align(rarr,LV_ALIGN_RIGHT_MID,-6,0);
+    usb_zone(macro_list_cont,260,30,60,120,macro_right_cb);
+  }
+
+  lv_obj_t*name_lbl=lv_label_create(macro_list_cont);
+  lv_label_set_text(name_lbl,scripts_list[macro_idx].name);
+  lv_obj_set_style_text_font(name_lbl,&lv_font_montserrat_16,0);
+  lv_obj_set_style_text_color(name_lbl,lv_color_white(),0);
+  lv_label_set_long_mode(name_lbl,LV_LABEL_LONG_DOT);
+  lv_obj_set_width(name_lbl,190);
+  lv_obj_set_style_text_align(name_lbl,LV_TEXT_ALIGN_CENTER,0);
+  lv_obj_align(name_lbl,LV_ALIGN_CENTER,0,-14);
+
+  lv_obj_t*sub=lv_label_create(macro_list_cont);
+  lv_label_set_text_fmt(sub,"%u chars",(unsigned)scripts_list[macro_idx].chars);
+  lv_obj_set_style_text_font(sub,&lv_font_montserrat_14,0);
+  lv_obj_set_style_text_color(sub,lv_color_make(150,130,220),0);
+  lv_obj_align(sub,LV_ALIGN_CENTER,0,14);
+
+  // Centre tap zone, inset like the carousel's so it cannot swallow the arrows.
+  {
+    lv_obj_t *z = lv_obj_create(macro_list_cont);
+    lv_obj_set_size(z,200,120); lv_obj_set_pos(z,60,30);
+    lv_obj_set_style_bg_opa(z,LV_OPA_TRANSP,0);
+    lv_obj_set_style_border_width(z,0,0); lv_obj_set_style_pad_all(z,0,0);
+    lv_obj_set_style_radius(z,0,0); lv_obj_set_style_shadow_width(z,0,0);
+    lv_obj_clear_flag(z,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(z,macro_item_tap_cb,LV_EVENT_CLICKED,nullptr);
+    lv_obj_add_event_cb(z,usb_modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
+  }
+
+  // A counter rather than position dots: the list can hold up to SCRIPTS_MAX
+  // entries and a row of 24 dots would be unreadable at this size.
+  lv_obj_t*pos=lv_label_create(macro_list_cont);
+  if (scripts_truncated) lv_label_set_text_fmt(pos,"%d/%d+",macro_idx+1,scripts_n);
+  else                   lv_label_set_text_fmt(pos,"%d/%d", macro_idx+1,scripts_n);
+  lv_obj_set_style_text_font(pos,&dejavu_mono_14,0);
+  lv_obj_set_style_text_color(pos,lv_color_make(80,80,100),0);
+  lv_obj_align(pos,LV_ALIGN_BOTTOM_MID,0,-2);
+
+  lv_obj_t*hint=lv_label_create(macro_list_cont);
+  lv_label_set_text(hint,"hold to go back");
+  lv_obj_set_style_text_color(hint,lv_color_make(80,80,100),0);
+  lv_obj_set_style_text_opa(hint,LV_OPA_60,0);
+  lv_obj_set_style_text_font(hint,&dejavu_mono_14,0);
+  lv_obj_align(hint,LV_ALIGN_BOTTOM_MID,0,-18);
+}
+
+static void open_macropad_list()
+{
+  macro_countdown_cancel();
+  if (macro_list_cont) { lv_obj_del(macro_list_cont); macro_list_cont=nullptr; }
+  scripts_scan();
+  macro_idx = 0;
+
+  macro_list_cont=lv_obj_create(usb_modal_cont);
+  lv_obj_set_size(macro_list_cont,320,172); lv_obj_set_pos(macro_list_cont,0,0);
+  lv_obj_set_style_bg_color(macro_list_cont,lv_color_make(8,12,28),0);
+  lv_obj_set_style_bg_opa(macro_list_cont,LV_OPA_COVER,0);
+  lv_obj_set_style_border_width(macro_list_cont,0,0);
+  lv_obj_set_style_pad_all(macro_list_cont,0,0);
+  lv_obj_set_style_radius(macro_list_cont,0,0);
+  lv_obj_clear_flag(macro_list_cont,LV_OBJ_FLAG_SCROLLABLE);
+  macro_list_build();
 }
 
 static void usb_modal_longpress_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e)!=LV_EVENT_LONG_PRESSED) return;
   lv_indev_wait_release(lv_indev_get_act());
+
+  // macroPad list is one level deeper than the carousel, so a hold there steps
+  // back to the carousel rather than closing the modal outright.
+  if (macro_list_cont) {
+    macro_countdown_cancel();   // child of macro_list_cont — must go first
+    lv_obj_del(macro_list_cont); macro_list_cont=nullptr;
+    usb_carousel_build();
+    return;
+  }
+
   if (!usb_editor_cont) {
     se_usb_lbl = se_usb_desc = nullptr;
     for (int i=0;i<3;i++) se_usb_dot[i]=nullptr;
@@ -9458,6 +10002,7 @@ static void usb_modal_longpress_cb(lv_event_t *e)
 static void show_usb_carousel(void)
 {
   if (usb_modal_cont || modal_cont || overlay_cont) return;
+  usb_carousel_idx = UCI_USB_MODE;   // always open on the item the long-press used to reach
 
   usb_modal_cont=lv_obj_create(lv_scr_act());
   lv_obj_set_size(usb_modal_cont,LV_PCT(100),LV_PCT(100));
@@ -9479,20 +10024,40 @@ static uint32_t     hid_gif_open_at  = 0;
 static uint32_t     hid_next_move_at = 0;
 static bool          hid_armed        = false;
 
-// Splits (total_dx,total_dy) into a few small relative HID reports instead of
-// one teleporting jump — the last step carries the rounding remainder so the
-// full distance is always delivered even when steps doesn't divide evenly.
-static void hid_send_nudge(int total_dx, int total_dy)
+// Splits (total_dx,total_dy) into a few small relative HID reports instead of one
+// teleporting jump, then sends that exact sequence again reversed and negated.
+// The last step of the outbound leg carries the division remainder, so the raw
+// deltas sum to exactly zero.
+//
+// The mirroring is the point. Hosts apply pointer acceleration as a non-linear
+// function of per-report magnitude, so the same raw total delivered in a
+// different number of reports covers a different distance on screen. Drawing a
+// fresh step count for each leg — which an earlier version did — left the return
+// trip free to overshoot the outbound one and walk the cursor a little further
+// on every jiggle. Replaying the same magnitudes backwards makes whatever curve
+// the host applies apply equally to both legs.
+//
+// What this cannot fix: with the pointer already against a screen edge, the
+// outbound leg is clamped by the host and the return leg is not, which is real
+// displacement. The device has no way to know where the pointer is.
+#define HID_NUDGE_MAX_STEPS 4
+
+static void hid_send_nudge_round_trip(int total_dx, int total_dy)
 {
-  int steps = random(2, 5);
+  const int steps = random(2, HID_NUDGE_MAX_STEPS + 1);
+  int8_t sx[HID_NUDGE_MAX_STEPS], sy[HID_NUDGE_MAX_STEPS];
   int rem_dx = total_dx, rem_dy = total_dy;
+
   for (int i = 0; i < steps; i++) {
-    int left = steps - i;
-    int sx = (left == 1) ? rem_dx : rem_dx / left;
-    int sy = (left == 1) ? rem_dy : rem_dy / left;
-    rem_dx -= sx; rem_dy -= sy;
-    UsbJiggleMouse.move((int8_t)sx, (int8_t)sy);
+    const int left = steps - i;
+    const int px = (left == 1) ? rem_dx : rem_dx / left;
+    const int py = (left == 1) ? rem_dy : rem_dy / left;
+    rem_dx -= px; rem_dy -= py;
+    sx[i] = (int8_t)px; sy[i] = (int8_t)py;
+    UsbJiggleMouse.move(sx[i], sy[i]);
   }
+  for (int i = steps - 1; i >= 0; i--)
+    UsbJiggleMouse.move((int8_t)(-(int)sx[i]), (int8_t)(-(int)sy[i]));
 }
 
 static void hid_jiggle_move_cb(lv_timer_t *t)
@@ -9508,8 +10073,7 @@ static void hid_jiggle_move_cb(lv_timer_t *t)
 
   int dx = (int)random(-9, 10), dy = (int)random(-9, 10);
   if (dx == 0 && dy == 0) dx = 3;
-  hid_send_nudge(dx, dy);     // out
-  hid_send_nudge(-dx, -dy);   // and back — the pointer never actually drifts
+  hid_send_nudge_round_trip(dx, dy);   // out and back along a mirrored path
 
   // Randomised interval, and an occasional extra-long gap, so the cadence
   // doesn't read as a perfect metronome — sized only for "don't let the OS
@@ -9560,7 +10124,10 @@ static void usb_persona_begin()
   bool want_hid    = (persona != USB_SERIAL_ONLY);
 
   if (want_serial) Serial.begin(115200);
-  if (want_hid)    UsbJiggleMouse.begin();
+  if (want_hid) {
+    UsbJiggleMouse.begin();
+    UsbMacroKeyboard.begin();   // composite: same port, same descriptor
+  }
   USB.begin();
 
   if (want_serial) {
@@ -10116,6 +10683,14 @@ void setup()
   provision_internal_flash();
 #endif
 
+#if BOARD_HAS_USB_HID
+  // ── Step 7a2: macroPad script directory ───────────────────────────────────
+  // Created at boot rather than on first menu entry so the web file manager has
+  // a destination to upload into without the user having to open the carousel
+  // first. Runs after provisioning so it lands on whichever backend won.
+  scripts_dir_ensure();
+#endif
+
   // ── Step 7b: WiFi + NTP ───────────────────────────────────────────────────
   // WiFi.begin() only queues the association; the result is picked up by
   // wifi_poll_cb() (an LVGL timer) so setup() is never blocked.
@@ -10175,6 +10750,14 @@ void setup()
 void loop()
 {
   lv_timer_handler();  // drive LVGL: renders, animations, timers
+
+#if BOARD_HAS_USB_HID
+  // macroPad playback blocks for the length of the script and pumps LVGL
+  // itself, so it must run here rather than from the countdown's timer
+  // callback — lv_timer_handler() is not re-entrant.
+  if (macro_play_pending) { macro_play_pending = false; macro_play_run(); }
+#endif
+
   // Process one pending HTTP request per loop iteration.
   // handleClient() returns immediately when no client is connected,
   // so it does not interfere with LVGL animations or the hardware-timer

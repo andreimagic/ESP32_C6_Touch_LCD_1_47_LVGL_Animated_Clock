@@ -36,7 +36,7 @@ jobs:
   # on an existing tag and exit cleanly here, before anything is built.
   version:
     name: Resolve version
-    runs-on: onctl-4
+    runs-on: onctl-2
     timeout-minutes: 10
     outputs:
       should-release: ${{ steps.version.outputs.should-release }}

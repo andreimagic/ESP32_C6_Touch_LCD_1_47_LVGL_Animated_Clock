@@ -21,7 +21,7 @@ permissions:
 jobs:
   version:
     name: FW_VERSION bumped
-    runs-on: ubuntu-latest
+    runs-on: onctl-2
     timeout-minutes: 5
 
     steps:

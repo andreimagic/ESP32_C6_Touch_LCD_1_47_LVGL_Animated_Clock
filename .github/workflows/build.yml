@@ -69,7 +69,7 @@ permissions:
 jobs:
   targets:
     name: Load board targets
-    runs-on: ubuntu-latest
+    runs-on: onctl-4
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.load.outputs.matrix }}

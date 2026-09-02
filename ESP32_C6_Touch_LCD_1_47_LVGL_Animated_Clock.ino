@@ -65,7 +65,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v3.3.0"
+#define FW_VERSION      "v3.3.1-beta"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -224,12 +224,12 @@ static const char *wifi_cfg_mode_name(void);
 static void show_wifi_detail_popup(void);
 static void buzzer_start_birthday(int sequences);
 static void generate_ap_pin(void);
+static void ensure_dir(void);
 #if BOARD_HAS_USB_HID
 static void usb_persona_begin(void);
 static void show_usb_carousel(void);
 static void hid_jiggle_arm(void);
 static void hid_jiggle_stop(void);
-static void scripts_dir_ensure(void);
 #endif
 
 
@@ -396,6 +396,19 @@ static uint64_t storage_free_bytes()
   if (storageIsInternal) return (uint64_t)FFat.freeBytes();
   uint64_t t = SD.totalBytes(), u = SD.usedBytes();
   return t > u ? t - u : 0;
+}
+
+// Creates `path` on `fs` if it is not already there. Used at boot to make sure
+// required top-level folders exist on whichever backend (SD or FFat) ended up
+// live in STORAGE, so first-run devices don't silently fail to find them.
+static void ensure_dir(fs::FS *fs, const char *path)
+{
+  if (fs->exists(path)) return;
+  if (fs->mkdir(path)) {
+    Serial.printf("    Created %s on %s\n", path, storage_label());
+  } else {
+    Serial.printf("    WARNING: could not create %s on %s\n", path, storage_label());
+  }
 }
 
 // ── Path validation — the file manager's only security boundary ──────────────
@@ -10420,16 +10433,6 @@ static void usb_carousel_build()
 //  an empty directory is a first-class state rather than an error.
 // ══════════════════════════════════════════════════════════════════════════════
 
-static void scripts_dir_ensure()
-{
-  if (!storageAvailable || !STORAGE)     return;
-  if (STORAGE->exists(SCRIPTS_DIR_FS))   return;
-  if (STORAGE->mkdir(SCRIPTS_DIR_FS))
-    Serial.printf("[MACRO] created %s on %s\n", SCRIPTS_DIR_FS, storage_label());
-  else
-    Serial.printf("[MACRO] could not create %s on %s\n", SCRIPTS_DIR_FS, storage_label());
-}
-
 // Deliberately no extension filter: script files are whatever the user uploaded
 // (.txt, .art, no extension at all), so filtering would hide valid content.
 // Directories are skipped — the listing is one level deep by design.
@@ -10437,7 +10440,6 @@ static void scripts_scan()
 {
   scripts_n = 0; scripts_truncated = false;
   if (!storageAvailable || !STORAGE) return;
-  scripts_dir_ensure();
 
   File d = STORAGE->open(SCRIPTS_DIR_FS);
   if (!d) return;
@@ -11480,6 +11482,11 @@ void setup()
   Serial.printf("    Active storage: %s\n", storage_label());
 
   if (storageAvailable) {
+    // ── Required top-level folders ───────────────────────────────────────
+    // Created on whichever backend is actually live (STORAGE), so a virgin
+    // card or a freshly-formatted internal partition always has both.
+    ensure_dir(STORAGE, GIF_DIR_FS);
+
     // ── Load config.ini ──────────────────────────────────────────────────
     // Salvage an interrupted save first — otherwise bootstrap_config() sees no
     // config.ini and overwrites the user's settings with defaults.
@@ -11575,7 +11582,7 @@ void setup()
   // Created at boot rather than on first menu entry so the web file manager has
   // a destination to upload into without the user having to open the carousel
   // first. Runs after provisioning so it lands on whichever backend won.
-  scripts_dir_ensure();
+  ensure_dir(STORAGE, SCRIPTS_DIR_FS);
 #endif
 
   // ── Step 7b: WiFi + NTP ───────────────────────────────────────────────────

@@ -65,7 +65,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v3.3.1-beta"
+#define FW_VERSION      "v3.3.1"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -5101,7 +5101,11 @@ static void modal_close()
   if (modal_cont) { lv_obj_del(modal_cont); modal_cont=nullptr; alarm_cont=nullptr; }
 }
 
-// ── Long-press: save and return to carousel (or exit to clock if already there) ──
+// ── Long-press: save and exit all the way to the clock view ──────────────────
+// Whether the long-press lands on an item editor or on the carousel itself,
+// it now closes the whole modal in one step — no intermediate stop back at
+// the carousel. (Apps carousel and USB carousel are unaffected: they own
+// their own long-press handlers.)
 static void modal_longpress_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e)!=LV_EVENT_LONG_PRESSED) return;
@@ -5114,7 +5118,7 @@ static void modal_longpress_cb(lv_event_t *e)
     case 3: close_wifi_editor();  break;
     default: break;
   }
-  carousel_build();
+  modal_close();
 }
 
 // ── Carousel tap: enter the selected item ────────────────────────────────────

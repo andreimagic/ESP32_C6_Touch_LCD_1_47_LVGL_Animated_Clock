@@ -65,7 +65,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v3.3.1"
+#define FW_VERSION      "v3.3.2"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -401,8 +401,11 @@ static uint64_t storage_free_bytes()
 // Creates `path` on `fs` if it is not already there. Used at boot to make sure
 // required top-level folders exist on whichever backend (SD or FFat) ended up
 // live in STORAGE, so first-run devices don't silently fail to find them.
+// `fs` is null when neither backend mounted; skip so boot reaches the
+// "no storage mounted" degraded mode instead of panicking here.
 static void ensure_dir(fs::FS *fs, const char *path)
 {
+  if (!fs) return;
   if (fs->exists(path)) return;
   if (fs->mkdir(path)) {
     Serial.printf("    Created %s on %s\n", path, storage_label());

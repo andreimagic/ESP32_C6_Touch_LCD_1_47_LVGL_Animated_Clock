@@ -67,6 +67,11 @@
   #define BOARD_HAS_IMU     1     // QMI8658A at 0x6B, shares I2C with touch
   #define BOARD_SD_SHARES_LCD_BUS 1
 
+  // The tilt games steer by the IMU here, so the external-joystick input is not
+  // compiled in at all: no pins are claimed, no ADC is read and the "Extra
+  // Games" setting never appears. See the S3 branch for the feature itself.
+  #define BOARD_HAS_JOYSTICK 0
+
   // No USB-OTG/device peripheral on this chip — only USB-Serial-JTAG, which
   // cannot present USB HID. The USB mouse-jiggler feature self-disables here.
   #define BOARD_HAS_USB_HID 0
@@ -122,6 +127,33 @@
   #define BOARD_HAS_IMU     0     // no IMU on this board — tilt features self-disable
   #define BOARD_SD_SHARES_LCD_BUS 0
 
+  // ── Optional external KY-023 analog joystick ───────────────────────────────
+  // With no IMU the four tilt-steered games (Tennis Letters, Letters Rain,
+  // Snake Letters, ToneQuest) have nothing to steer them, so this board can
+  // take a KY-023 on the expansion header instead. Opt-in: nothing is claimed
+  // until [joystick] extra_games is turned on, from the USB carousel or
+  // config.ini.
+  //
+  // PROVENANCE — decoded from the S3 schematic netlist. Nets IO8/IO9/IO10 each
+  // appear exactly twice, at the module pin and at the P1 "PIN OUT" header, so
+  // nothing on the board contends for them:
+  //
+  //     P1.20 = IO8    P1.18 = IO9    P1.16 = IO10
+  //     P1.6/P1.8 = VCC3V3            P1.3/P1.4 = GND
+  //
+  // Constraints behind the choice: ADC1 only (GPIO1-10), because ADC2 cannot be
+  // read while WiFi is up; GPIO3 is a strapping pin; GPIO5 is the buzzer, one
+  // header position away at P1.19. None of 8/9/10 is a strapping pin on the S3
+  // (those are 0, 3, 45, 46).
+  //
+  // !! Power the module from 3V3, never from 5V. The KY-023 is a plain divider
+  // !! with no level shifting, so a 5V rail puts up to 5V straight onto an ADC
+  // !! input whose absolute maximum is VDD+0.3.
+  #define BOARD_HAS_JOYSTICK 1
+  #define JOY_VRX           8     // ADC1_CH7 — header P1.20
+  #define JOY_VRY           9     // ADC1_CH8 — header P1.18
+  #define JOY_SW            10    // digital, INPUT_PULLUP — header P1.16
+
   // Native USB-OTG peripheral — can present a composite CDC/HID device.
   // NOTE: assumes the BOOT button is wired to GPIO0 (standard on ESP32-S3
   // dev boards, and nothing else in this file claims GPIO0). The C6 variant
@@ -158,6 +190,13 @@
 // ══════════════════════════════════════════════════════════════════════════════
 //  Common to every target
 // ══════════════════════════════════════════════════════════════════════════════
+
+// A board that never declared itself has no joystick. Stated here rather than
+// left undefined so `#if BOARD_HAS_JOYSTICK` is always a real test and a new
+// board branch cannot silently compile the feature in by omission.
+#ifndef BOARD_HAS_JOYSTICK
+  #define BOARD_HAS_JOYSTICK 0
+#endif
 
 // Panel geometry — identical on both boards (JD9853, 172x320, 34px col offset)
 #define LCD_H_RES         172

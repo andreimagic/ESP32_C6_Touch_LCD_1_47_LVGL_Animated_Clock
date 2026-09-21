@@ -54,6 +54,7 @@ One sketch builds for both boards. The target is detected at compile time and ev
 | **Tennis Letters** | Breakout-style ASCII game. Catch cycling letters (a-z) with a tilt-controlled paddle. Score points and complete alphabets |
 | **Letters Rain** | Falling-letters ASCII game. Letters and modifiers rain in waves; catch the target letter (A→Z) with a gyro-controlled paddle. Wrong catches shrink the paddle; `+` / `-` modify its size; `*` restores the default. Miss the target letter and the game ends. Last score saved to `config.ini` |
 | **Snake Letters** | Classic snake ASCII game. Steer using tilt to eat the alphabet (a-z). Avoid distraction letters and manage length with modifiers. High scores persisted to `config.ini` |
+| **KY-023 joystick** *(S3)* | Optional £2 module on the expansion header that stands in for the missing IMU, bringing Tennis Letters, Letters Rain, Snake Letters and ToneQuest back to the S3. Off by default and claims no pins until enabled — see [KY-023 Joystick](#ky-023-joystick-s3-only) |
 | **Bingo!** | On-device 1–90 number caller. Tap or tilt to draw a ball with a cycling reveal animation and buzzer; long-press the circle for a history popup of every number called. No repeats — powered by a fresh Fisher-Yates shuffle each game |
 | **Printable Bingo tickets** | Web Configuration page links to `/bingo` — a self-contained, in-browser generator for UK/housie-style 3×9 ticket sheets (1–90) to pair with the on-device caller. Fresh tickets every load, no PIN needed |
 | **Gyro shake/tilt trigger** | While playing RPS or Dice, physically shaking the device (ΔaccelZ > 1.8 g) or tilting it hard sideways (accelY > 1.0 g) restarts the game — no tap needed |
@@ -98,7 +99,8 @@ QMI8658 fails to answer at boot degrades exactly the same way.
 | Feature | C6 | S3 | Notes |
 |---|---|---|---|
 | Brightness adjust | tilt **or** swipe | swipe | Swipe left/right on the Status screen works on both |
-| Tennis Letters, Letters Rain, Snake Letters | ✅ | **hidden** | Steer only by tilt, so they are removed from the carousel rather than shipped unplayable |
+| Tennis Letters, Letters Rain, Snake Letters | ✅ | **hidden**, or ✅ with a joystick | Steer only by tilt, so they are removed from the carousel rather than shipped unplayable. Plug in a [KY-023 joystick](#ky-023-joystick-s3-only) and they come back |
+| ToneQuest | tilt | swipe, or tilt-equivalent with a joystick | The only game that swaps input rather than hiding — see [Apps carousel](#apps-carousel) |
 | Emotion GIF cycling | ✅ | **smile only** | The overlay still opens on upper-left tap; `sleep`/`sad`/`joy` are unreachable without tilt |
 | Rock Paper Scissors, Dice | ✅ | ✅ | Tap-driven; shake is a bonus, not the only input |
 | Bingo | ✅ | ✅ | Tap and the circle both draw |
@@ -150,6 +152,9 @@ to edit them by hand.
 | IMU (QMI8658) I²C | shared 18 / 19 | — _(no IMU)_ |
 | Battery ADC | 0 | 12 |
 | Passive Buzzer | **5** → GND | **5** → GND |
+| Joystick VRx _(optional)_ | — | 8 |
+| Joystick VRy _(optional)_ | — | 9 |
+| Joystick SW _(optional)_ | — | 10 |
 
 > **C6:** the display, SD card and buzzer share one SPI bus (SCK=1, MOSI=2); the
 > SD card additionally needs MISO=3. Each device uses its own CS pin.
@@ -181,6 +186,7 @@ Besides the pins above it exposes the capability flags the firmware branches on:
 | Macro | C6 | S3 | Meaning |
 |---|---|---|---|
 | `BOARD_HAS_IMU` | 1 | 0 | A QMI8658 is fitted (tilt features compile in) |
+| `BOARD_HAS_JOYSTICK` | 0 | 1 | A KY-023 can stand in for the missing IMU (joystick driver and the Extra Games setting compile in) |
 | `BOARD_HAS_INTERNAL_FS` | 0 | 1 | An FFat partition exists to fall back to |
 | `BOARD_SD_SHARES_LCD_BUS` | 1 | 0 | The card and panel share one SPI bus |
 | `BOARD_NEW_LCD_BUS()` | `Arduino_HWSPI` | `Arduino_ESP32SPI` on HSPI | Expands to the right bus constructor |
@@ -198,6 +204,100 @@ The firmware reads battery voltage through a ÷3 ADC voltage divider on GPIO0 an
 ### Buzzer Wiring
 
 Connect a **passive buzzer** (not active) between **GPIO 5** and **GND**. If the buzzer is very loud, add a 100 Ω resistor in series. The firmware drives it via PWM using `ledcChangeFrequency()` to produce distinct pitches for alarms, menu sounds, and game audio.
+
+### KY-023 Joystick (S3 only)
+
+The S3 has no IMU, so **Tennis Letters**, **Letters Rain**, **Snake Letters** and
+**ToneQuest** normally have nothing to steer them and are dropped from the apps
+carousel. A £2 **KY-023** analog joystick module on the expansion header gives
+them all four back.
+
+Entirely optional. Until you turn it on — **Extra Games**, in the
+[USB carousel](#usb-mode--mouse-jiggler-s3-only) or `[joystick] extra_games` in
+`config.ini` — no pin is claimed, no ADC is read and nothing about the board
+changes. The C6 does not compile any of it at all.
+
+#### Wiring
+
+Five female-to-female Dupont leads to header **P1**. The module's pin is silk-screened `+5V`; **ignore that and power it from 3V3.** It is a bare potentiometer divider with no level shifting, so a 5 V rail puts up to 5 V straight onto an ADC input rated for VDD + 0.3.
+
+| KY-023 pin | Signal | ESP32-S3 | P1 pin |
+|---|---|---|---|
+| `GND` | ground | GND | 3 (or 4) |
+| `+5V` | power | **3V3 — not 5 V** | 6 (or 8) |
+| `VRx` | X axis | GPIO 8 (ADC1_CH7) | 20 |
+| `VRy` | Y axis | GPIO 9 (ADC1_CH8) | 18 |
+| `SW` | button | GPIO 10 (internal pull-up) | 16 |
+
+```
+        P1 (2×11)                     KY-023
+   1  VBUS   VBAT    2
+   3  GND ───┐ GND   4                ┌──────────┐
+   5  TXD  3V3 ──┐   6                │  GND ────┼──→ P1.3
+   7  RXD  3V3   │   8                │  +5V ────┼──→ P1.6  (3V3!)
+   9  EN    SCL     10                │  VRx ────┼──→ P1.20 (GPIO8)
+  11  IO1   SDA     12                │  VRy ────┼──→ P1.18 (GPIO9)
+  13  IO2   IO11    14                │  SW  ────┼──→ P1.16 (GPIO10)
+  15  IO3   IO10 ───┼──→ SW           └──────────┘
+  17  IO4   IO9  ───┼──→ VRy
+  19  IO5*  IO8  ───┼──→ VRx           * GPIO5 is the buzzer
+  21  IO6   IO7     22
+```
+
+**Why these three pins.** They must be on **ADC1** (GPIO 1–10): ADC2 is unreadable
+whenever the WiFi radio is up, and this device runs the radio by default. That
+leaves GPIO 1–10 minus GPIO 3 (a strapping pin) and GPIO 5 (the buzzer). GPIO 8,
+9 and 10 are the three highest free ones and sit together at the bottom of P1,
+next to a GND and a 3V3 pin. Verified against the
+[S3 schematic](https://files.waveshare.com/wiki/ESP32-S3-Touch-LCD-1.47/ESP32-S3-Touch-LCD-1.47-Schematic.pdf):
+nets `IO8`, `IO9` and `IO10` each appear exactly twice, at the module pin and at
+the header, so nothing on the board contends for them.
+
+#### Calibration and tuning
+
+The resting position is **measured at startup**, not assumed — a KY-023's
+potentiometers are ±10% parts and its centre detent is mechanical, so the idle
+reading is routinely a couple of hundred counts off mid-scale. Leave the stick
+alone while the device boots. Each half-travel is then scaled against its own
+span, so both directions reach full deflection even on an off-centre stick.
+
+Two tunables, both a percentage of full deflection (`[joystick]` in `config.ini`):
+
+| | Default | Meaning |
+|---|---|---|
+| `dead_zone_percent` | 18 | Below this the stick reads as centred. Raise it if a resting stick drifts |
+| `edge_percent` | 90 | At this deflection the stick reads as *fully* deflected. Lower it if the ball or paddle will not quite reach a wall |
+
+If an axis responds backwards — which depends only on how the module happens to
+be rotated on its leads — set `invert_x` or `invert_y` to `true` rather than
+resoldering.
+
+#### How each game reads it
+
+Two control schemes, both reusing the speeds and constants the games already
+have. No new speed or delay setting is introduced.
+
+- **Direction control** — deflection past the dead zone moves the object that
+  way at its configured speed; releasing stops it. This is what the IMU tilt
+  does today.
+- **Position control** — deflection maps proportionally onto the object's
+  travel, and the object *holds* there. Centred is centre, half deflection is
+  halfway to the wall, full deflection (at `edge_percent`) is the wall.
+  Releasing returns it to the centre. This is what the IMU's bubble-level does
+  today; the joystick's deflection simply substitutes for the tilt angle.
+
+| Game | Scheme |
+|---|---|
+| **Snake Letters** | Direction, all four ways. Dominant axis wins; a 180° reversal is still blocked |
+| **Tennis Letters** | Direction, or position — `[joystick] paddle_mode` |
+| **Letters Rain** | Direction, or position — `[joystick] paddle_mode` |
+| **ToneQuest** | Position, on both axes. The levelling gate, the tones, the sequence and the win/lose logic are all unchanged; the stick just replaces the tilt |
+
+**The button starts games.** In the apps carousel it enters the highlighted
+item, exactly as tapping the middle does; on a game-over popup it plays again.
+It deliberately does nothing mid-play — pausing, exiting (a long press) and
+paging the carousel all stay on the touchscreen, so an accidental knock during
+a game costs nothing.
 
 ---
 
@@ -419,6 +519,25 @@ sounds = true
 # serial     = Serial debug only, no mouse
 mode = hid_serial
 
+[joystick]
+# S3 only — the section is never written on a C6, which has an IMU instead.
+# External KY-023 on the expansion header. See "KY-023 Joystick (S3 only)".
+# Wiring: VRx=GPIO8 (P1.20), VRy=GPIO9 (P1.18), SW=GPIO10 (P1.16),
+#         power from 3V3 (P1.6) and GND (P1.3) — never from 5V.
+# extra_games: false hides the four tilt games and claims no pins at all.
+extra_games = false
+# Percent of full deflection. Below dead_zone_percent the stick reads as
+# centred; at edge_percent it reads as fully deflected.
+dead_zone_percent = 18
+edge_percent = 90
+# Paddle games only (Tennis Letters, Letters Rain):
+#   direction = push and the paddle slides that way at its configured speed
+#   position  = deflection maps onto the paddle's travel and it holds there
+paddle_mode = direction
+# Set either to true if the module is mounted rotated and an axis reads backwards
+invert_x = false
+invert_y = false
+
 [birthdays]
 # Comma-separated list of birthdays in DD-MM-YYYY format.
 # Only day and month are compared — the year is stored as reference only.
@@ -482,6 +601,11 @@ tilt_percent = 55
 | `[animation]` | `schedule` | `true` | Enable periodic GIF animation |
 | `[animation]` | `duration` | `10` | Seconds each scheduled GIF plays before fading |
 | `[menu]` | `sounds` | `true` | Apps menu and game sounds on/off |
+| `[joystick]` | `extra_games` | `false` | **S3 only.** Enable the KY-023 joystick and bring the four tilt games back. Off = no pins claimed. Also togglable from the USB carousel |
+| `[joystick]` | `dead_zone_percent` | `18` | Deflection below this reads as centred (1–49) |
+| `[joystick]` | `edge_percent` | `90` | Deflection at or past this reads as fully deflected (51–100) |
+| `[joystick]` | `paddle_mode` | `direction` | Paddle games: `direction` (push to slide) or `position` (deflection sets and holds the paddle) |
+| `[joystick]` | `invert_x` / `invert_y` | `false` | Flip an axis that responds backwards because the module is mounted rotated |
 | `[birthdays]` | `dates` | _(empty)_ | Comma-separated birthdays `DD-MM-YYYY`. On a matching day, alarm and timer use `happybirthday.gif` and the Happy Birthday melody. Up to 8 entries. Section may be omitted to disable the Easter egg. |
 
 > If `config.ini` is missing the firmware boots with the hardcoded defaults shown above.
@@ -726,7 +850,7 @@ Top-right corner shows an Analog clock, view stays opened and refreshes every mi
 ### USB Mode — Mouse Jiggler (S3 only)
 Reached by a long-press on the open analog clock (above). Not present on the C6 build at all — the C6 has no USB-OTG peripheral, only USB-Serial-JTAG, which cannot present USB HID, so `BOARD_HAS_USB_HID` compiles the whole feature out rather than merely hiding it.
 
-A two-item carousel, styled like the [Carousel Settings Menu](#carousel-settings-menu) — left/right to page between **USB Mode** and **macroPad**, tap to enter, hold to exit. USB Mode opens a 3-way picker (left/right to cycle, hold to save & exit — same interaction as the WiFi mode editor):
+A three-item carousel, styled like the [Carousel Settings Menu](#carousel-settings-menu) — left/right to page between **USB Mode**, **macroPad** and **Extra Games**, tap to enter, hold to exit. USB Mode opens a 3-way picker (left/right to cycle, hold to save & exit — same interaction as the WiFi mode editor):
 
 | Mode | Host sees | Serial debug output |
 |---|---|---|
@@ -739,6 +863,8 @@ Both HID interfaces register on one shared descriptor, so the host still enumera
 Changing the mode reboots the device — USB can't swap what it's presenting to the host without a full re-enumeration, so a change is saved and applied on the next boot rather than live. Persisted as `[usb] mode` in `config.ini` (`hid` / `hid_serial` / `serial`).
 
 **Mouse jiggler.** In any HID-enabled mode, opening the smile GIF (top-left tap, see [below](#gif-animations-upper-taps)) arms a timer that, after a 5-second delay, starts sending small randomised relative mouse movements — enough to keep a PC from going idle/locking, without visibly disrupting anything. Each nudge is sent out and then replayed backwards along the same step magnitudes, so the raw movement sums to zero and host pointer acceleration cancels between the two legs. (With the pointer already against a screen edge the outbound leg is clamped by the host and the return leg is not, so a cursor parked in a corner can still shift.) It stops the moment the GIF overlay closes: tapping back to the clock, or long-pressing into the [math gateway](#math-challenge)/apps carousel.
+
+**Extra Games.** The carousel's third item, and the only one that is not about USB — it lives here because this is where the board's hardware settings are. It is a plain in-place toggle, like the Sounds item in the apps carousel: tap it and it flips, green for on and red for off, with no sub-screen to enter. On it claims GPIO 8/9/10 for a [KY-023 joystick](#ky-023-joystick-s3-only) and puts Tennis Letters, Letters Rain and Snake Letters back in the apps carousel; off releases the pins and hides them again. Both directions take effect immediately — no reboot, unlike a USB mode change. Persisted as `[joystick] extra_games` in `config.ini`, and the item does not exist on the C6 build at all (it has an IMU, so it needs no joystick).
 
 **Recovery hatch.** If you pick `HID` and want Serial back for reflashing, hold the **BOOT** button through power-up — the device boots Serial-only for that boot only, without touching the saved mode. (Assumes BOOT is wired to GPIO0, standard for ESP32-S3 dev boards; the C6 variant of this board wires BOOT to GPIO9 instead, so this hasn't been taken for granted — see `board_config.h`.)
 
@@ -845,6 +971,13 @@ Nine games plus a sounds toggle, navigated with **◀ ▶**. **Tap** to enter, *
 > taking four-way swipes where there is no accelerometer to tilt. See its
 > section below.
 >
+> **A [KY-023 joystick](#ky-023-joystick-s3-only) puts all three back.** On the
+> S3, enabling *Extra Games* makes the joystick count as a steering device
+> everywhere the IMU used to: the three hidden games reappear (ten dots again),
+> and ToneQuest takes the joystick's bubble-level path rather than swipes. The
+> joystick's button enters the highlighted item, exactly as tapping the middle
+> does.
+>
 > The position dots below the title are drawn one per *reachable* entry and the
 > row is re-centred on its own width, so on an S3 you get six dots rather than
 > ten with four that can never light up.
@@ -918,7 +1051,7 @@ A full-screen BPM metronome driven by **hardware ESP32 timer** for sample-accura
 
 A Breakout-style ASCII game where the ball is a cycling letter (a→z).
 
-- **Gameplay:** Use the device's **Y-axis tilt** to move the paddle (`___`) and catch the ball.
+- **Gameplay:** Use the device's **Y-axis tilt** to move the paddle (`___`) and catch the ball. On an S3 with a [joystick](#ky-023-joystick-s3-only), push it left/right instead — or set `[joystick] paddle_mode = position` to have the paddle track the stick's deflection and hold there.
 - **Scoring:** Each catch increments the score and advances the letter. Completing a full alphabet (26 letters) plays a success tune.
 - **Game Over:** Losing the ball ends the game. High scores are persisted to `config.ini`.
 - **Controls:** Tilt left/right to move; tap the game-over popup to restart, long-press to exit.
@@ -928,7 +1061,7 @@ A Breakout-style ASCII game where the ball is a cycling letter (a→z).
 
 An ASCII falling-letters game. Letters and modifiers descend in separate waves — a letter wave (target + decoys) enters first, followed by a modifier wave ( `+` / `-` / `*` ) 3–5 rows behind.
 
-- Use the device's **Y-axis tilt** to move the paddle (`___`) and catch the ball.
+- Use the device's **Y-axis tilt** to move the paddle (`___`) and catch the ball. On an S3 with a [joystick](#ky-023-joystick-s3-only), push it left/right instead — `[joystick] paddle_mode` picks between pushing and position-holding.
 - Catch the **target letter** (shown capitalised in the status bar, A→Z) to score. The remaining decoys clear and a fresh letter wave spawns immediately.
 - Catching a **wrong letter** shrinks the paddle by 1.
 - Catching `+` enlarges the paddle (max 10); `-` shrinks it (min 3).
@@ -939,7 +1072,7 @@ An ASCII falling-letters game. Letters and modifiers descend in separate waves �
 Each successive target spawns within 5–15 columns of the previous one, keeping the action in a natural zone. Speed increases with every correct catch. Last score is persisted to `config.ini`.
 
 #### Snake Letters
-Classic snake ASCII game. Steer using tilt to eat the alphabet (a-z) in order. Avoid "distraction" letters that end the game instantly. Look out for modifiers: `-` shrinks the snake, and `/` halves its length. High scores are persisted to `config.ini`.
+Classic snake ASCII game. Steer using tilt — or a [joystick](#ky-023-joystick-s3-only) on an S3, in all four directions — to eat the alphabet (a-z) in order. Avoid "distraction" letters that end the game instantly. Look out for modifiers: `-` shrinks the snake, and `/` halves its length. High scores are persisted to `config.ini`.
 
 #### Bingo!
 
@@ -994,13 +1127,15 @@ A Simon-says tone-memory game, ported from the [Arduino original](https://github
 
 ToneQuest is the only carousel app that changes input method instead of disappearing where no accelerometer answers. Everything else about the game is identical: same pattern, same levels, same tones, same scoring. Only the way you answer changes.
 
-| | Tilt build (C6) | Swipe build (S3, or a C6 whose IMU went missing) |
-|---|---|---|
-| **Start gate** | Hold the ball in the ring for 700 ms | Tap anywhere |
-| **Answering** | Roll the ball into a wall | Swipe up / down / left / right |
-| **Between moves** | Ball must return near centre | Nothing — one gesture per press is already one move |
-| **The ball** | Follows tilt continuously | Flies to the wall it was sent to and comes back, on both playback and input |
-| **`tilt_percent`** | Sets how much wrist a wall costs | Ignored |
+| | Tilt build (C6) | Swipe build (S3, or a C6 whose IMU went missing) | Joystick (S3, Extra Games on) |
+|---|---|---|---|
+| **Start gate** | Hold the ball in the ring for 700 ms | Tap anywhere | Hold the stick centred for 700 ms — the sub-note reads `centre the joystick` |
+| **Answering** | Roll the ball into a wall | Swipe up / down / left / right | Roll the ball into a wall |
+| **Between moves** | Ball must return near centre | Nothing — one gesture per press is already one move | Ball must return near centre |
+| **The ball** | Follows tilt continuously | Flies to the wall it was sent to and comes back, on both playback and input | Follows the stick continuously |
+| **`tilt_percent`** | Sets how much wrist a wall costs | Ignored | Ignored — `[joystick] edge_percent` does the same job for the stick |
+
+The joystick column is the tilt column with the deflection substituted for the tilt angle: the same span, the same smoothing, the same edge tolerance and the same levelling gate, so the game plays the way it does on a C6 rather than the way it does on a bare S3.
 
 Three LVGL behaviours are handled explicitly in `tq_gesture_cb` / `tq_longpress_cb`, and all three bite silently if you skip them:
 
@@ -1016,7 +1151,7 @@ The gesture threshold is LVGL's default `LV_INDEV_DEF_GESTURE_LIMIT` of 50 px. O
 
 #### Sounds toggle
 
-The last carousel item — tenth on a board with an IMU, seventh on one without, since the three tilt-steered games are dropped from the carousel at runtime where no accelerometer answers. Tap to mute/unmute all apps menu and game audio. The setting is saved to `config.ini` under `[menu] sounds`. This does **not** affect alarm, timer, or metronome sounds.
+The last carousel item — tenth on a board with an IMU (or an S3 with a [joystick](#ky-023-joystick-s3-only) enabled), seventh on one with neither, since the three tilt-steered games are dropped from the carousel at runtime where nothing can steer them. Tap to mute/unmute all apps menu and game audio. The setting is saved to `config.ini` under `[menu] sounds`. This does **not** affect alarm, timer, or metronome sounds.
 
 ---
 
@@ -1417,7 +1552,12 @@ which takes a few seconds — expect a one-off pause on the very first cardless 
 | **S3:** no serial output at all | `USB Mode` set to `Hardware CDC and JTAG` | Set **USB Mode = `USB-OTG (TinyUSB)`** and re-upload — see [Option B](#option-b--build-from-source) |
 | **S3:** `PSRAM not enabled` on screen, or `[GIF] ... PSRAM is not enabled` in the serial log | `PSRAM` left `Disabled` | Set **PSRAM = `OPI PSRAM`** and re-upload; the boot log must then say `PSRAM yes`. Do **not** resize the GIF — the asset is fine, the build was not |
 | **S3:** config and GIFs vanished after upload | **Erase All Flash Before Sketch Upload** was Enabled | Keep it `Disabled`; it wipes the FFat partition holding both |
-| **S3:** three games missing from the carousel | Working as intended — no IMU | Tennis Letters, Letters Rain and Snake Letters steer only by tilt |
+| **S3:** three games missing from the carousel | Working as intended — no IMU | Tennis Letters, Letters Rain and Snake Letters steer only by tilt. Fit a [KY-023 joystick](#ky-023-joystick-s3-only) and turn on *Extra Games* to get them back |
+| **S3:** joystick does nothing | *Extra Games* still off, so no pin is claimed | Long-press the analog clock → page right to **Extra Games** → tap. Or set `[joystick] extra_games = true` in `config.ini` |
+| **S3:** joystick moves the wrong way on one axis | The module is rotated relative to the firmware's assumption | Set `[joystick] invert_x` or `invert_y` to `true` — no rewiring needed |
+| **S3:** the paddle or ball drifts with the stick at rest | Stick was held, or knocked, while the device booted — the resting centre is measured then | Reboot without touching it. If it persists, raise `[joystick] dead_zone_percent` |
+| **S3:** the ball or paddle will not quite reach a wall | `edge_percent` demands more deflection than the module gives | Lower `[joystick] edge_percent` (default 90) |
+| **S3:** joystick readings jump around with WiFi on | Wired to an ADC2 pin instead of the documented ones | ADC2 cannot be read while the radio is up — VRx and VRy must be on GPIO 8 and 9 |
 | **S3:** linker warning `missing .note.GNU-stack section implies executable stack` | Comes from the Xtensa toolchain's own `libgcc` (`_floatdidf.o`), not this sketch | Harmless — ignore it. It appears on every S3 build with the pinned core and does not affect the firmware |
 | `SD card mount failed` | Wrong MISO pin or card not FAT32 | Confirm MISO (GPIO 3 on C6, GPIO 17 on S3); reformat card as FAT32 |
 | `GIF not found` | Wrong filename or path | Path is case-sensitive: `/cruzr_emotions/cruzr_smile.gif` |
@@ -1514,7 +1654,8 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v3.2.0 | ✅ released | **macroPad — ASCII art over USB (S3 only)** — the clock enumerates as a USB keyboard and types a stored text file into whatever window has focus, one keystroke at a time, so the mechanism is visible rather than magic. Ships with three `.art` samples (`ASCII_house`, `ASCII_hut`, `ASCII_penguin`) in `sd_card_root/scripts/`; drop a new file in `/scripts` and it appears in the menu, no toolchain involved. Also: the **mouse jiggler**'s return path is now a mirror of its outbound one — the same step magnitudes replayed backwards rather than a freshly randomised split — so host pointer acceleration applies equally to both legs and the cursor stops creeping over long sessions. Second item on the USB carousel; scripts live in `/scripts` on whichever storage backend is active, listed with no extension filter and created automatically at boot so the [file manager](#file-manager) always has an upload target. Tap a script for a **3-second countdown** — time to click into the target window, since the device cannot know what has focus — then a progress bar tracks position in the file and **tapping the screen stops it part-way**. Only the trailing line ending is stripped, so leading indentation survives intact for ASCII art. The keyboard registers on the same composite descriptor as the jiggler's mouse, so the HID personas now enumerate **mouse and keyboard** on one port; a `Serial`-only boot has no keyboard and says so instead of counting down to nothing. Compiled out entirely on the C6 |
 | v3.3.0 | ✅ released | **ToneQuest** — a Simon-says tone-memory game, ported from the [Arduino original](https://github.com/andreimagic/ToneQuest_Game) where a joystick picked the directions and four LEDs echoed them. The joystick is now the IMU and the LEDs are four "sunset" domes rising from the screen edges, but the direction→tone table is the original one note for note (UP D4, DOWN C4, LEFT E4, RIGHT F4). Every game opens on a **bubble level**: hold the ball inside the centre ring for 700 ms and the round begins. Then watch the sequence play back — each step lights its edge as a semicircle that fades out like a setting sun — and roll the ball into the same walls in the same order, coming back near the centre between moves the way the original joystick sprang back. Level 1 is four moves and every level adds one, revealed as a prefix of one pattern drawn per game, so level N is always level N−1 plus one new move. There is no win state: the score *is* the level you reach, persisted as `[tonequest] high_score` and tunable via `start_moves` / `flash_ms` / `gap_ms` / `tilt_percent`. Sits between Bingo! and the sounds toggle. Unlike the other tilt games it does **not** hide where no accelerometer answers &mdash; it takes four-way **swipes** instead, with the ball flying to the wall it was sent to so the screen still reads the same, making it the first app here that swaps input method per board rather than disappearing |
 | v3.3.1 | ✅ released | **Improvements** - Ensure GIFs and Scripts folders are created at Boot, allowing users to upload files from the Web interface on a fresh device; Exiting the configuration carousel items with a long-press will now Save and Exit directly to the Clock view |
-| v3.3.2 | 🚀 new | **Bugfix** - Fix boot panic in ensure_dir() when no storage is mounted |
+| v3.3.2 | ✅ released | **Bugfix** - Fix boot panic in ensure_dir() when no storage is mounted |
+| v3.4.0 | 🚀 new | **KY-023 joystick (S3)** — an optional £2 analog joystick on the expansion header stands in for the IMU the S3 does not have, bringing **Tennis Letters**, **Letters Rain**, **Snake Letters** and **ToneQuest** back to that board. VRx/VRy/SW on GPIO 8/9/10 (ADC1, so the WiFi radio cannot disturb them), powered from 3V3. Opt-in via a new **Extra Games** toggle in the USB carousel, or `[joystick] extra_games` in `config.ini`: until it is on, no pin is claimed, no ADC is read and the four games stay hidden. The resting centre is measured at boot rather than assumed, and each half-travel is scaled against its own span, so an off-centre stick still reaches both walls. Two control schemes, both reusing the games' existing speeds — **direction** (push and it slides, what the tilt does today) and **position** (deflection sets and holds the object, what the bubble level does today) — selectable per paddle game with `paddle_mode`; Snake is four-way direction and ToneQuest is position on both axes, keeping its levelling gate, its tones and its scoring untouched. Tunable via `dead_zone_percent` / `edge_percent`, with `invert_x` / `invert_y` for a module mounted rotated. The stick's button enters the highlighted carousel item and restarts a finished game, and deliberately does nothing mid-play. The C6 compiles none of it: `BOARD_HAS_JOYSTICK` is 0 there, so the setting does not exist rather than merely being hidden |
 
 ## License
 

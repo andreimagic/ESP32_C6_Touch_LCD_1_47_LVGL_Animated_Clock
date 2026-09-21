@@ -571,13 +571,19 @@ static float joy_norm(int raw, int centre)
   const float dead = (float)cfg.joy_dead_percent / 100.0f;
   if (a <= dead) return 0.0f;
 
-  // load_config() clamps edge above dead, but cfg can also be left at defaults
-  // on a board with no storage at all, so the floor is enforced here too —
-  // a zero divisor would put the ball in a wall the moment the stick twitched.
-  float edge = (float)cfg.joy_edge_percent / 100.0f;
-  if (edge < dead + 0.05f) edge = dead + 0.05f;
+  // The proportional band, from the edge of the dead zone out to the edge
+  // threshold. load_config() clamps dead to <= 49% and edge to >= 51%, so the
+  // two can never meet and this is always positive; the test exists only so a
+  // cfg that somehow arrived unparsed cannot divide by zero. Nothing here
+  // second-guesses the configured edge — at edge_percent the stick reads as
+  // fully deflected, whatever the pair of values happens to be.
+  const float band = (float)cfg.joy_edge_percent / 100.0f - dead;
 
-  float n = (a - dead) / (edge - dead);
+  // A band that degenerate has nothing to be proportional about, so everything
+  // outside the dead zone is simply full deflection.
+  if (band <= 0.0f) return (d < 0.0f) ? -1.0f : 1.0f;
+
+  float n = (a - dead) / band;
   if (n > 1.0f) n = 1.0f;
   return (d < 0.0f) ? -n : n;
 }

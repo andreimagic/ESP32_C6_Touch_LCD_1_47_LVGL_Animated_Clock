@@ -43,6 +43,44 @@
       ],
       "dependsOrder": "sequence",
       "problemMatcher": []
+    },
+
+    {
+      "label": "Full image: ESP32-C6 (flashable *-full.bin)",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        ".devcontainer/scripts/build-full-bin.sh",
+        "esp32c6",
+        "build-out/esp32c6-lcd147"
+      ],
+      "dependsOn": ["Build: ESP32-C6 Touch LCD 1.47"],
+      "dependsOrder": "sequence",
+      "problemMatcher": [],
+      "detail": "Same trim release.yml does: cuts the whole-chip merged.bin down to bootloader+partitions+app. Output lands in dist/."
+    },
+    {
+      "label": "Full image: ESP32-S3 (flashable *-full.bin)",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        ".devcontainer/scripts/build-full-bin.sh",
+        "esp32s3",
+        "build-out/esp32s3-lcd147"
+      ],
+      "dependsOn": ["Build: ESP32-S3 Touch LCD 1.47"],
+      "dependsOrder": "sequence",
+      "problemMatcher": [],
+      "detail": "Same trim release.yml does: cuts the whole-chip merged.bin down to bootloader+partitions+app. Output lands in dist/."
+    },
+    {
+      "label": "Full image: both boards",
+      "dependsOn": [
+        "Full image: ESP32-C6 (flashable *-full.bin)",
+        "Full image: ESP32-S3 (flashable *-full.bin)"
+      ],
+      "dependsOrder": "sequence",
+      "problemMatcher": []
     }
   ]
 }

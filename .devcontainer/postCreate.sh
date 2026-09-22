@@ -15,8 +15,21 @@ GFX_VERSION="${GFX_VERSION:-1.6.7}"
 FASTIMU_VERSION="${FASTIMU_VERSION:-1.3.0}"
 
 echo "==> Installing arduino-cli ${ARDUINO_CLI_VERSION}"
+# Installed to a directory the "vscode" user actually owns — postCreateCommand
+# runs as that user, not root, so /usr/local/bin silently fails to write.
+# devcontainer.json puts this directory on PATH via containerEnv, so it's
+# available in every new terminal and every VS Code task, not just this script.
+BIN_DIR="$HOME/.local/bin"
+mkdir -p "$BIN_DIR"
 curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh \
-  | BINDIR=/usr/local/bin sh -s "v${ARDUINO_CLI_VERSION}"
+  | BINDIR="$BIN_DIR" sh -s "v${ARDUINO_CLI_VERSION}"
+
+if [ ! -x "$BIN_DIR/arduino-cli" ]; then
+  echo "::error:: arduino-cli install did not produce an executable at $BIN_DIR/arduino-cli"
+  exit 1
+fi
+
+export PATH="$BIN_DIR:$PATH"   # so the rest of *this* script can see it too
 
 echo "==> Configuring arduino-cli and adding the ESP32 board index"
 arduino-cli config init --overwrite

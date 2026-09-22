@@ -1,0 +1,48 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build: ESP32-C6 Touch LCD 1.47",
+      "type": "shell",
+      "command": "arduino-cli",
+      "args": [
+        "compile",
+        "--fqbn",
+        "esp32:esp32:esp32c6:JTAGAdapter=default,CDCOnBoot=cdc,PartitionScheme=default_8MB,CPUFreq=160,FlashMode=qio,FlashFreq=80,FlashSize=8M,ZigbeeMode=default,DebugLevel=none",
+        "--warnings",
+        "default",
+        "--output-dir",
+        "build-out/esp32c6-lcd147",
+        "."
+      ],
+      "problemMatcher": ["$gcc"],
+      "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "Build: ESP32-S3 Touch LCD 1.47",
+      "type": "shell",
+      "command": "arduino-cli",
+      "args": [
+        "compile",
+        "--fqbn",
+        "esp32:esp32:esp32s3:JTAGAdapter=default,PSRAM=opi,CDCOnBoot=default,USBMode=default,PartitionScheme=app3M_fat9M_16MB,CPUFreq=240,FlashMode=qio,FlashSize=16M,ZigbeeMode=default,DebugLevel=none",
+        "--warnings",
+        "default",
+        "--output-dir",
+        "build-out/esp32s3-lcd147",
+        "."
+      ],
+      "problemMatcher": ["$gcc"],
+      "group": "build"
+    },
+    {
+      "label": "Build: both boards",
+      "dependsOn": [
+        "Build: ESP32-C6 Touch LCD 1.47",
+        "Build: ESP32-S3 Touch LCD 1.47"
+      ],
+      "dependsOrder": "sequence",
+      "problemMatcher": []
+    }
+  ]
+}

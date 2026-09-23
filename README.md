@@ -1296,9 +1296,9 @@ dates = 06-08-2017,20-08-1989,07-09-2017,21-03-1989
 
 ## Build & Flash
 
-There are two routes. Flashing a prebuilt release takes a couple of minutes and
-needs no toolchain; building from source is only necessary if you want to change
-the firmware.
+There are three routes. Flashing a prebuilt release takes a couple of minutes and
+needs no toolchain; building from source — in the Arduino IDE or with `make` — is
+only necessary if you want to change the firmware.
 
 ### Option A — Flash a prebuilt release (no toolchain)
 
@@ -1442,6 +1442,52 @@ esptool --chip esp32s3 write-flash 0x0 firmware-<version>-esp32s3-full.bin
 10. Open `ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock.ino`, click **Upload**
 11. Open Serial Monitor at **115200 baud** to watch the boot log
 
+### Option C — Build locally with `make`
+
+A command-line build that produces the same flashable `-full.bin` a release
+ships, without the Arduino IDE. It needs
+[arduino-cli](https://arduino.github.io/arduino-cli/) and
+[jq](https://jqlang.org/); `make flash` also needs
+[esptool](https://github.com/espressif/esptool) (`pip install esptool`).
+
+```bash
+make setup        # once: pinned esp32 core, libraries and lv_conf.h
+make              # both boards
+make esp32s3      # or just one: esp32c6 / esp32s3
+```
+
+Each board lands in `dist/firmware-<version>-<chip>-full.bin` — flash it at
+**`0x0`** exactly as in [Option A](#option-a--flash-a-prebuilt-release-no-toolchain),
+or let `make` do it:
+
+```bash
+make flash CHIP=esp32s3 PORT=/dev/cu.usbmodem101
+```
+
+| Target | Does |
+|---|---|
+| `make` | Compiles every board and writes one `-full.bin` per board to `dist/` |
+| `make esp32c6` / `make esp32s3` | The same for one board |
+| `make flash CHIP=… PORT=…` | Builds that board, then writes its `-full.bin` at `0x0` with esptool (`BAUD=` defaults to `921600`) |
+| `make setup` | Installs the core and library versions pinned in `board-targets.json`, and copies `lv_conf.h` into the libraries folder |
+| `make clean` | Removes `build/`, `build-out/` and `dist/` |
+
+There are no board settings to pick: the FQBN — every menu option from the
+table in Option B — and the pinned versions are read from
+[`board-targets.json`](.github/board-targets.json), the same file CI builds
+from. The trim is done by
+[`build-full-bin.sh`](.devcontainer/scripts/build-full-bin.sh), which
+reproduces the release pipeline's step, so the image ends just after the app
+and a cardless S3's FFat survives the flash.
+
+> **Flash the `dist/` file, not `build-out/<board>/*.merged.bin`.** The
+> compile also leaves the core's untrimmed `merged.bin` there, which spans the
+> whole chip and wipes FFat — see the warning in Option A.
+
+A GitHub Codespace (`.devcontainer/`) comes with the toolchain already
+installed, so `make` works there straight away. It has no USB access, though:
+download the `.bin` and flash it from your own machine.
+
 ### Continuous integration and releases
 
 Three workflows, all driven from one shared target list:
@@ -1449,7 +1495,7 @@ Three workflows, all driven from one shared target list:
 | File | Trigger | Does |
 |---|---|---|
 | [`board-targets.json`](.github/board-targets.json) | — | **The single source of truth.** One object per board: FQBN, chip, and pinned library versions |
-| `build.yml` | PR / push to `development`, `main` | Compiles every target and reports flash + RAM usage per board |
+| `build.yml` | PR / push to `development`, `main` | Compiles every target, reports flash + RAM usage per board, and uploads each board's flashable `-full.bin` as a run artifact |
 | `version-check.yml` | PR | Fails the PR unless `FW_VERSION` is bumped above the base branch |
 | `release.yml` | push to `main` | If `FW_VERSION` isn't tagged yet: builds every target, tags, and publishes one release carrying a binary set per board |
 

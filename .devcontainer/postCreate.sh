@@ -16,9 +16,10 @@ FASTIMU_VERSION="${FASTIMU_VERSION:-1.3.0}"
 
 echo "==> Installing arduino-cli ${ARDUINO_CLI_VERSION}"
 # Installed to a directory the "vscode" user actually owns — postCreateCommand
-# runs as that user, not root, so /usr/local/bin silently fails to write.
-# devcontainer.json puts this directory on PATH via containerEnv, so it's
-# available in every new terminal and every VS Code task, not just this script.
+# runs as that user, not root, so writing straight to /usr/local/bin fails
+# silently. Symlinking it into /usr/local/bin (already on everyone's PATH)
+# needs root, so we use sudo — Codespaces always grants the container user
+# passwordless sudo, so this needs no PATH/env-var edits in devcontainer.json.
 BIN_DIR="$HOME/.local/bin"
 mkdir -p "$BIN_DIR"
 curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh \
@@ -29,7 +30,8 @@ if [ ! -x "$BIN_DIR/arduino-cli" ]; then
   exit 1
 fi
 
-export PATH="$BIN_DIR:$PATH"   # so the rest of *this* script can see it too
+sudo ln -sf "$BIN_DIR/arduino-cli" /usr/local/bin/arduino-cli
+export PATH="$BIN_DIR:$PATH"   # so the rest of *this* script can see it too, this run
 
 echo "==> Configuring arduino-cli and adding the ESP32 board index"
 arduino-cli config init --overwrite

@@ -46,3 +46,4 @@
 /build/
 /build-out/
 compile.log
+/dist/

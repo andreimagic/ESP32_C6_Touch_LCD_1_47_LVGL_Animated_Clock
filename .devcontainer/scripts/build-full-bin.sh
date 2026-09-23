@@ -37,10 +37,10 @@ if [ ! -f "$MERGED" ] || [ ! -f "$APP" ]; then
   exit 1
 fi
 
-APP_END=$(( 0x10000 + $(stat -c%s "$APP") ))
+APP_END=$(( 0x10000 + $(wc -c < "$APP") ))
 CUT=$(( (APP_END + 4095) / 4096 * 4096 ))   # round up to a 4KB sector
 
-STRAY=$(tail -c "+$(( CUT + 1 ))" "$MERGED" | tr -d '\377' | wc -c)
+STRAY=$(tail -c "+$(( CUT + 1 ))" "$MERGED" | LC_ALL=C tr -d '\377' | wc -c)
 if [ "$STRAY" -ne 0 ]; then
   echo "::error:: $STRAY non-0xFF bytes found above offset $CUT in $MERGED — refusing to truncate."
   echo "::error:: This would mean the trim is no longer safe; check the core version against release.yml's assumptions."
@@ -52,7 +52,7 @@ OUT="dist/firmware-${VERSION}-${CHIP}-full.bin"
 head -c "$CUT" "$MERGED" > "$OUT"
 
 echo "Wrote ${OUT}"
-echo "  $(stat -c%s "$OUT") bytes (trimmed from $(stat -c%s "$MERGED") bytes)"
+echo "  $(wc -c < "$OUT" | tr -d " ") bytes (trimmed from $(wc -c < "$MERGED" | tr -d " ") bytes)"
 echo ""
 echo "Also available: ${BUILD_DIR}/${SKETCH}.bin — the app partition alone,"
 echo "for OTA or for reflashing an existing install at 0x10000. Use esptool"

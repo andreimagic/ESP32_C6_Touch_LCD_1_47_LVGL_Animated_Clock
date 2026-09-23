@@ -208,6 +208,29 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+      # Same trimmed, flash-at-0x0 image release.yml publishes, so a PR can be
+      # tested on hardware before merge. build-out/*.merged.bin above is NOT a
+      # substitute: it is padded to the whole chip and wipes the S3's FFat.
+      - name: Build flashable full image
+        id: fullbin
+        run: |
+          set -euo pipefail
+          bash .devcontainer/scripts/build-full-bin.sh "${{ matrix.chip }}" build-out
+          FILE="$(ls dist/*-"${{ matrix.chip }}"-full.bin)"
+          echo "name=$(basename "$FILE" .bin)" >> "$GITHUB_OUTPUT"
+          {
+            echo ""
+            echo "Flashable image: \`$(basename "$FILE")\` — write at \`0x0\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload flashable full image
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.fullbin.outputs.name }}-${{ matrix.slug }}
+          path: dist/*-full.bin
+          retention-days: 14
+          if-no-files-found: error
+
       - name: Upload compile log on failure
         if: failure()
         uses: actions/upload-artifact@v7

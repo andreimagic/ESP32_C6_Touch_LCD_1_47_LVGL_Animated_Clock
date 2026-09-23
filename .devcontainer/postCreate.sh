@@ -8,6 +8,16 @@
 
 set -euo pipefail
 
+echo "==> Installing python3"
+# The esp32:esp32 core's platform.txt invokes the bare command "python3" to
+# run its own bundled esptool (elf2image, merge_bin, etc). devcontainers/
+# base:bookworm doesn't include python3, so without this, compiles fail at
+# the very last post-processing step with "python3: executable file not
+# found in $PATH" — after everything else already succeeded.
+sudo apt-get update -qq
+sudo apt-get install -y --no-install-recommends python3
+command -v python3 >/dev/null || { echo "::error:: python3 still not on PATH after install"; exit 1; }
+
 ARDUINO_CLI_VERSION="${ARDUINO_CLI_VERSION:-1.5.1}"
 CORE_VERSION="${CORE_VERSION:-3.3.11}"
 LVGL_VERSION="${LVGL_VERSION:-9.5.0}"

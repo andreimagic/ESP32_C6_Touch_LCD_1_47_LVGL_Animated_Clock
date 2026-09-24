@@ -1050,7 +1050,7 @@ R"INI(
 [joystick]
 # External KY-023 on the expansion header — this board has no IMU, so it is the
 # only way to steer Tennis Letters, Letters Rain, Snake Letters and ToneQuest.
-# Wiring: VRx=GPIO8 (P1.20), VRy=GPIO9 (P1.18), SW=GPIO10 (P1.16),
+# Wiring: SW=GPIO8 (P1.20), VRx=GPIO9 (P1.18), VRy=GPIO10 (P1.16),
 #         power from 3V3 (P1.6) and GND (P1.3) — never from 5V.
 # extra_games: false hides those four games and claims no pins at all.
 extra_games = false

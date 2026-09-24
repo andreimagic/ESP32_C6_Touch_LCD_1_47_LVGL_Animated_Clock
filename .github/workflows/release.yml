@@ -1,27 +1,37 @@
 # .github/workflows/release.yml
 #
-# Stage 3 — tag and release.
-# On every push to main, read FW_VERSION from the sketch and, if that version
-# isn't tagged yet, build every supported board and publish one GitHub Release
-# carrying a binary set per board.
+# Stage 3 — edge builds and tagged releases.
+# Two channels, chosen by what was pushed:
+#
+#   push to main       -> "edge": build every board and REPLACE the single
+#                         rolling prerelease tagged `edge`. The `edge` tag is
+#                         force-moved to the pushed commit. No version tag is
+#                         created, and it never becomes "Latest release".
+#   push of a v* tag   -> "release": publish that tag as a versioned release.
+#                         The tag must equal FW_VERSION at the tagged commit,
+#                         and that commit must already be on main.
+#
+# So merging a PR never cuts a version. A version is cut by tagging main
+# yourself once FW_VERSION has been bumped and merged:
+#   git tag v3.4.0 origin/main && git push origin v3.4.0
 #
 # The FW_VERSION macro is the single source of truth: this workflow only reads
-# it. It never edits source and never pushes a commit back to main — the only
-# ref it creates is the tag.
+# it. It never edits source, never pushes a commit back to main and never
+# creates a version tag — the only ref it writes is the `edge` tag.
 #
 # Board targets come from `.github/board-targets.json`, the same file build.yml
 # validates against, so a release can never be cut with settings CI never tested.
 #
-# Job order matters. The tag is created in `publish`, which needs every matrix
-# build to have succeeded — tagging before the builds would leave a tag with no
-# release attached if one board failed to compile.
+# Job order matters. The previous edge build is replaced in `publish`, which
+# needs every matrix build to have succeeded, so a board that fails to compile
+# never leaves edge without a build.
 
 name: Release
 
 on:
   push:
     branches: [main]
-  workflow_dispatch:
+    tags: ['v*']   # `edge` does not match, so moving it never re-triggers this
 
 concurrency:
   group: release-${{ github.ref }}
@@ -31,15 +41,14 @@ permissions:
   contents: write   # also covers --generate-notes; that endpoint needs no more
 
 jobs:
-  # Decides whether there is anything to do. Pushes to main that don't change
-  # FW_VERSION (docs, workflow tweaks, a merge that was already released) land
-  # on an existing tag and exit cleanly here, before anything is built.
+  # Decides the channel, and rejects a version tag that doesn't match the
+  # sketch or isn't on main — before anything is built.
   version:
     name: Resolve version
     runs-on: onctl-2
     timeout-minutes: 10
     outputs:
-      should-release: ${{ steps.version.outputs.should-release }}
+      channel: ${{ steps.version.outputs.channel }}
       version: ${{ steps.version.outputs.version }}
       sketch: ${{ steps.version.outputs.sketch }}
       prerelease: ${{ steps.version.outputs.prerelease }}
@@ -58,17 +67,24 @@ jobs:
           VERSION="$(bash "$FW" extract "$SKETCH")"
           bash "$FW" validate "$VERSION"
 
-          if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
-            echo "::notice::Tag $VERSION already exists — nothing to release."
-            echo "Tag \`$VERSION\` already exists; no release cut." >> "$GITHUB_STEP_SUMMARY"
-            echo "should-release=false" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            if [ "$GITHUB_REF_NAME" != "$VERSION" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match FW_VERSION $VERSION at ${GITHUB_SHA::7}."
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "::error::Tag $GITHUB_REF_NAME points at ${GITHUB_SHA::7}, which is not on main. Tag a commit on main."
+              exit 1
+            fi
+            echo "::notice::Publishing versioned release $VERSION."
+            echo "channel=release" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::$VERSION is not tagged yet — cutting a release."
-            echo "should-release=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Publishing edge build of $VERSION from ${GITHUB_SHA::7}."
+            echo "channel=edge" >> "$GITHUB_OUTPUT"
           fi
 
-          # A prerelease (v2.8.0-beta) still ships, but is flagged so GitHub
-          # keeps it out of "Latest release".
+          # A versioned prerelease (v2.8.0-beta) still ships, but is flagged so
+          # GitHub keeps it out of "Latest release". Edge is always a prerelease.
           if bash "$FW" is-prerelease "$VERSION"; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else
@@ -81,7 +97,6 @@ jobs:
   targets:
     name: Load board targets
     needs: version
-    if: needs.version.outputs.should-release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -102,7 +117,6 @@ jobs:
   build:
     name: Build ${{ matrix.name }}
     needs: [version, targets]
-    if: needs.version.outputs.should-release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -205,7 +219,6 @@ jobs:
   publish:
     name: Tag and publish
     needs: [version, targets, build]
-    if: needs.version.outputs.should-release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -235,25 +248,39 @@ jobs:
           [ "$FOUND" -eq "$EXPECTED" ] \
             || { echo "::error::expected $EXPECTED full images, found $FOUND"; exit 1; }
 
-      - name: Create tag
+      # One rolling edge release. The previous one is deleted rather than
+      # uploaded over, because its assets are named by FW_VERSION and a version
+      # bump would otherwise leave the old version's files attached alongside.
+      - name: Move edge tag
+        if: needs.version.outputs.channel == 'edge'
         env:
-          VERSION: ${{ needs.version.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$VERSION" -m "Release $VERSION"
-          git push origin "$VERSION"
+          if gh release view edge >/dev/null 2>&1; then
+            gh release delete edge --yes
+          fi
+          git tag -f edge "$GITHUB_SHA"
+          git push -f origin refs/tags/edge
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.version.outputs.version }}
           PRERELEASE: ${{ needs.version.outputs.prerelease }}
+          CHANNEL: ${{ needs.version.outputs.channel }}
         run: |
           set -euo pipefail
 
           {
+            if [ "$CHANNEL" = "edge" ]; then
+              echo "> **Edge build — not a stable release.** Built automatically from the"
+              echo "> latest \`main\` (\`${GITHUB_SHA::7}\`) and replaced on every merge. The"
+              echo "> firmware reports itself as \`$VERSION\`, but this build is not that"
+              echo "> release and may differ from it. For stable firmware use the"
+              echo "> [latest release](https://github.com/${GITHUB_REPOSITORY}/releases/latest)."
+              echo ""
+            fi
             echo "## Which file do I need?"
             echo ""
             echo "This release carries a separate binary set per board. The images are"
@@ -326,12 +353,37 @@ jobs:
             echo "\`\`\`"
           } > notes.md
 
+          # The last versioned release, so the changelog never starts from the
+          # moving `edge` tag. A release excludes its own tag, which points here.
+          if [ "$CHANNEL" = "edge" ]; then
+            LAST="$(git describe --tags --abbrev=0 --match 'v*' "$GITHUB_SHA" 2>/dev/null || true)"
+          else
+            LAST="$(git describe --tags --abbrev=0 --match 'v*' --exclude "$VERSION" "$GITHUB_SHA" 2>/dev/null || true)"
+          fi
+
+          if [ "$CHANNEL" = "edge" ]; then
+            if [ -n "$LAST" ]; then
+              {
+                echo ""
+                echo "---"
+                echo ""
+                echo "**Changes since $LAST:** https://github.com/${GITHUB_REPOSITORY}/compare/${LAST}...${GITHUB_SHA}"
+              } >> notes.md
+            fi
+            gh release create edge \
+              --title "edge — $VERSION (${GITHUB_SHA::7})" \
+              --notes-file notes.md --prerelease --latest=false \
+              dist/firmware-*
+            exit 0
+          fi
+
           # --generate-notes has GitHub append its own "What's Changed" section:
           # every PR merged since the previous tag, plus contributors and a
           # compare link. That covers a release spanning several PRs, which
           # reading the merge commit's own PR would not. notes.md is the body,
           # so the generated changelog lands after it.
           FLAGS=(--title "$VERSION" --notes-file notes.md --generate-notes)
+          [ -n "$LAST" ] && FLAGS+=(--notes-start-tag "$LAST")
           [ "$PRERELEASE" = "true" ] && FLAGS+=(--prerelease)
 
           gh release create "$VERSION" "${FLAGS[@]}" dist/firmware-*

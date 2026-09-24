@@ -1497,18 +1497,39 @@ Three workflows, all driven from one shared target list:
 | [`board-targets.json`](.github/board-targets.json) | — | **The single source of truth.** One object per board: FQBN, chip, and pinned library versions |
 | `build.yml` | PR / push to `development`, `main` | Compiles every target, reports flash + RAM usage per board, and uploads each board's flashable `-full.bin` as a run artifact |
 | `version-check.yml` | PR | Fails the PR unless `FW_VERSION` is bumped above the base branch |
-| `release.yml` | push to `main` | If `FW_VERSION` isn't tagged yet: builds every target, tags, and publishes one release carrying a binary set per board |
+| `release.yml` | push to `main` | Builds every target and replaces the rolling **`edge`** prerelease with a binary set per board. Never creates a version tag |
+| `release.yml` | push of a `v*` tag | Publishes that tag as a versioned release. Fails unless the tag equals `FW_VERSION` and points at a commit on `main` |
 
 Both `build.yml` and `release.yml` read their matrix from `board-targets.json`
 via `fromJSON`, so a board cannot be validated by CI with one set of settings and
 then released with another. **Adding a board is one JSON object** — no workflow
 edits, matching the one `#elif` block it takes in `board_config.h`.
 
-`release.yml` creates the tag only after *every* board has compiled
-(`fail-fast: true`, and the tag lives in a job that `needs` all of them), so a
-failure on one board can never leave a tag with no release attached. A final
-guard counts the collected `-full.bin` images against the number of entries in
-`board-targets.json` before publishing.
+**Merging to `main` does not cut a version.** It publishes an *edge* build: a
+single prerelease tagged `edge` that is deleted and recreated on every merge, so
+[`releases/tag/edge`](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/releases/tag/edge)
+always carries the newest `main`. It is never marked *Latest*, so the release
+badge and `releases/latest` keep pointing at the last versioned release.
+
+**A version is released only when you push its tag.** Bump `FW_VERSION`, merge
+to `main`, then tag that commit:
+
+```bash
+git fetch origin
+git tag v3.4.0 origin/main
+git push origin v3.4.0
+```
+
+The workflow never creates a version tag itself. It rejects a tag that does not
+match `FW_VERSION` at the tagged commit, or that points at a commit not yet on
+`main`, before building anything.
+
+The previous edge build is replaced, and a release published, only after
+*every* board has compiled (`fail-fast: true`, and publishing lives in a job
+that `needs` all of them), so a failure on one board never leaves edge empty or
+a tag with a half-built release. A final guard counts the collected `-full.bin`
+images against the number of entries in `board-targets.json` before
+publishing.
 
 ### Expected Boot Log
 

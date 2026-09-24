@@ -328,8 +328,8 @@ Install all libraries through **Arduino IDE → Library Manager** unless noted o
 
 | Library | Version tested | Purpose |
 |---|---|---|
-| **LVGL** | 9.5.0 | UI framework — widgets, animations, timers |
-| **Arduino_GFX_Library** | 1.6.7 | Display driver (JD9853 via the ST7789 command set) |
+| **LVGL** | 9.6.0 | UI framework — widgets, animations, timers |
+| **Arduino_GFX_Library** | 1.6.8 | Display driver (JD9853 via the ST7789 command set) |
 | **FastIMU** | 1.3.0 | QMI8658 accelerometer (tilt brightness + emotion tilt) |
 | **esp_lcd_touch_axs5106l** | board-specific (included in repo) | Capacitive touch controller |
 | **SD** | built-in ESP32 (pre-install with esp32 Board) | SD card file access |

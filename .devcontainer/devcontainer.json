@@ -1,0 +1,49 @@
+{
+  // ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock — Codespaces dev environment.
+  //
+  // Mirrors .github/actions/arduino-build/action.yml so a Codespace compiles
+  // the exact same binary CI does: same arduino-cli, same esp32:esp32 core,
+  // same lvgl / GFX Library for Arduino / FastIMU pins.
+  //
+  // NOTE: Codespaces is cloud-hosted and has no USB access, so you can build
+  // and validate firmware here but cannot flash a physical board from it.
+  // Flash locally (Arduino IDE / `arduino-cli upload`) after downloading the
+  // compiled .bin from build-out/, or from a CI build artifact.
+  "name": "ESP32 Touch LCD Clock (Arduino/arduino-cli)",
+  "image": "mcr.microsoft.com/devcontainers/base:bookworm",
+
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": false,
+      "upgradePackages": true
+    }
+  },
+
+  // Keep this in sync with .github/board-targets.json and
+  // .github/actions/arduino-build/action.yml if those ever change versions.
+  "containerEnv": {
+    "ARDUINO_CLI_VERSION": "1.5.1",
+    "CORE_VERSION": "3.3.11",
+    "LVGL_VERSION": "9.5.0",
+    "GFX_VERSION": "1.6.7",
+    "FASTIMU_VERSION": "1.3.0"
+  },
+
+  "postCreateCommand": "bash .devcontainer/postCreate.sh",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cpptools-extension-pack"
+      ],
+      "settings": {
+        "files.associations": {
+          "*.ino": "cpp"
+        }
+      }
+    }
+  },
+
+  "remoteUser": "vscode"
+}

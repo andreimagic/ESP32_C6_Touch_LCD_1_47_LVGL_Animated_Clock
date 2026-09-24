@@ -152,9 +152,9 @@ to edit them by hand.
 | IMU (QMI8658) I²C | shared 18 / 19 | — _(no IMU)_ |
 | Battery ADC | 0 | 12 |
 | Passive Buzzer | **5** → GND | **5** → GND |
-| Joystick VRx _(optional)_ | — | 8 |
+| Joystick SW _(optional)_ | — | 8 |
 | Joystick VRy _(optional)_ | — | 9 |
-| Joystick SW _(optional)_ | — | 10 |
+| Joystick VRx _(optional)_ | — | 10 |
 
 > **C6:** the display, SD card and buzzer share one SPI bus (SCK=1, MOSI=2); the
 > SD card additionally needs MISO=3. Each device uses its own CS pin.
@@ -226,8 +226,14 @@ Five female-to-female Dupont leads to header **P1**. The module's pin is silk-sc
 | `GND` | ground | GND | 3 (or 4) |
 | `+5V` | power | **3V3 — not 5 V** | 6 (or 8) |
 | `SW` | button | GPIO 8 (internal pull-up) | 20 |
-| `VRx` | X axis | GPIO 9 (ADC1_CH8) | 18 |
-| `VRy` | Y axis | GPIO 10 (ADC1_CH9) | 16 |
+| `VRy` | on-screen left/right | GPIO 9 (ADC1_CH8) | 18 |
+| `VRx` | on-screen up/down | GPIO 10 (ADC1_CH9) | 16 |
+
+The pin names are the ones printed on the module. Its axes are turned 90° from
+the screen's, so the module's **VRy** steers left/right and **VRx** up/down —
+wire them as above and the games move the right way. If one direction still
+comes out backwards, set `invert_x` or `invert_y` (see below); these always
+refer to the on-screen axes.
 
 ```
         P1 (2×11)                     KY-023
@@ -236,10 +242,10 @@ Five female-to-female Dupont leads to header **P1**. The module's pin is silk-sc
    5  TXD  3V3 ──┐   6                │  GND ────┼──→ P1.3
    7  RXD  3V3   │   8                │  +5V ────┼──→ P1.6  (3V3!)
    9  EN    SCL     10                │  SW  ────┼──→ P1.20 (GPIO8)
-  11  IO1   SDA     12                │  VRx ────┼──→ P1.18 (GPIO9)
-  13  IO2   IO11    14                │  VRy ────┼──→ P1.16 (GPIO10)
-  15  IO3   IO10 ───┼──→ VRy          └──────────┘
-  17  IO4   IO9  ───┼──→ VRx
+  11  IO1   SDA     12                │  VRy ────┼──→ P1.18 (GPIO9)
+  13  IO2   IO11    14                │  VRx ────┼──→ P1.16 (GPIO10)
+  15  IO3   IO10 ───┼──→ VRx          └──────────┘
+  17  IO4   IO9  ───┼──→ VRy
   19  IO5*  IO8  ───┼──→ SW            * GPIO5 is the buzzer
   21  IO6   IO7     22
 ```
@@ -293,11 +299,24 @@ have. No new speed or delay setting is introduced.
 | **Letters Rain** | Direction, or position — `[joystick] paddle_mode` |
 | **ToneQuest** | Position, on both axes. The levelling gate, the tones, the sequence and the win/lose logic are all unchanged; the stick just replaces the tilt |
 
-**The button starts games.** In the apps carousel it enters the highlighted
-item, exactly as tapping the middle does; on a game-over popup it plays again.
-It deliberately does nothing mid-play — pausing, exiting (a long press) and
-paging the carousel all stay on the touchscreen, so an accidental knock during
-a game costs nothing.
+**The stick also drives the apps carousel.** Push it left or right to page
+through the games — one item per push, and holding it keeps paging, like a key
+held down. After a game it has to come back to centre before it pages, so a
+stick still pushed into a wall when the game ends doesn't skip items.
+
+**The button stands in for the taps**, so a joystick player never has to reach
+for the screen mid-game:
+
+| Where | Button press |
+|---|---|
+| Apps carousel | Enters the highlighted item, like tapping the middle |
+| Tennis Letters, Letters Rain, Snake Letters — playing | **Pauses**, like tapping the field |
+| Same games — paused | **Resumes**, like tapping the *Paused* popup |
+| Any joystick game — game over | Plays again, like tapping the popup |
+
+Exiting a game (a long press) stays on the touchscreen. ToneQuest has no pause
+— it is turn-based and already waits for you between turns — so there the
+button only restarts a finished game.
 
 ---
 
@@ -522,7 +541,7 @@ mode = hid_serial
 [joystick]
 # S3 only — the section is never written on a C6, which has an IMU instead.
 # External KY-023 on the expansion header. See "KY-023 Joystick (S3 only)".
-# Wiring: SW=GPIO8 (P1.20), VRx=GPIO9 (P1.18), VRy=GPIO10 (P1.16),
+# Wiring: SW=GPIO8 (P1.20), VRy=GPIO9 (P1.18), VRx=GPIO10 (P1.16),
 #         power from 3V3 (P1.6) and GND (P1.3) — never from 5V.
 # extra_games: false hides the four tilt games and claims no pins at all.
 extra_games = false
@@ -974,9 +993,9 @@ Nine games plus a sounds toggle, navigated with **◀ ▶**. **Tap** to enter, *
 > **A [KY-023 joystick](#ky-023-joystick-s3-only) puts all three back.** On the
 > S3, enabling *Extra Games* makes the joystick count as a steering device
 > everywhere the IMU used to: the three hidden games reappear (ten dots again),
-> and ToneQuest takes the joystick's bubble-level path rather than swipes. The
-> joystick's button enters the highlighted item, exactly as tapping the middle
-> does.
+> and ToneQuest takes the joystick's bubble-level path rather than swipes.
+> Pushing the stick left or right pages the carousel, and its button enters
+> the highlighted item, exactly as tapping the middle does.
 >
 > The position dots below the title are drawn one per *reachable* entry and the
 > row is re-centred on its own width, so on an S3 you get six dots rather than
@@ -1731,7 +1750,7 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v3.3.0 | ✅ released | **ToneQuest** — a Simon-says tone-memory game, ported from the [Arduino original](https://github.com/andreimagic/ToneQuest_Game) where a joystick picked the directions and four LEDs echoed them. The joystick is now the IMU and the LEDs are four "sunset" domes rising from the screen edges, but the direction→tone table is the original one note for note (UP D4, DOWN C4, LEFT E4, RIGHT F4). Every game opens on a **bubble level**: hold the ball inside the centre ring for 700 ms and the round begins. Then watch the sequence play back — each step lights its edge as a semicircle that fades out like a setting sun — and roll the ball into the same walls in the same order, coming back near the centre between moves the way the original joystick sprang back. Level 1 is four moves and every level adds one, revealed as a prefix of one pattern drawn per game, so level N is always level N−1 plus one new move. There is no win state: the score *is* the level you reach, persisted as `[tonequest] high_score` and tunable via `start_moves` / `flash_ms` / `gap_ms` / `tilt_percent`. Sits between Bingo! and the sounds toggle. Unlike the other tilt games it does **not** hide where no accelerometer answers &mdash; it takes four-way **swipes** instead, with the ball flying to the wall it was sent to so the screen still reads the same, making it the first app here that swaps input method per board rather than disappearing |
 | v3.3.1 | ✅ released | **Improvements** - Ensure GIFs and Scripts folders are created at Boot, allowing users to upload files from the Web interface on a fresh device; Exiting the configuration carousel items with a long-press will now Save and Exit directly to the Clock view |
 | v3.3.2 | ✅ released | **Bugfix** - Fix boot panic in ensure_dir() when no storage is mounted |
-| v3.4.0 | 🚀 new | **KY-023 joystick (S3)** — an optional £2 analog joystick on the expansion header stands in for the IMU the S3 does not have, bringing **Tennis Letters**, **Letters Rain**, **Snake Letters** and **ToneQuest** back to that board. VRx/VRy on GPIO 9/10 (ADC1, so the WiFi radio cannot disturb them) and SW on GPIO 8, powered from 3V3. Opt-in via a new **Extra Games** toggle in the USB carousel, or `[joystick] extra_games` in `config.ini`: until it is on, no pin is claimed, no ADC is read and the four games stay hidden. The resting centre is measured at boot rather than assumed, and each half-travel is scaled against its own span, so an off-centre stick still reaches both walls. Two control schemes, both reusing the games' existing speeds — **direction** (push and it slides, what the tilt does today) and **position** (deflection sets and holds the object, what the bubble level does today) — selectable per paddle game with `paddle_mode`; Snake is four-way direction and ToneQuest is position on both axes, keeping its levelling gate, its tones and its scoring untouched. Tunable via `dead_zone_percent` / `edge_percent`, with `invert_x` / `invert_y` for a module mounted rotated. The stick's button enters the highlighted carousel item and restarts a finished game, and deliberately does nothing mid-play. The C6 compiles none of it: `BOARD_HAS_JOYSTICK` is 0 there, so the setting does not exist rather than merely being hidden |
+| v3.4.0 | 🚀 new | **KY-023 joystick (S3)** — an optional £2 analog joystick on the expansion header stands in for the IMU the S3 does not have, bringing **Tennis Letters**, **Letters Rain**, **Snake Letters** and **ToneQuest** back to that board. VRy/VRx on GPIO 9/10 (ADC1, so the WiFi radio cannot disturb them) and SW on GPIO 8, powered from 3V3. Opt-in via a new **Extra Games** toggle in the USB carousel, or `[joystick] extra_games` in `config.ini`: until it is on, no pin is claimed, no ADC is read and the four games stay hidden. The resting centre is measured at boot rather than assumed, and each half-travel is scaled against its own span, so an off-centre stick still reaches both walls. Two control schemes, both reusing the games' existing speeds — **direction** (push and it slides, what the tilt does today) and **position** (deflection sets and holds the object, what the bubble level does today) — selectable per paddle game with `paddle_mode`; Snake is four-way direction and ToneQuest is position on both axes, keeping its levelling gate, its tones and its scoring untouched. Tunable via `dead_zone_percent` / `edge_percent`, with `invert_x` / `invert_y` for a module mounted rotated. Left/right on the stick pages the apps carousel (with auto-repeat while held); the button enters the highlighted item, pauses and resumes Tennis Letters, Letters Rain and Snake Letters, and restarts a finished game. The C6 compiles none of it: `BOARD_HAS_JOYSTICK` is 0 there, so the setting does not exist rather than merely being hidden |
 
 ## License
 

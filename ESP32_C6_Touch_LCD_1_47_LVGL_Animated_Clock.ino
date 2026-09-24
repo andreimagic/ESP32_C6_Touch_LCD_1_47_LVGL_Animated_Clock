@@ -548,9 +548,28 @@ static bool     joy_sw_stable = true;
 static bool     joy_sw_last   = true;
 static uint32_t joy_sw_since  = 0;
 
-// Defined far below, next to the games it drives. Declared here so the poll
-// callback can reach it without the Arduino prototype injector having to guess.
+// Carousel paging from the stick: a firm push left/right steps one item, and
+// holding it keeps stepping, like a key auto-repeat. Hysteresis between the
+// push and re-arm thresholds stops a stick resting near the threshold from
+// chattering.
+#define JOY_NAV_PUSH           0.6f   // |deflection| that counts as a push
+#define JOY_NAV_REARM          0.3f   // must fall below this before the next push
+#define JOY_NAV_REPEAT_DELAY_MS 450   // first repeat while held
+#define JOY_NAV_REPEAT_MS       220   // subsequent repeats
+
+// -1/+1 while a push is being held, 0 when re-armed. JOY_NAV_BLOCKED while the
+// carousel isn't showing, so a stick still held over from a game (steering the
+// paddle into the wall as it ended) cannot page the carousel it returns to —
+// it has to come back to centre first.
+#define JOY_NAV_BLOCKED 2
+static int      joy_nav_dir   = JOY_NAV_BLOCKED;
+static uint32_t joy_nav_next  = 0;
+
+// Defined far below, next to the games and carousel they drive. Declared here
+// so the poll callback can reach them without the Arduino prototype injector
+// having to guess.
 static void joy_click_dispatch(void);
+static void joy_nav_update(uint32_t now);
 
 static inline bool joy_active() { return joy_enabled; }
 
@@ -592,8 +611,8 @@ static void joy_poll_cb(lv_timer_t * /*t*/)
 {
   if (!joy_enabled) return;
 
-  float vx = joy_norm(analogRead(JOY_VRX), joy_cx_raw);
-  float vy = joy_norm(analogRead(JOY_VRY), joy_cy_raw);
+  float vx = joy_norm(analogRead(JOY_PIN_SCREEN_X), joy_cx_raw);
+  float vy = joy_norm(analogRead(JOY_PIN_SCREEN_Y), joy_cy_raw);
   joy_vx = cfg.joy_invert_x ? -vx : vx;
   joy_vy = cfg.joy_invert_y ? -vy : vy;
 
@@ -607,6 +626,8 @@ static void joy_poll_cb(lv_timer_t * /*t*/)
     joy_sw_stable = released;
     if (!released) joy_click_dispatch();   // act on the press, not the release
   }
+
+  joy_nav_update(now);
 }
 
 // Deflection, ready to use. Zero whenever the joystick is not the live input,
@@ -627,6 +648,7 @@ static void joy_stop()
   }
   joy_vx = joy_vy = 0.0f;
   joy_sw_stable = joy_sw_last = true;
+  joy_nav_dir   = JOY_NAV_BLOCKED;
 }
 
 static void joy_start()
@@ -636,8 +658,8 @@ static void joy_start()
   pinMode(JOY_SW, INPUT_PULLUP);
   // Full-scale attenuation: the KY-023 swings the whole 0-3V3 rail, and the
   // default 11dB range is the only one that reaches the top of it.
-  analogSetPinAttenuation(JOY_VRX, ADC_11db);
-  analogSetPinAttenuation(JOY_VRY, ADC_11db);
+  analogSetPinAttenuation(JOY_PIN_SCREEN_X, ADC_11db);
+  analogSetPinAttenuation(JOY_PIN_SCREEN_Y, ADC_11db);
 
   // Learn the resting centre rather than assume mid-scale. A KY-023's
   // potentiometers are ±10% parts and its centre detent is mechanical, so the
@@ -645,8 +667,8 @@ static void joy_start()
   // make one direction permanently live with any sane dead zone.
   long sx = 0, sy = 0;
   for (int i = 0; i < JOY_CAL_SAMPLES; i++) {
-    sx += analogRead(JOY_VRX);
-    sy += analogRead(JOY_VRY);
+    sx += analogRead(JOY_PIN_SCREEN_X);
+    sy += analogRead(JOY_PIN_SCREEN_Y);
   }
   joy_cx_raw = (int)(sx / JOY_CAL_SAMPLES);
   joy_cy_raw = (int)(sy / JOY_CAL_SAMPLES);
@@ -657,9 +679,9 @@ static void joy_start()
   joy_enabled   = true;
 
   joy_timer = lv_timer_create(joy_poll_cb, JOY_POLL_MS, nullptr);
-  Serial.printf("[JOY] KY-023 enabled — VRx=GPIO%d VRy=GPIO%d SW=GPIO%d, "
+  Serial.printf("[JOY] KY-023 enabled — VRy=GPIO%d VRx=GPIO%d SW=GPIO%d, "
                 "centre %d/%d, dead %d%% edge %d%%\n",
-                JOY_VRX, JOY_VRY, JOY_SW, joy_cx_raw, joy_cy_raw,
+                JOY_VRY, JOY_VRX, JOY_SW, joy_cx_raw, joy_cy_raw,
                 cfg.joy_dead_percent, cfg.joy_edge_percent);
 }
 
@@ -1050,7 +1072,7 @@ R"INI(
 [joystick]
 # External KY-023 on the expansion header — this board has no IMU, so it is the
 # only way to steer Tennis Letters, Letters Rain, Snake Letters and ToneQuest.
-# Wiring: SW=GPIO8 (P1.20), VRx=GPIO9 (P1.18), VRy=GPIO10 (P1.16),
+# Wiring: SW=GPIO8 (P1.20), VRy=GPIO9 (P1.18), VRx=GPIO10 (P1.16),
 #         power from 3V3 (P1.6) and GND (P1.3) — never from 5V.
 # extra_games: false hides those four games and claims no pins at all.
 extra_games = false
@@ -7209,15 +7231,20 @@ static void tl_popup_longpress_cb(lv_event_t *e)
   apps_carousel_build();
 }
 
-// ── Pause: triggered by tapping the field during active play ─────────────────
-static void tl_field_tap_cb(lv_event_t *e)
+// ── Pause: tapping the field, or the joystick button, during active play ─────
+static void tl_pause_game()
 {
-  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
   if (!tl_running || tl_paused) return;   // no-op once paused or after game-over
 
   tl_paused = true;
   tl_stop_timers();   // halts ball movement and paddle (gyro) ticking
   tl_show_pause_popup();
+}
+
+static void tl_field_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  tl_pause_game();
 }
 
 // Same footprint/style as the game-over popup, just a neutral "Paused" message.
@@ -8082,15 +8109,20 @@ static void lr_popup_longpress_cb(lv_event_t *e)
   apps_carousel_build();
 }
 
-// ── Pause: triggered by tapping the field during active play ─────────────────
-static void lr_field_tap_cb(lv_event_t *e)
+// ── Pause: tapping the field, or the joystick button, during active play ─────
+static void lr_pause_game()
 {
-  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
   if (!lr_running || lr_paused) return;   // no-op once paused or after game-over
 
   lr_paused = true;
   lr_stop_timers();   // halts fall and paddle (gyro) ticking
   lr_show_pause_popup();
+}
+
+static void lr_field_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  lr_pause_game();
 }
 
 // Same footprint/style as the game-over popup, just a neutral "Paused" message.
@@ -8683,15 +8715,20 @@ static void sn_popup_longpress_cb(lv_event_t *e)
   apps_carousel_build();
 }
 
-// ── Pause: triggered by tapping the field during active play ─────────────────
-static void sn_field_tap_cb(lv_event_t *e)
+// ── Pause: tapping the field, or the joystick button, during active play ─────
+static void sn_pause_game()
 {
-  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
   if (!sn_running || sn_paused) return;   // no-op once paused or after game-over
 
   sn_paused = true;
   sn_stop_timers();   // halts movement, gyro polling, and modifier scheduling
   sn_show_pause_popup();
+}
+
+static void sn_field_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  sn_pause_game();
 }
 
 // Same footprint/style as the game-over popup, just a neutral "Paused" message.
@@ -10295,19 +10332,19 @@ static void apps_tap_enter_cb(lv_event_t *e)
 // Called from joy_poll_cb() on a debounced press, in LVGL timer context, so it
 // may touch the UI freely.
 //
-// The button starts games and nothing else. It is deliberately not a general
-// "tap anywhere" stand-in: the touchscreen is still the only way to pause, to
-// exit (a long press) or to page the carousel, and a button that also paused
-// would make an accidental knock during play expensive.
+// The button is a stand-in for the taps a joystick player would otherwise have
+// to reach over for. Exiting (a long press) stays touch-only.
 //
 //   carousel  → enter the highlighted item, exactly as tapping the middle does
+//   mid-play  → pause, exactly as tapping the field does
+//   paused    → resume, exactly as tapping the "Paused" popup does
 //   game over → play again, exactly as tapping the popup does
-//   mid-play  → ignored
 //
-// ToneQuest is absent from the second case on purpose: its start gate is the
-// levelling ring, which the stick already satisfies by sitting centred, so a
-// button press there would skip the re-centring the gate exists to enforce.
-// Once it is showing its game-over popup, though, it restarts like the rest.
+// ToneQuest has no pause — it is turn-based, and between turns it is already
+// waiting on the player — so only the last case applies to it. Its start gate
+// is the levelling ring, which the stick already satisfies by sitting centred,
+// so a button press there would skip the re-centring the gate exists to
+// enforce. Once it is showing its game-over popup, it restarts like the rest.
 static void joy_click_dispatch()
 {
   if (!apps_cont) return;          // apps menu isn't open — nothing to start
@@ -10317,16 +10354,61 @@ static void joy_click_dispatch()
     return;
   }
 
-  // In a game. Restart only the ones the joystick actually steers, and only
-  // once they have stopped — that is the game-over popup, where a tap means
-  // "play again".
+  // In a game. Only the ones the joystick actually steers respond.
   switch (apps_idx) {
-    case 4: if (!tl_running) tl_game_start(); break;
-    case 5: if (!lr_running) lr_game_start(); break;
-    case 6: if (!sn_running) sn_game_start(); break;
-    case 8: if (tq_pop)      tq_game_start(); break;
+    case 4:
+      if (!tl_running)     tl_game_start();
+      else if (tl_paused)  tl_resume_game();
+      else                 tl_pause_game();
+      break;
+    case 5:
+      if (!lr_running)     lr_game_start();
+      else if (lr_paused)  lr_resume_game();
+      else                 lr_pause_game();
+      break;
+    case 6:
+      if (!sn_running)     sn_game_start();
+      else if (sn_paused)  sn_resume_game();
+      else                 sn_pause_game();
+      break;
+    case 8: if (tq_pop)    tq_game_start(); break;
     default: break;
   }
+}
+
+// ── Joystick left/right → page the apps carousel ─────────────────────────────
+// Called on every poll. Only acts while the carousel itself is showing; inside
+// a game the stick steers, and nothing here runs.
+static void joy_nav_update(uint32_t now)
+{
+  if (!apps_cont || app_subphase != 0) {
+    joy_nav_dir = JOY_NAV_BLOCKED;
+    return;
+  }
+
+  const float x = joy_vx;          // on-screen axis, invert_x already applied
+  const int want = (x >=  JOY_NAV_PUSH) ? +1
+                 : (x <= -JOY_NAV_PUSH) ? -1 : 0;
+
+  if (want == 0) {
+    // Between the thresholds, hold whatever state we are in; only a stick
+    // that has genuinely come back towards centre re-arms.
+    if (fabsf(x) < JOY_NAV_REARM) joy_nav_dir = 0;
+    return;
+  }
+  if (joy_nav_dir == JOY_NAV_BLOCKED) return;   // still held over from a game
+
+  if (want != joy_nav_dir) {                    // a fresh push (or a reversal)
+    joy_nav_dir  = want;
+    joy_nav_next = now + JOY_NAV_REPEAT_DELAY_MS;
+  } else if ((int32_t)(now - joy_nav_next) >= 0) {
+    joy_nav_next = now + JOY_NAV_REPEAT_MS;     // held — auto-repeat
+  } else {
+    return;
+  }
+
+  apps_idx = apps_step(apps_idx, want);
+  apps_carousel_build();
 }
 #endif
 

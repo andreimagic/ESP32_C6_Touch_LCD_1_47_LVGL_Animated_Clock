@@ -130,11 +130,11 @@
                 <li><strong>GND</strong> &rarr; a GND pin (header pin 3)</li>
                 <li><strong>+5V</strong> &rarr; the <strong>3V3</strong> pin (header pin 6). Despite its label, do <em>not</em> connect it to 5&nbsp;V &mdash; that can damage the board.</li>
                 <li><strong>SW</strong> &rarr; GPIO 8 (header pin 20)</li>
-                <li><strong>VRx</strong> &rarr; GPIO 9 (header pin 18)</li>
-                <li><strong>VRy</strong> &rarr; GPIO 10 (header pin 16)</li>
+                <li><strong>VRy</strong> &rarr; GPIO 9 (header pin 18)</li>
+                <li><strong>VRx</strong> &rarr; GPIO 10 (header pin 16)</li>
             </ul>
             <p>Then switch it on: tap <strong>Upper-Right</strong> for the analog clock, <strong>long-press</strong> it, page right with &#9654; to <strong>Extra Games</strong>, and tap. It turns green and the three missing games reappear in the Apps Menu straight away &mdash; no restart. Tap it again to turn it off, which also releases the pins.</p>
-            <p>Push the stick to steer, and <strong>click the stick down</strong> to start a game &mdash; it enters whichever app is showing in the Apps Menu, and plays again on a game-over screen. Pausing and exiting stay on the touchscreen, so knocking the stick mid-game costs you nothing.</p>
+            <p>In the Apps Menu, <strong>push the stick left or right</strong> to page through the games (hold it to keep paging), and <strong>click the stick down</strong> to start the one showing. In a game, push to steer; click once to <strong>pause</strong> and again to <strong>resume</strong>, and click on a game-over screen to play again. ToneQuest has no pause, so there a click only restarts a finished game. Exiting a game is still a long press on the touchscreen.</p>
             <p>If an axis moves the wrong way, the module is simply mounted the other way round: set <code>invert_x</code> or <code>invert_y</code> to <code>true</code> under <code>[joystick]</code> in <code>config.ini</code> rather than rewiring. If something drifts while you are not touching the stick, restart the clock without holding it &mdash; the resting position is measured at start-up.</p>
         </section>
 

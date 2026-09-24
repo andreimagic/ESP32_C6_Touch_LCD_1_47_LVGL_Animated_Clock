@@ -1,23 +1,32 @@
 # .github/workflows/release.yml
 #
 # Stage 3 — edge builds and tagged releases.
-# Two channels, chosen by what was pushed:
+# Two channels, chosen by how the run was started:
 #
 #   push to main       -> "edge": build every board and REPLACE the single
 #                         rolling prerelease tagged `edge`. The `edge` tag is
-#                         force-moved to the pushed commit. No version tag is
-#                         created, and it never becomes "Latest release".
+#                         force-moved to the pushed commit. Edge carries no
+#                         version at all: files are firmware-edge-<sha7>-<chip>-*,
+#                         no version tag is created, and it never becomes
+#                         "Latest release".
 #   push of a v* tag   -> "release": publish that tag as a versioned release.
 #                         The tag must equal FW_VERSION at the tagged commit,
 #                         and that commit must already be on main.
+#   Run workflow       -> "release" too, without tagging by hand: on main only,
+#   (workflow_dispatch)   it tags FW_VERSION at main's head and publishes it in
+#                         the same run. Refuses if that tag already exists.
 #
-# So merging a PR never cuts a version. A version is cut by tagging main
-# yourself once FW_VERSION has been bumped and merged:
+# So merging a PR never cuts a version. Once FW_VERSION has been bumped and
+# merged, cut it either way:
+#   Actions -> Release -> Run workflow (branch: main)
 #   git tag v3.4.0 origin/main && git push origin v3.4.0
 #
+# The dispatch path must build and publish in its own run: a tag pushed with
+# the built-in GITHUB_TOKEN never triggers another workflow run.
+#
 # The FW_VERSION macro is the single source of truth: this workflow only reads
-# it. It never edits source, never pushes a commit back to main and never
-# creates a version tag — the only ref it writes is the `edge` tag.
+# it. It never edits source and never pushes a commit back to main. The only
+# refs it writes are the `edge` tag and, for Run workflow, the version tag.
 #
 # Board targets come from `.github/board-targets.json`, the same file build.yml
 # validates against, so a release can never be cut with settings CI never tested.
@@ -32,9 +41,12 @@ on:
   push:
     branches: [main]
     tags: ['v*']   # `edge` does not match, so moving it never re-triggers this
+  workflow_dispatch:
 
+# Keyed on the event too, so a manual release on main is never queued behind
+# (and superseded by) an edge build from a merge landing at the same time.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -42,7 +54,8 @@ permissions:
 
 jobs:
   # Decides the channel, and rejects a version tag that doesn't match the
-  # sketch or isn't on main — before anything is built.
+  # sketch or isn't on main, or a manual release of an already-tagged version —
+  # before anything is built.
   version:
     name: Resolve version
     runs-on: onctl-2
@@ -50,6 +63,7 @@ jobs:
     outputs:
       channel: ${{ steps.version.outputs.channel }}
       version: ${{ steps.version.outputs.version }}
+      label: ${{ steps.version.outputs.label }}
       sketch: ${{ steps.version.outputs.sketch }}
       prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
@@ -78,9 +92,24 @@ jobs:
             fi
             echo "::notice::Publishing versioned release $VERSION."
             echo "channel=release" >> "$GITHUB_OUTPUT"
+            echo "label=$VERSION" >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+              echo "::error::Run workflow from main only (this run is on $GITHUB_REF)."
+              exit 1
+            fi
+            if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+              echo "::error::Tag $VERSION already exists — bump FW_VERSION and merge before cutting a release."
+              exit 1
+            fi
+            echo "::notice::Tagging and publishing versioned release $VERSION from ${GITHUB_SHA::7}."
+            echo "channel=release" >> "$GITHUB_OUTPUT"
+            echo "label=$VERSION" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::Publishing edge build of $VERSION from ${GITHUB_SHA::7}."
+            echo "::notice::Publishing edge build of ${GITHUB_SHA::7}."
             echo "channel=edge" >> "$GITHUB_OUTPUT"
+            # Edge is identified by commit alone — no FW_VERSION in its names.
+            echo "label=edge-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           fi
 
           # A versioned prerelease (v2.8.0-beta) still ships, but is flagged so
@@ -147,7 +176,7 @@ jobs:
       # it. Both supported chips place the bootloader at 0x0.
       - name: Collect release assets
         env:
-          VERSION: ${{ needs.version.outputs.version }}
+          LABEL: ${{ needs.version.outputs.label }}
           SKETCH: ${{ needs.version.outputs.sketch }}
           CHIP: ${{ matrix.chip }}
           BOARD: ${{ matrix.name }}
@@ -185,12 +214,12 @@ jobs:
             exit 1
           fi
 
-          head -c "$CUT" "$MERGED" > "dist/firmware-${VERSION}-${CHIP}-full.bin"
-          echo "full image: $(stat -c%s "dist/firmware-${VERSION}-${CHIP}-full.bin") bytes" \
+          head -c "$CUT" "$MERGED" > "dist/firmware-${LABEL}-${CHIP}-full.bin"
+          echo "full image: $(stat -c%s "dist/firmware-${LABEL}-${CHIP}-full.bin") bytes" \
                "(trimmed from $(stat -c%s "$MERGED"))"
 
-          cp "$APP"                    "dist/firmware-${VERSION}-${CHIP}-app.bin"
-          cp "build-out/${SKETCH}.elf" "dist/firmware-${VERSION}-${CHIP}.elf"
+          cp "$APP"                    "dist/firmware-${LABEL}-${CHIP}-app.bin"
+          cp "build-out/${SKETCH}.elf" "dist/firmware-${LABEL}-${CHIP}.elf"
 
           # Not a release asset — collected by `publish` for the notes. The
           # dist/meta prefix keeps it out of the firmware-* upload glob.
@@ -238,19 +267,34 @@ jobs:
       # between the build jobs and here.
       - name: Verify one full image per target
         env:
-          VERSION: ${{ needs.version.outputs.version }}
+          LABEL: ${{ needs.version.outputs.label }}
         run: |
           set -euo pipefail
           EXPECTED="$(jq -r 'length' .github/board-targets.json)"
-          FOUND="$(find dist -maxdepth 1 -name "firmware-${VERSION}-*-full.bin" | wc -l)"
+          FOUND="$(find dist -maxdepth 1 -name "firmware-${LABEL}-*-full.bin" | wc -l)"
           echo "Expected $EXPECTED full images, found $FOUND:"
           ls -la dist
           [ "$FOUND" -eq "$EXPECTED" ] \
             || { echo "::error::expected $EXPECTED full images, found $FOUND"; exit 1; }
 
+      # Run workflow only — a tag push already has its tag. Created after every
+      # board has built, so a failed build never leaves a tag with no release.
+      - name: Create version tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" -m "Release $VERSION" "$GITHUB_SHA"
+          # No --force: if the tag appeared while this run was building, fail
+          # here rather than move someone else's tag.
+          git push origin "refs/tags/$VERSION"
+
       # One rolling edge release. The previous one is deleted rather than
-      # uploaded over, because its assets are named by FW_VERSION and a version
-      # bump would otherwise leave the old version's files attached alongside.
+      # uploaded over, because its assets are named by commit and would
+      # otherwise pile up alongside every previous build's files.
       - name: Move edge tag
         if: needs.version.outputs.channel == 'edge'
         env:
@@ -267,6 +311,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.version.outputs.version }}
+          LABEL: ${{ needs.version.outputs.label }}
           PRERELEASE: ${{ needs.version.outputs.prerelease }}
           CHANNEL: ${{ needs.version.outputs.channel }}
         run: |
@@ -275,9 +320,8 @@ jobs:
           {
             if [ "$CHANNEL" = "edge" ]; then
               echo "> **Edge build — not a stable release.** Built automatically from the"
-              echo "> latest \`main\` (\`${GITHUB_SHA::7}\`) and replaced on every merge. The"
-              echo "> firmware reports itself as \`$VERSION\`, but this build is not that"
-              echo "> release and may differ from it. For stable firmware use the"
+              echo "> latest \`main\` (\`${GITHUB_SHA::7}\`) and replaced on every merge."
+              echo "> For stable firmware use the"
               echo "> [latest release](https://github.com/${GITHUB_REPOSITORY}/releases/latest)."
               echo ""
             fi
@@ -289,7 +333,7 @@ jobs:
             echo ""
             echo "| Board | Full image |"
             echo "|---|---|"
-            jq -r --arg v "$VERSION" \
+            jq -r --arg v "$LABEL" \
               '.[] | "| \(.name) | `firmware-\($v)-\(.chip)-full.bin` |"' \
               .github/board-targets.json
             echo ""
@@ -322,7 +366,7 @@ jobs:
             echo "### esptool"
             echo ""
             echo "\`\`\`"
-            jq -r --arg v "$VERSION" \
+            jq -r --arg v "$LABEL" \
               '.[] | "esptool --chip \(.chip) write-flash 0x0 firmware-\($v)-\(.chip)-full.bin"' \
               .github/board-targets.json
             echo "\`\`\`"
@@ -367,11 +411,11 @@ jobs:
                 echo ""
                 echo "---"
                 echo ""
-                echo "**Changes since $LAST:** https://github.com/${GITHUB_REPOSITORY}/compare/${LAST}...${GITHUB_SHA}"
+                echo "**[Changes since the last release](https://github.com/${GITHUB_REPOSITORY}/compare/${LAST}...${GITHUB_SHA})**"
               } >> notes.md
             fi
             gh release create edge \
-              --title "edge — $VERSION (${GITHUB_SHA::7})" \
+              --title "edge (${GITHUB_SHA::7})" \
               --notes-file notes.md --prerelease --latest=false \
               dist/firmware-*
             exit 0

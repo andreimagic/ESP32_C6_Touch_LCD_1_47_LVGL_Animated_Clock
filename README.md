@@ -1497,8 +1497,9 @@ Three workflows, all driven from one shared target list:
 | [`board-targets.json`](.github/board-targets.json) | — | **The single source of truth.** One object per board: FQBN, chip, and pinned library versions |
 | `build.yml` | PR / push to `development`, `main` | Compiles every target, reports flash + RAM usage per board, and uploads each board's flashable `-full.bin` as a run artifact |
 | `version-check.yml` | PR | Fails the PR unless `FW_VERSION` is bumped above the base branch |
-| `release.yml` | push to `main` | Builds every target and replaces the rolling **`edge`** prerelease with a binary set per board. Never creates a version tag |
+| `release.yml` | push to `main` | Builds every target and replaces the rolling **`edge`** prerelease with a binary set per board, named `firmware-edge-<sha7>-<chip>-…`. No version, and never creates a version tag |
 | `release.yml` | push of a `v*` tag | Publishes that tag as a versioned release. Fails unless the tag equals `FW_VERSION` and points at a commit on `main` |
+| `release.yml` | manual (*Run workflow*, on `main`) | Tags `FW_VERSION` at `main` and publishes it as a versioned release in the same run. Fails if that tag already exists |
 
 Both `build.yml` and `release.yml` read their matrix from `board-targets.json`
 via `fromJSON`, so a board cannot be validated by CI with one set of settings and
@@ -1508,21 +1509,29 @@ edits, matching the one `#elif` block it takes in `board_config.h`.
 **Merging to `main` does not cut a version.** It publishes an *edge* build: a
 single prerelease tagged `edge` that is deleted and recreated on every merge, so
 [`releases/tag/edge`](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/releases/tag/edge)
-always carries the newest `main`. It is never marked *Latest*, so the release
-badge and `releases/latest` keep pointing at the last versioned release.
+always carries the newest `main`. Edge has no version: it is titled
+`edge (<commit>)` and its files are named by the short commit hash, e.g.
+`firmware-edge-87b38ce-esp32s3-full.bin`. It is never marked *Latest*, so the
+release badge and `releases/latest` keep pointing at the last versioned release.
 
-**A version is released only when you push its tag.** Bump `FW_VERSION`, merge
-to `main`, then tag that commit:
+**A version is released only when you ask for it.** Bump `FW_VERSION` and
+merge to `main`, then either:
 
-```bash
-git fetch origin
-git tag v3.4.0 origin/main
-git push origin v3.4.0
-```
+- **From GitHub:** Actions → **Release** → **Run workflow**, branch `main`. It
+  builds every board, creates the `FW_VERSION` tag at `main`'s head and
+  publishes the release, all in one run.
+- **From a terminal:** push the tag yourself, and the release follows:
 
-The workflow never creates a version tag itself. It rejects a tag that does not
-match `FW_VERSION` at the tagged commit, or that points at a commit not yet on
-`main`, before building anything.
+  ```bash
+  git fetch origin
+  git tag v3.4.0 origin/main
+  git push origin v3.4.0
+  ```
+
+Both refuse before building anything if the version is wrong: *Run workflow*
+if that tag already exists (bump `FW_VERSION` first), a pushed tag if it does
+not match `FW_VERSION` at the tagged commit or points at a commit not yet on
+`main`. *Run workflow* creates its tag only after every board has compiled.
 
 The previous edge build is replaced, and a release published, only after
 *every* board has compiled (`fail-fast: true`, and publishing lives in a job

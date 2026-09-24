@@ -150,9 +150,9 @@
   // !! with no level shifting, so a 5V rail puts up to 5V straight onto an ADC
   // !! input whose absolute maximum is VDD+0.3.
   #define BOARD_HAS_JOYSTICK 1
-  #define JOY_VRX           8     // ADC1_CH7 — header P1.20
+  #define JOY_VRX           10     // ADC1_CH7 — header P1.20
   #define JOY_VRY           9     // ADC1_CH8 — header P1.18
-  #define JOY_SW            10    // digital, INPUT_PULLUP — header P1.16
+  #define JOY_SW            8    // digital, INPUT_PULLUP — header P1.16
 
   // Native USB-OTG peripheral — can present a composite CDC/HID device.
   // NOTE: assumes the BOOT button is wired to GPIO0 (standard on ESP32-S3

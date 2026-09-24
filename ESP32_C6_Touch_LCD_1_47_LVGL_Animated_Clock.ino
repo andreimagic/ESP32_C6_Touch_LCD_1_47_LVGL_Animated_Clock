@@ -65,7 +65,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v3.3.2"
+#define FW_VERSION      "v3.4.0"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -85,6 +85,17 @@ enum WifiCfgMode : uint8_t { WCFG_WIFI = 0, WCFG_AP = 1, WCFG_OFF = 2 };
 //   USB_HID_SERIAL : mouse + Serial debug output over the same port.
 //   USB_SERIAL_ONLY: Serial only, no HID interface. Matches pre-feature behaviour.
 enum UsbPersona : uint8_t { USB_HID_ONLY = 0, USB_HID_SERIAL = 1, USB_SERIAL_ONLY = 2 };
+
+// How the KY-023 joystick drives the two paddle games (boards with no IMU —
+// see BOARD_HAS_JOYSTICK). Both schemes reuse the games' existing paddle timer
+// and its configured speed; only what the deflection *means* differs.
+//   JPM_DIRECTION : deflection past the dead zone steps the paddle that way,
+//                   one cell per paddle tick, and letting go stops it. This is
+//                   what the IMU does today, so it is the default.
+//   JPM_POSITION  : deflection maps proportionally onto the paddle's travel and
+//                   the paddle holds there — centre is centre, full deflection
+//                   is the wall. The same mapping ToneQuest's ball uses.
+enum JoyPaddleMode : uint8_t { JPM_DIRECTION = 0, JPM_POSITION = 1 };
 
 struct AppConfig {
   char wifi_ssid[64]                 = "myhomewifi";     // [wifi] ssid
@@ -110,6 +121,14 @@ struct AppConfig {
   int  anim_duration_sec             = 10;      // [animation] duration
   bool menu_sounds                   = true;    // [menu] sounds
   uint8_t usb_persona                = USB_HID_SERIAL;  // [usb] mode (S3 only, see UsbPersona)
+  // ── [joystick] — KY-023 on boards with no IMU (see BOARD_HAS_JOYSTICK) ────
+  // Ignored, and never written to config.ini, on a board that has an IMU.
+  bool joy_extra_games   = false;          // [joystick] extra_games — master switch
+  int  joy_dead_percent  = 18;             // [joystick] dead_zone_percent (1-49)
+  int  joy_edge_percent  = 90;             // [joystick] edge_percent (51-100)
+  uint8_t joy_paddle_mode = JPM_DIRECTION; // [joystick] paddle_mode (direction|position)
+  bool joy_invert_x      = false;          // [joystick] invert_x — module mounted rotated
+  bool joy_invert_y      = false;          // [joystick] invert_y
   int  tennis_high_score             = 0;       // [tennis] high_score
   int  tennis_paddle_size            = 6;       // [tennis] paddle_size  (chars, 1-10)
   int  tennis_ball_speed_ms          = 500;     // [tennis] ball_speed_ms
@@ -480,6 +499,188 @@ calData   imuCalib  = {0};
 AccelData accelData;
 bool      imuReady  = false;
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  KY-023 JOYSTICK — input driver for the tilt games on boards with no IMU
+// ══════════════════════════════════════════════════════════════════════════════
+//  Pins and the provenance of the choice live in board_config.h. This is the
+//  whole driver: one LVGL timer samples the two ADC axes and debounces the
+//  button, and the games read the result through joy_x() / joy_y() / the click
+//  dispatch below. No game touches a raw ADC count.
+//
+//  Axis convention — deliberately the SCREEN's, not the IMU's:
+//      joy_x() > 0  →  stick pushed right  →  object moves right
+//      joy_y() > 0  →  stick pushed up     →  object moves up
+//  The IMU's own sign convention is the opposite on both axes (accelY > 0
+//  pushes left, accelX > 0 pushes down), which is why the game call sites below
+//  branch on the source rather than trying to pun one set of floats into the
+//  other. The *shape* of the value is shared, though: like the IMU path, ±1
+//  means "as far as this input goes", so every existing span, smoothing factor
+//  and edge tolerance carries over untouched.
+//
+//  Both accessors are already dead-zoned and edge-normalised:
+//      inside the dead zone          → exactly 0
+//      at/past the edge threshold    → exactly ±1
+//      in between                    → proportional
+//  So "direction control" is just the sign, and "position control" is the value
+//  itself. There is no third reading of the stick anywhere in the sketch.
+//
+//  The C6 compiles none of this. joy_active() is a constant false there, so the
+//  branches in the games fold away and no pin, timer or setting exists.
+// ══════════════════════════════════════════════════════════════════════════════
+
+#if BOARD_HAS_JOYSTICK
+
+#define JOY_ADC_MAX        4095   // 12-bit, the ESP32 Arduino default
+#define JOY_POLL_MS          20   // 50 Hz — well above every game's tick rate
+#define JOY_CAL_SAMPLES      32   // averaged at init to learn the resting centre
+#define JOY_SW_DEBOUNCE_MS   40
+
+static bool     joy_enabled   = false;   // pins claimed and the poll timer live
+static int      joy_cx_raw    = JOY_ADC_MAX / 2;   // measured resting centre, X
+static int      joy_cy_raw    = JOY_ADC_MAX / 2;   // measured resting centre, Y
+static float    joy_vx        = 0.0f;    // latest normalised deflection, +1 = right
+static float    joy_vy        = 0.0f;    // latest normalised deflection, +1 = up
+static lv_timer_t *joy_timer  = nullptr;
+
+// Button debounce. `stable`/`last` start released because the pull-up holds the
+// line high with nothing plugged in, so an absent module never fakes a press.
+static bool     joy_sw_stable = true;
+static bool     joy_sw_last   = true;
+static uint32_t joy_sw_since  = 0;
+
+// Defined far below, next to the games it drives. Declared here so the poll
+// callback can reach it without the Arduino prototype injector having to guess.
+static void joy_click_dispatch(void);
+
+static inline bool joy_active() { return joy_enabled; }
+
+// Raw ADC count → signed deflection with the dead zone removed and the edge
+// threshold mapped to ±1.
+//
+// Each half-travel is scaled against its own span rather than a shared one:
+// a KY-023's centre rarely lands on mid-scale, and a single span would leave
+// one direction unable to reach its edge while the other saturated early.
+static float joy_norm(int raw, int centre)
+{
+  const float span = (raw >= centre) ? (float)(JOY_ADC_MAX - centre) : (float)centre;
+  if (span < 1.0f) return 0.0f;
+
+  const float d = (float)(raw - centre) / span;      // -1 .. +1
+  const float a = fabsf(d);
+
+  const float dead = (float)cfg.joy_dead_percent / 100.0f;
+  if (a <= dead) return 0.0f;
+
+  // The proportional band, from the edge of the dead zone out to the edge
+  // threshold. load_config() clamps dead to <= 49% and edge to >= 51%, so the
+  // two can never meet and this is always positive; the test exists only so a
+  // cfg that somehow arrived unparsed cannot divide by zero. Nothing here
+  // second-guesses the configured edge — at edge_percent the stick reads as
+  // fully deflected, whatever the pair of values happens to be.
+  const float band = (float)cfg.joy_edge_percent / 100.0f - dead;
+
+  // A band that degenerate has nothing to be proportional about, so everything
+  // outside the dead zone is simply full deflection.
+  if (band <= 0.0f) return (d < 0.0f) ? -1.0f : 1.0f;
+
+  float n = (a - dead) / band;
+  if (n > 1.0f) n = 1.0f;
+  return (d < 0.0f) ? -n : n;
+}
+
+static void joy_poll_cb(lv_timer_t * /*t*/)
+{
+  if (!joy_enabled) return;
+
+  float vx = joy_norm(analogRead(JOY_VRX), joy_cx_raw);
+  float vy = joy_norm(analogRead(JOY_VRY), joy_cy_raw);
+  joy_vx = cfg.joy_invert_x ? -vx : vx;
+  joy_vy = cfg.joy_invert_y ? -vy : vy;
+
+  // SW is active-low through the internal pull-up.
+  const bool released = (digitalRead(JOY_SW) != LOW);
+  const uint32_t now  = millis();
+  if (released != joy_sw_last) {
+    joy_sw_last  = released;
+    joy_sw_since = now;
+  } else if (released != joy_sw_stable && (now - joy_sw_since) >= JOY_SW_DEBOUNCE_MS) {
+    joy_sw_stable = released;
+    if (!released) joy_click_dispatch();   // act on the press, not the release
+  }
+}
+
+// Deflection, ready to use. Zero whenever the joystick is not the live input,
+// so a caller that forgot to check joy_active() reads "centred" rather than a
+// stale value from the last time the feature was on.
+static inline float joy_x() { return joy_enabled ? joy_vx : 0.0f; }
+static inline float joy_y() { return joy_enabled ? joy_vy : 0.0f; }
+
+static void joy_stop()
+{
+  if (joy_timer) { lv_timer_del(joy_timer); joy_timer = nullptr; }
+  if (joy_enabled) {
+    // Hand the pins back high-impedance. Nothing else on this board wants them,
+    // but leaving a pull-up asserted on a header pin the user has just been told
+    // is free would be a trap.
+    pinMode(JOY_SW, INPUT);
+    joy_enabled = false;
+  }
+  joy_vx = joy_vy = 0.0f;
+  joy_sw_stable = joy_sw_last = true;
+}
+
+static void joy_start()
+{
+  if (joy_enabled) return;
+
+  pinMode(JOY_SW, INPUT_PULLUP);
+  // Full-scale attenuation: the KY-023 swings the whole 0-3V3 rail, and the
+  // default 11dB range is the only one that reaches the top of it.
+  analogSetPinAttenuation(JOY_VRX, ADC_11db);
+  analogSetPinAttenuation(JOY_VRY, ADC_11db);
+
+  // Learn the resting centre rather than assume mid-scale. A KY-023's
+  // potentiometers are ±10% parts and its centre detent is mechanical, so the
+  // idle reading is routinely a couple of hundred counts off 2048 — enough to
+  // make one direction permanently live with any sane dead zone.
+  long sx = 0, sy = 0;
+  for (int i = 0; i < JOY_CAL_SAMPLES; i++) {
+    sx += analogRead(JOY_VRX);
+    sy += analogRead(JOY_VRY);
+  }
+  joy_cx_raw = (int)(sx / JOY_CAL_SAMPLES);
+  joy_cy_raw = (int)(sy / JOY_CAL_SAMPLES);
+
+  joy_vx = joy_vy = 0.0f;
+  joy_sw_stable = joy_sw_last = (digitalRead(JOY_SW) != LOW);
+  joy_sw_since  = millis();
+  joy_enabled   = true;
+
+  joy_timer = lv_timer_create(joy_poll_cb, JOY_POLL_MS, nullptr);
+  Serial.printf("[JOY] KY-023 enabled — VRx=GPIO%d VRy=GPIO%d SW=GPIO%d, "
+                "centre %d/%d, dead %d%% edge %d%%\n",
+                JOY_VRX, JOY_VRY, JOY_SW, joy_cx_raw, joy_cy_raw,
+                cfg.joy_dead_percent, cfg.joy_edge_percent);
+}
+
+// Single place that turns cfg.joy_extra_games into hardware state. Called once
+// at boot and again whenever the setting is toggled, so the switch takes effect
+// without a reboot — unlike the USB persona, nothing here is latched by an
+// enumerated descriptor.
+static void joy_apply_setting()
+{
+  if (cfg.joy_extra_games) joy_start();
+  else                     joy_stop();
+}
+
+#else   // !BOARD_HAS_JOYSTICK — IMU board: the feature does not exist
+
+static inline bool  joy_active() { return false; }
+static inline float joy_x()      { return 0.0f; }
+static inline float joy_y()      { return 0.0f; }
+
+#endif  // BOARD_HAS_JOYSTICK
+
 // ─── Brightness + tilt timer handles — valid only while Status screen is open ─
 lv_obj_t   *label_brightness = nullptr;
 lv_timer_t *tilt_timer         = nullptr;
@@ -843,7 +1044,30 @@ duration = 10
 
 [menu]
 sounds = true
-
+)INI"
+#if BOARD_HAS_JOYSTICK
+R"INI(
+[joystick]
+# External KY-023 on the expansion header — this board has no IMU, so it is the
+# only way to steer Tennis Letters, Letters Rain, Snake Letters and ToneQuest.
+# Wiring: SW=GPIO8 (P1.20), VRx=GPIO9 (P1.18), VRy=GPIO10 (P1.16),
+#         power from 3V3 (P1.6) and GND (P1.3) — never from 5V.
+# extra_games: false hides those four games and claims no pins at all.
+extra_games = false
+# Percent of full deflection. Below dead_zone_percent the stick reads as
+# centred; at edge_percent it reads as fully deflected.
+dead_zone_percent = 18
+edge_percent = 90
+# Paddle games only (Tennis Letters, Letters Rain):
+#   direction = push and the paddle slides that way at its configured speed
+#   position  = deflection maps onto the paddle's travel and it holds there
+paddle_mode = direction
+# Set either to true if the module is mounted rotated and an axis reads backwards
+invert_x = false
+invert_y = false
+)INI"
+#endif
+R"INI(
 [birthdays]
 # Up to 8 entries, DD-MM-YYYY, comma separated. Only day and month are matched.
 dates = 01-01-1970,06-08-2017
@@ -1322,6 +1546,39 @@ static void load_config()
     }
 #endif
 
+#if BOARD_HAS_JOYSTICK
+    // ── [joystick] — KY-023 (boards with no IMU only) ───────────────────────
+    else if (strcmp(section, "joystick") == 0) {
+      if (strcmp(key, "extra_games") == 0) {
+        cfg.joy_extra_games = (strcmp(val,"true")==0 || strcmp(val,"1")==0);
+        Serial.printf("[CFG]   joystick.extra_games   = %s\n", cfg.joy_extra_games?"true":"false");
+      }
+      else if (strcmp(key, "dead_zone_percent") == 0) {
+        // Under 1% a resting stick drifts; at 50% it would meet the edge
+        // threshold and leave no proportional range between them.
+        cfg.joy_dead_percent = max(1, min(49, atoi(val)));
+        Serial.printf("[CFG]   joystick.dead_zone     = %d%%\n", cfg.joy_dead_percent);
+      }
+      else if (strcmp(key, "edge_percent") == 0) {
+        cfg.joy_edge_percent = max(51, min(100, atoi(val)));
+        Serial.printf("[CFG]   joystick.edge_percent  = %d%%\n", cfg.joy_edge_percent);
+      }
+      else if (strcmp(key, "paddle_mode") == 0) {
+        cfg.joy_paddle_mode = (strcmp(val,"position")==0) ? JPM_POSITION : JPM_DIRECTION;
+        Serial.printf("[CFG]   joystick.paddle_mode   = %s\n",
+                      cfg.joy_paddle_mode == JPM_POSITION ? "position" : "direction");
+      }
+      else if (strcmp(key, "invert_x") == 0) {
+        cfg.joy_invert_x = (strcmp(val,"true")==0 || strcmp(val,"1")==0);
+        Serial.printf("[CFG]   joystick.invert_x      = %s\n", cfg.joy_invert_x?"true":"false");
+      }
+      else if (strcmp(key, "invert_y") == 0) {
+        cfg.joy_invert_y = (strcmp(val,"true")==0 || strcmp(val,"1")==0);
+        Serial.printf("[CFG]   joystick.invert_y      = %s\n", cfg.joy_invert_y?"true":"false");
+      }
+    }
+#endif
+
     // ── [tennis] ────────────────────────────────────────────────────────────
     else if (strcmp(section, "tennis") == 0) {
       if (strcmp(key, "high_score") == 0) {
@@ -1645,6 +1902,7 @@ static void save_config()
           strncmp(trimmed,"[timer]",       7)==0 ||
           strncmp(trimmed,"[menu]",        6)==0 ||
           strncmp(trimmed,"[usb]",         5)==0 ||
+          strncmp(trimmed,"[joystick]",   10)==0 ||
           strncmp(trimmed,"[tennis]",      8)==0 ||
           strncmp(trimmed,"[letter_rain]",13)==0 ||
           strncmp(trimmed,"[snake]",       7)==0 ||
@@ -1699,6 +1957,19 @@ static void save_config()
   fw.print("\n[usb]\n");
   fw.printf("mode = %s\n", cfg.usb_persona == USB_HID_ONLY    ? "hid"    :
                             cfg.usb_persona == USB_SERIAL_ONLY ? "serial" : "hid_serial");
+#endif
+
+#if BOARD_HAS_JOYSTICK
+  // Written ahead of [tennis] on purpose: the tail-verification at the bottom
+  // of this function checks the LAST line it wrote, so the last line has to
+  // stay [tonequest] tilt_percent.
+  fw.print("\n[joystick]\n");
+  fw.printf("extra_games = %s\n",       cfg.joy_extra_games ? "true" : "false");
+  fw.printf("dead_zone_percent = %d\n", cfg.joy_dead_percent);
+  fw.printf("edge_percent = %d\n",      cfg.joy_edge_percent);
+  fw.printf("paddle_mode = %s\n",       cfg.joy_paddle_mode == JPM_POSITION ? "position" : "direction");
+  fw.printf("invert_x = %s\n",          cfg.joy_invert_x ? "true" : "false");
+  fw.printf("invert_y = %s\n",          cfg.joy_invert_y ? "true" : "false");
 #endif
 
   fw.print("\n[tennis]\n");
@@ -1982,6 +2253,59 @@ static void seed_tonequest_config()
   fa.close();
   Serial.println("[CFG] [tonequest] section seeded into config.ini.");
 }
+
+#if BOARD_HAS_JOYSTICK
+// ── Ensure [joystick] section exists in config.ini ────────────────────────────
+// Called once at boot after load_config(). Same contract as the game seeders:
+// a card carrying a config.ini written before this feature shipped gets the
+// block appended with the current (default) values, so every joystick tunable
+// is visible in the web editor from the very first power-on rather than only
+// appearing once something calls save_config().
+//
+// Compiled only where the feature exists, so an IMU board never writes a
+// section it cannot act on.
+static void seed_joystick_config()
+{
+  if (!storageAvailable || !STORAGE) return;
+
+  File fr = STORAGE->open("/config.ini", FILE_READ);
+  if (!fr) return;  // no file at all — save_config() will create it later
+  bool found = false;
+  char line[64];
+  while (fr.available() && !found) {
+    int len = 0;
+    while (fr.available() && len < (int)sizeof(line) - 1) {
+      char ch = fr.read();
+      if (ch == '\n') break;
+      if (ch == '\r') continue;  // strip CR
+      line[len++] = ch;
+    }
+    line[len] = '\0';
+    char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, "[joystick]", 10) == 0) { found = true; }
+  }
+  fr.close();
+
+  if (found) {
+    Serial.println("[CFG] [joystick] section already present.");
+    return;
+  }
+
+  File fa = STORAGE->open("/config.ini", FILE_APPEND);
+  if (!fa) { Serial.println("[CFG] seed_joystick_config: cannot open for append"); return; }
+  fa.println();
+  fa.println("[joystick]");
+  fa.printf("extra_games = %s\n",       cfg.joy_extra_games ? "true" : "false");
+  fa.printf("dead_zone_percent = %d\n", cfg.joy_dead_percent);
+  fa.printf("edge_percent = %d\n",      cfg.joy_edge_percent);
+  fa.printf("paddle_mode = %s\n",       cfg.joy_paddle_mode == JPM_POSITION ? "position" : "direction");
+  fa.printf("invert_x = %s\n",          cfg.joy_invert_x ? "true" : "false");
+  fa.printf("invert_y = %s\n",          cfg.joy_invert_y ? "true" : "false");
+  fa.close();
+  Serial.println("[CFG] [joystick] section seeded into config.ini.");
+}
+#endif
 
 // ── Generate a random 6-digit PIN at boot ─────────────────────────────────────
 // Web UI authorisation only; the AP hotspot is open and needs no key.
@@ -2780,6 +3104,12 @@ static void start_web_server()
     setenv("TZ", cfg.tz_string, 1);
     tzset();
     if (wifiConnected) configTzTime(cfg.tz_string, cfg.ntp_server);
+#if BOARD_HAS_JOYSTICK
+    // [joystick] extra_games may have just been flipped. Safe to create or
+    // delete the poll timer from here: handleClient() runs from loop(), on the
+    // same task as lv_timer_handler() and never nested inside it.
+    joy_apply_setting();
+#endif
     Serial.println("[WEB] config.ini updated via web");
 
     // JS fetch handler will redirect to / on 200
@@ -5493,6 +5823,28 @@ static const Note FAILURE_TUNE[] = {
 #define FIELD_X  0
 #define FIELD_Y  0
 
+#if BOARD_HAS_JOYSTICK
+// ── Joystick position control for the paddle games ───────────────────────────
+// Maps the stick's horizontal deflection onto a paddle's travel: centre is
+// centre, half deflection is halfway to the wall, full deflection is the wall.
+// The same proportional mapping ToneQuest's ball uses, quantised to the
+// character grid, and it needs no speed constant of its own — the caller is the
+// game's existing paddle timer, running at the speed config.ini already sets.
+//
+// `lo`/`hi` are the leftmost and rightmost legal columns, which each game
+// already enforces a step at a time in direction mode. Passing them in is what
+// makes both modes stop against exactly the same walls.
+static int joy_paddle_target(int lo, int hi)
+{
+  if (hi <= lo) return lo;
+  const float f = (joy_x() + 1.0f) * 0.5f;             // -1..+1  →  0..1
+  int x = lo + (int)lroundf(f * (float)(hi - lo));
+  if (x < lo) x = lo;
+  if (x > hi) x = hi;
+  return x;
+}
+#endif
+
 // ── Async tune player ─────────────────────────────────────────────────────────
 // Plays a sequence of {freq_hz, duration_ms} notes on an LVGL timer so game
 // timers keep ticking and play stays responsive. freq 0 = silent gap. Shares
@@ -5601,11 +5953,21 @@ static int         apps_idx       = 0;   // 0=RPS 1=Dice 2=Coin 3=Metro 4=Tennis
 // The test is runtime (imuReady), not compile-time, so it also covers a C6
 // whose QMI8658 fails to answer at boot. On the S3 the IMU code is compiled
 // out and imuReady is permanently false, so the effect is the same.
+//
+// A KY-023 joystick counts as a steering device too (BOARD_HAS_JOYSTICK, and
+// only while "Extra Games" is on), so on an S3 with one plugged in the three
+// hidden games come back. joy_active() is a compile-time false on the C6, so
+// nothing about that board's carousel changes.
 static inline bool app_needs_imu(int idx)
 { return idx == 4 || idx == 5 || idx == 6; }
 
+// Something can steer a tilt game right now — an IMU, or a joystick standing
+// in for one. The games read the two apart; the menu does not need to.
+static inline bool game_steering_ready()
+{ return imuReady || joy_active(); }
+
 static inline bool app_is_available(int idx)
-{ return imuReady || !app_needs_imu(idx); }
+{ return game_steering_ready() || !app_needs_imu(idx); }
 
 // Step the carousel by `dir`, skipping anything unavailable on this hardware.
 // Falls back to the current index if nothing else is selectable.
@@ -6928,7 +7290,7 @@ static void tl_resume_game()
   tl_paused = false;
 
   tl_ball_timer = lv_timer_create(tl_ball_tick_cb, tl_ball_speed_current_ms, nullptr);
-  if (imuReady)
+  if (game_steering_ready())
     tl_gyro_timer = lv_timer_create(tl_gyro_tick_cb, tl_paddle_speed_current_ms, nullptr);
 }
 
@@ -7046,26 +7408,50 @@ static void tl_ball_tick_cb(lv_timer_t * /*t*/)
   tl_render();
 }
 
-// ── Gyro paddle timer ─────────────────────────────────────────────────────────
-// Same axis and threshold as brightness control: accelY > 0.5 = tilt right,
-// accelY < -0.5 = tilt left.  One step per poll (no jumps).
+// ── Paddle timer ──────────────────────────────────────────────────────────────
+// Tilt: same axis and threshold as brightness control: accelY > 0.5 = tilt
+// right, accelY < -0.5 = tilt left. One step per poll (no jumps).
+//
+// Joystick: the stick stands in for the tilt. In direction mode it steps the
+// paddle exactly as a tilt does, so the feel and the configured paddle speed
+// are unchanged; in position mode the paddle instead tracks the deflection and
+// holds there. Either way this timer still ticks at tennis_paddle_speed_ms.
 static void tl_gyro_tick_cb(lv_timer_t * /*t*/)
 {
-  if (!imuReady || !tl_running || !apps_cont) return;
+  if (!tl_running || !apps_cont) return;
 
-  imu.update();
-  imu.getAccel(&accelData);
+  // Legal travel, shared by both control schemes and by both input devices.
+  const int lo = 1;
+  const int hi = TL_COLS - 1 - cfg.tennis_paddle_size;
 
-  float y = accelData.accelY;
-  if (y > TL_GYRO_THRESH) {
-    // Tilt right → paddle moves left
-    if (tl_paddle_x > 1)
-      tl_paddle_x--;
-  } else if (y < -TL_GYRO_THRESH) {
-    // Tilt left → paddle moves right
-    if (tl_paddle_x + cfg.tennis_paddle_size < TL_COLS - 1)
-      tl_paddle_x++;
+  int step = 0;                     // -1 = one cell left, +1 = one cell right
+
+#if BOARD_HAS_JOYSTICK
+  if (joy_active()) {
+    if (cfg.joy_paddle_mode == JPM_POSITION) {
+      tl_paddle_x = joy_paddle_target(lo, hi);
+      tl_render();
+      return;
+    }
+    // Direction mode: any deflection past the dead zone is already the sign.
+    const float jx = joy_x();
+    if      (jx > 0.0f) step = +1;
+    else if (jx < 0.0f) step = -1;
+  } else
+#endif
+  {
+    if (!imuReady) return;
+    imu.update();
+    imu.getAccel(&accelData);
+
+    const float y = accelData.accelY;
+    if      (y >  TL_GYRO_THRESH) step = -1;   // tilt right → paddle moves left
+    else if (y < -TL_GYRO_THRESH) step = +1;   // tilt left  → paddle moves right
   }
+
+  if      (step < 0 && tl_paddle_x > lo) tl_paddle_x--;
+  else if (step > 0 && tl_paddle_x < hi) tl_paddle_x++;
+
   tl_render();
 }
 
@@ -7130,7 +7516,7 @@ static void tl_game_start()
   tl_paddle_speed_current_ms = cfg.tennis_paddle_speed_ms;
 
   tl_ball_timer = lv_timer_create(tl_ball_tick_cb, tl_ball_speed_current_ms, nullptr);
-  if (imuReady)
+  if (game_steering_ready())
     tl_gyro_timer = lv_timer_create(tl_gyro_tick_cb, tl_paddle_speed_current_ms, nullptr);
 }
 
@@ -7592,24 +7978,44 @@ static void lr_fall_tick_cb(lv_timer_t * /*t*/)
   lr_render();
 }
 
-// ── Gyro paddle timer ─────────────────────────────────────────────────────────
+// ── Paddle timer ──────────────────────────────────────────────────────────────
+// Tilt, or the joystick standing in for it — see tl_gyro_tick_cb() for the two
+// control schemes. The paddle here changes width as the game runs, so the legal
+// travel is recomputed every tick rather than cached.
 static void lr_gyro_tick_cb(lv_timer_t * /*t*/)
 {
-  if (!imuReady || !lr_running || !apps_cont) return;
+  if (!lr_running || !apps_cont) return;
 
-  imu.update();
-  imu.getAccel(&accelData);
+  const int lo = 1;
+  const int hi = LR_COLS - 1 - lr_paddle_cur_size;
 
-  float y = accelData.accelY;
-  if (y > LR_GYRO_THRESH) {
-    // Tilt right → paddle moves left
-    if (lr_paddle_x > 1)
-      lr_paddle_x--;
-  } else if (y < -LR_GYRO_THRESH) {
-    // Tilt left → paddle moves right
-    if (lr_paddle_x + lr_paddle_cur_size < LR_COLS - 1)
-      lr_paddle_x++;
+  int step = 0;                     // -1 = one cell left, +1 = one cell right
+
+#if BOARD_HAS_JOYSTICK
+  if (joy_active()) {
+    if (cfg.joy_paddle_mode == JPM_POSITION) {
+      lr_paddle_x = joy_paddle_target(lo, hi);
+      lr_render();
+      return;
+    }
+    const float jx = joy_x();
+    if      (jx > 0.0f) step = +1;
+    else if (jx < 0.0f) step = -1;
+  } else
+#endif
+  {
+    if (!imuReady) return;
+    imu.update();
+    imu.getAccel(&accelData);
+
+    const float y = accelData.accelY;
+    if      (y >  LR_GYRO_THRESH) step = -1;   // tilt right → paddle moves left
+    else if (y < -LR_GYRO_THRESH) step = +1;   // tilt left  → paddle moves right
   }
+
+  if      (step < 0 && lr_paddle_x > lo) lr_paddle_x--;
+  else if (step > 0 && lr_paddle_x < hi) lr_paddle_x++;
+
   lr_render();
 }
 
@@ -7757,7 +8163,7 @@ static void lr_resume_game()
   lr_paused = false;
 
   lr_fall_timer = lv_timer_create(lr_fall_tick_cb, lr_fall_speed_ms, nullptr);
-  if (imuReady)
+  if (game_steering_ready())
     lr_gyro_timer = lv_timer_create(lr_gyro_tick_cb, lr_paddle_speed_ms, nullptr);
 }
 
@@ -7835,7 +8241,7 @@ static void lr_game_start()
   lr_paddle_speed_ms = cfg.lr_paddle_speed_ms;
 
   lr_fall_timer = lv_timer_create(lr_fall_tick_cb, lr_fall_speed_ms, nullptr);
-  if (imuReady)
+  if (game_steering_ready())
     lr_gyro_timer = lv_timer_create(lr_gyro_tick_cb, lr_paddle_speed_ms, nullptr);
 }
 
@@ -8358,7 +8764,7 @@ static void sn_resume_game()
   sn_paused = false;
 
   sn_move_timer = lv_timer_create(sn_move_tick_cb, sn_speed_ms, nullptr);
-  if (imuReady)
+  if (game_steering_ready())
     sn_gyro_timer = lv_timer_create(sn_gyro_tick_cb, 150, nullptr);
 
   // Modifier timers were cleared on pause — pick up on a fresh random window
@@ -8454,7 +8860,7 @@ static void sn_game_start()
   sn_running    = true;
   sn_paused     = false;
   sn_move_timer = lv_timer_create(sn_move_tick_cb, sn_speed_ms, nullptr);
-  if (imuReady)
+  if (game_steering_ready())
     sn_gyro_timer = lv_timer_create(sn_gyro_tick_cb, 150, nullptr);
 
   // Schedule first modifier spawn (random 10-30 s)
@@ -8476,7 +8882,30 @@ static void sn_game_start()
 // 180° reversal is always blocked (can't go LEFT→RIGHT, UP→DOWN, etc.)
 static void sn_gyro_tick_cb(lv_timer_t * /*t*/)
 {
-  if (!imuReady || !sn_running || !apps_cont) return;
+  if (!sn_running || !apps_cont) return;
+
+#if BOARD_HAS_JOYSTICK
+  if (joy_active()) {
+    // Direction control in all four directions. joy_x()/joy_y() are already
+    // zero inside the dead zone, so "past the dead zone" is just "non-zero" —
+    // there is no separate threshold to keep in step with SN_GYRO_THRESH. The
+    // dominant-axis rule and the 180°-reversal block are the tilt path's,
+    // unchanged; only the sign convention differs (the stick points where the
+    // snake should go, where a tilt pushes it the opposite way).
+    const float jx = joy_x();
+    const float jy = joy_y();
+    if (fabsf(jx) >= fabsf(jy)) {
+      if      (jx > 0.0f && sn_dir != SN_LEFT)  sn_dir = SN_RIGHT;
+      else if (jx < 0.0f && sn_dir != SN_RIGHT) sn_dir = SN_LEFT;
+    } else {
+      if      (jy > 0.0f && sn_dir != SN_DOWN)  sn_dir = SN_UP;
+      else if (jy < 0.0f && sn_dir != SN_UP)    sn_dir = SN_DOWN;
+    }
+    return;
+  }
+#endif
+
+  if (!imuReady) return;
   imu.update();
   imu.getAccel(&accelData);
   float ax = accelData.accelX;
@@ -9272,7 +9701,7 @@ static void tq_start_round()
   // tq_input() drops the ball timer on the move that ends a level, so the
   // player cannot keep nudging the ball into walls while the round is being
   // judged. Every round therefore has to put it back.
-  if (imuReady && !tq_poll_timer)
+  if (game_steering_ready() && !tq_poll_timer)
     tq_poll_timer = lv_timer_create(tq_poll_cb, TQ_POLL_MS, nullptr);
   if (tq_note) lv_obj_add_flag(tq_note, LV_OBJ_FLAG_HIDDEN);
   tq_status_refresh();
@@ -9375,14 +9804,33 @@ static void tq_set_ring_tint(int tint)
 // to the stop (tilt_percent of 1 g) puts the ball exactly against the wall.
 static void tq_poll_cb(lv_timer_t * /*t*/)
 {
-  if (!imuReady || !tq_running || !apps_cont || !tq_ball) return;
+  if (!tq_running || !apps_cont || !tq_ball) return;
 
-  imu.update();
-  imu.getAccel(&accelData);
+  float tx, ty;   // where the ball is being asked to go, in field pixels
 
-  const float full = (float)cfg.tq_tilt_percent / 100.0f;
-  float tx = (float)TQ_CX - (accelData.accelY / full) * (float)TQ_SPAN_X;
-  float ty = (float)TQ_CY + (accelData.accelX / full) * (float)TQ_SPAN_Y;
+#if BOARD_HAS_JOYSTICK
+  if (joy_active()) {
+    // Position control, identical in shape to the tilt mapping below: the
+    // deflection substitutes for the tilt angle, and joy_x()/joy_y() already
+    // saturate at ±1 on reaching the configured edge threshold, so that
+    // threshold does for the stick exactly what tq_tilt_percent does for the
+    // IMU — the ball meets a wall only at (near) full deflection. Everything
+    // past this point — TQ_SMOOTH, the clamp, the levelling gate, the edge
+    // tolerance and the re-arm — is the shared code path, untouched.
+    tx = (float)TQ_CX + joy_x() * (float)TQ_SPAN_X;
+    ty = (float)TQ_CY - joy_y() * (float)TQ_SPAN_Y;
+  } else
+#endif
+  {
+    if (!imuReady) return;
+
+    imu.update();
+    imu.getAccel(&accelData);
+
+    const float full = (float)cfg.tq_tilt_percent / 100.0f;
+    tx = (float)TQ_CX - (accelData.accelY / full) * (float)TQ_SPAN_X;
+    ty = (float)TQ_CY + (accelData.accelX / full) * (float)TQ_SPAN_Y;
+  }
 
   tq_bx += (tx - tq_bx) * TQ_SMOOTH;
   tq_by += (ty - tq_by) * TQ_SMOOTH;
@@ -9644,7 +10092,11 @@ static void tq_game_start()
   tq_demo_i    = 0;
   tq_demo_lit  = false;
   tq_phase     = TQ_P_LEVEL;
-  tq_swipe_mode = !imuReady;   // no accelerometer: gestures answer instead
+  // Gestures only when nothing can steer the ball. A joystick can, and it
+  // drives the bubble-level path exactly as an IMU does, so it keeps the
+  // levelling gate and the roll-into-a-wall answer rather than falling back
+  // to swipes.
+  tq_swipe_mode = !game_steering_ready();
   tq_armed     = false;
   tq_beat_high = false;
   tq_hold_t0   = 0;
@@ -9719,7 +10171,8 @@ static void tq_game_start()
   // Sub-note — only up while the player is at the start gate
   tq_note = lv_label_create(apps_cont);
   lv_label_set_text(tq_note, tq_swipe_mode ? "tap to begin  .  then swipe"
-                                           : "level the device");
+                             : joy_active() ? "centre the joystick"
+                                            : "level the device");
   lv_obj_set_style_text_font(tq_note, &dejavu_mono_14, 0);
   lv_obj_set_style_text_color(tq_note, lv_color_make(120, 130, 170), 0);
   lv_obj_align(tq_note, LV_ALIGN_TOP_MID, 0, TQ_CY + TQ_RING_D / 2 + 8);
@@ -9741,7 +10194,7 @@ static void tq_game_start()
 
   tq_running = true;
   tq_status_refresh();
-  if (imuReady)
+  if (game_steering_ready())
     tq_poll_timer = lv_timer_create(tq_poll_cb, TQ_POLL_MS, nullptr);
 }
 
@@ -9815,10 +10268,11 @@ static void app_screen_start()
   app_tapzone(apps_cont, app_start_tap_cb);
 }
 
-// ── Apps carousel tap (enter game) ───────────────────────────────────────────
-static void apps_tap_enter_cb(lv_event_t *e)
+// ── Apps carousel: act on the highlighted item ───────────────────────────────
+// Factored out of the tap handler so the joystick button can do the same thing
+// without either input having its own idea of what "enter" means.
+static void apps_enter_selected()
 {
-  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
   if (apps_idx == 9) {
     cfg.menu_sounds = !cfg.menu_sounds;
     save_config();
@@ -9828,6 +10282,53 @@ static void apps_tap_enter_cb(lv_event_t *e)
     app_screen_start();
   }
 }
+
+// ── Apps carousel tap (enter game) ───────────────────────────────────────────
+static void apps_tap_enter_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  apps_enter_selected();
+}
+
+#if BOARD_HAS_JOYSTICK
+// ── Joystick button ──────────────────────────────────────────────────────────
+// Called from joy_poll_cb() on a debounced press, in LVGL timer context, so it
+// may touch the UI freely.
+//
+// The button starts games and nothing else. It is deliberately not a general
+// "tap anywhere" stand-in: the touchscreen is still the only way to pause, to
+// exit (a long press) or to page the carousel, and a button that also paused
+// would make an accidental knock during play expensive.
+//
+//   carousel  → enter the highlighted item, exactly as tapping the middle does
+//   game over → play again, exactly as tapping the popup does
+//   mid-play  → ignored
+//
+// ToneQuest is absent from the second case on purpose: its start gate is the
+// levelling ring, which the stick already satisfies by sitting centred, so a
+// button press there would skip the re-centring the gate exists to enforce.
+// Once it is showing its game-over popup, though, it restarts like the rest.
+static void joy_click_dispatch()
+{
+  if (!apps_cont) return;          // apps menu isn't open — nothing to start
+
+  if (app_subphase == 0) {         // carousel
+    apps_enter_selected();
+    return;
+  }
+
+  // In a game. Restart only the ones the joystick actually steers, and only
+  // once they have stopped — that is the game-over popup, where a tap means
+  // "play again".
+  switch (apps_idx) {
+    case 4: if (!tl_running) tl_game_start(); break;
+    case 5: if (!lr_running) lr_game_start(); break;
+    case 6: if (!sn_running) sn_game_start(); break;
+    case 8: if (tq_pop)      tq_game_start(); break;
+    default: break;
+  }
+}
+#endif
 
 // ── Apps carousel builder ─────────────────────────────────────────────────────
 static void apps_carousel_build()
@@ -10166,9 +10667,21 @@ static lv_obj_t *se_usb_lbl      = nullptr;
 static lv_obj_t *se_usb_desc     = nullptr;
 static lv_obj_t *se_usb_dot[3]   = {nullptr, nullptr, nullptr};
 
-// The carousel now pages between two items. USB Mode stays index 0 so the
+// The carousel pages between its items. USB Mode stays index 0 so the
 // long-press lands on the same screen it always did; macroPad sits next to it.
-enum UsbCarouselItem : int { UCI_USB_MODE = 0, UCI_MACROPAD = 1, UCI_COUNT = 2 };
+//
+// Extra Games only exists where a joystick can be fitted — i.e. where there is
+// no IMU. On an IMU board BOARD_HAS_JOYSTICK is 0, the enumerator is not
+// declared, UCI_COUNT falls back to 2 and the setting is not merely hidden but
+// absent: no dot, no page, nothing to arrow onto.
+enum UsbCarouselItem : int {
+  UCI_USB_MODE = 0,
+  UCI_MACROPAD = 1,
+#if BOARD_HAS_JOYSTICK
+  UCI_EXTRA_GAMES,
+#endif
+  UCI_COUNT
+};
 static int usb_carousel_idx = UCI_USB_MODE;
 
 // ── macroPad — script list ──────────────────────────────────────────────────
@@ -10324,8 +10837,20 @@ static void close_usb_editor()
 static void usb_carousel_tap_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
-  if (usb_carousel_idx==UCI_USB_MODE) open_usb_editor();
-  else                                open_macropad_list();
+  if (usb_carousel_idx==UCI_USB_MODE) { open_usb_editor(); return; }
+#if BOARD_HAS_JOYSTICK
+  if (usb_carousel_idx==UCI_EXTRA_GAMES) {
+    // An in-place toggle, like the Sounds item in the apps carousel — there is
+    // nothing to choose between, so a sub-editor would only add a screen.
+    cfg.joy_extra_games = !cfg.joy_extra_games;
+    save_config();
+    joy_apply_setting();                 // claims or releases the pins right now
+    if (cfg.joy_extra_games) menu_tone_hi();
+    usb_carousel_build();
+    return;
+  }
+#endif
+  open_macropad_list();
 }
 
 static void usb_carousel_left_cb(lv_event_t*e)
@@ -10357,7 +10882,18 @@ static void usb_carousel_build()
   if (usb_carousel_idx==UCI_USB_MODE) {
     icon_txt = LV_SYMBOL_USB;  item_name = "USB Mode";  accent = cols[s];
     snprintf(desc,sizeof(desc),"Currently: %s",names[s]);
-  } else {
+  }
+#if BOARD_HAS_JOYSTICK
+  else if (usb_carousel_idx==UCI_EXTRA_GAMES) {
+    // Colours itself by its own state, like the Sounds toggle: green on,
+    // red off, so the carousel reads at a glance without entering anything.
+    icon_txt  = cfg.joy_extra_games ? LV_SYMBOL_PLAY : LV_SYMBOL_CLOSE;
+    item_name = "Extra Games";
+    accent    = cfg.joy_extra_games ? lv_color_make(80,200,120) : lv_color_make(180,60,60);
+    snprintf(desc,sizeof(desc),"%s",cfg.joy_extra_games ? "Joystick: ON" : "Joystick: OFF");
+  }
+#endif
+  else {
     icon_txt = LV_SYMBOL_KEYBOARD;  item_name = "macroPad";
     accent   = lv_color_make(150,130,220);
     snprintf(desc,sizeof(desc),"Type a saved script");
@@ -10417,15 +10953,18 @@ static void usb_carousel_build()
   lv_obj_set_style_text_font(hint,&dejavu_mono_14,0);
   lv_obj_align(hint,LV_ALIGN_BOTTOM_MID,0,-18);
 
-  // Position dots — two of them, centred on the same baseline the 4-dot main
-  // carousel uses (its row spans 137..179, centre ~162).
+  // Position dots, on the same baseline the 4-dot main carousel uses (its row
+  // spans 137..179, centre ~162). Centred for however many items this board
+  // has: the row is UCI_COUNT * 14 px wide, so it starts half that to the left
+  // of centre. With two items this reproduces the hand-tuned x=151 exactly.
+  const int dot_x0 = 160 - UCI_COUNT * 7 + 5;
   for (int i=0;i<UCI_COUNT;i++) {
     lv_obj_t*dot=lv_label_create(usb_modal_cont);
     lv_obj_set_style_text_font(dot,&dejavu_mono_14,0);
     lv_label_set_text(dot, i==usb_carousel_idx ? "\xe2\x97\x8f" : "\xe2\x97\x8b"); // "●" : "○"
     lv_obj_set_style_text_color(dot,
       i==usb_carousel_idx?lv_color_white():lv_color_make(80,80,100),0);
-    lv_obj_set_pos(dot,151+i*14,156);
+    lv_obj_set_pos(dot,dot_x0+i*14,156);
   }
 }
 
@@ -11506,6 +12045,9 @@ void setup()
     seed_letter_rain_config();  // append [letter_rain] section if not yet present
     seed_snake_config();        // append [snake] section if not yet present
     seed_tonequest_config();    // append [tonequest] section if not yet present
+#if BOARD_HAS_JOYSTICK
+    seed_joystick_config();     // append [joystick] section if not yet present
+#endif
 
     // RTC recovery reads /last_seen.txt, which is card-only — so this is a
     // no-op when running from internal flash. Skip it on an alarm wake so a
@@ -11590,6 +12132,17 @@ void setup()
   // a destination to upload into without the user having to open the carousel
   // first. Runs after provisioning so it lands on whichever backend won.
   ensure_dir(STORAGE, SCRIPTS_DIR_FS);
+#endif
+
+#if BOARD_HAS_JOYSTICK
+  // ── Step 7a3: KY-023 joystick ─────────────────────────────────────────────
+  // After config.ini has been read, because the setting decides whether any
+  // pin is claimed at all, and after LVGL is up, because the driver is an LVGL
+  // timer. Before the radio: the centre calibration wants the ADC quiet, and
+  // VRx/VRy are on ADC1 precisely so a later WiFi start cannot disturb them.
+  Serial.println("[7a3] Joystick...");
+  joy_apply_setting();
+  if (!joy_active()) Serial.println("     Extra Games off — no pins claimed.");
 #endif
 
   // ── Step 7b: WiFi + NTP ───────────────────────────────────────────────────

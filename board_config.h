@@ -150,9 +150,17 @@
   // !! with no level shifting, so a 5V rail puts up to 5V straight onto an ADC
   // !! input whose absolute maximum is VDD+0.3.
   #define BOARD_HAS_JOYSTICK 1
-  #define JOY_SW            8    // digital, INPUT_PULLUP — header P1.20
-  #define JOY_VRX           9    // ADC1_CH8 — header P1.18
-  #define JOY_VRY           10   // ADC1_CH9 — header P1.16
+  //
+  // JOY_VRX / JOY_VRY / JOY_SW are named after the module's own silkscreen, so
+  // they match the wire you are holding. The module's axes are turned 90° from
+  // the screen's: its VRy pot moves things left/right on screen and its VRx pot
+  // up/down. The driver reads the screen-axis aliases below, never VRx/VRy
+  // directly, so that mapping lives only here.
+  #define JOY_SW            8    // module SW  — digital, INPUT_PULLUP — header P1.20
+  #define JOY_VRY           9    // module VRy — ADC1_CH8 — header P1.18
+  #define JOY_VRX           10   // module VRx — ADC1_CH9 — header P1.16
+  #define JOY_PIN_SCREEN_X  JOY_VRY   // on-screen left/right
+  #define JOY_PIN_SCREEN_Y  JOY_VRX   // on-screen up/down
 
   // Native USB-OTG peripheral — can present a composite CDC/HID device.
   // NOTE: assumes the BOOT button is wired to GPIO0 (standard on ESP32-S3

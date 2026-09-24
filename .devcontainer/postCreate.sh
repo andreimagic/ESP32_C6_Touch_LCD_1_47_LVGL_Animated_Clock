@@ -20,8 +20,8 @@ command -v python3 >/dev/null || { echo "::error:: python3 still not on PATH aft
 
 ARDUINO_CLI_VERSION="${ARDUINO_CLI_VERSION:-1.5.1}"
 CORE_VERSION="${CORE_VERSION:-3.3.11}"
-LVGL_VERSION="${LVGL_VERSION:-9.5.0}"
-GFX_VERSION="${GFX_VERSION:-1.6.7}"
+LVGL_VERSION="${LVGL_VERSION:-9.6.0}"
+GFX_VERSION="${GFX_VERSION:-1.6.8}"
 FASTIMU_VERSION="${FASTIMU_VERSION:-1.3.0}"
 
 echo "==> Installing arduino-cli ${ARDUINO_CLI_VERSION}"

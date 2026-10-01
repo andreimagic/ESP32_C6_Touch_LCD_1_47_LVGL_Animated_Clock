@@ -33,10 +33,10 @@ inputs:
     description: FastIMU library version, or "latest".
   arduino-cli-version:
     description: >-
-      arduino-cli version. Pinned because the action's own default of "1.x"
-      resolves to the newest 1.x tag, which has already pulled a release
-      candidate (1.5.2-rc.1) into CI. This matches the stable version bundled
-      with Arduino IDE 2.x on the development machine.
+      arduino-cli version. Pinned to an exact stable release ("1.x"-style
+      ranges have already pulled a release candidate, 1.5.2-rc.1, into CI).
+      This matches the stable version bundled with Arduino IDE 2.x on the
+      development machine.
     required: false
     default: "1.5.1"
   use-cache:
@@ -59,10 +59,32 @@ inputs:
 runs:
   using: composite
   steps:
+    # Installed straight from the release rather than through
+    # arduino/setup-arduino-cli: its latest release (v2) is a Node 20 action,
+    # which GitHub has deprecated and now force-runs on Node 24 with a warning.
+    # All it did was fetch this one binary. The tarball is checked against the
+    # release's own checksums file before anything is unpacked.
     - name: Install arduino-cli
-      uses: arduino/setup-arduino-cli@v2
-      with:
-        version: ${{ inputs.arduino-cli-version }}
+      shell: bash
+      env:
+        CLI_VERSION: ${{ inputs.arduino-cli-version }}
+      run: |
+        set -euo pipefail
+        case "$(uname -m)" in
+          x86_64)        arch=64bit ;;
+          aarch64|arm64) arch=ARM64 ;;
+          armv7l)        arch=ARMv7 ;;
+          *) echo "::error::unsupported runner architecture $(uname -m)"; exit 1 ;;
+        esac
+        tarball="arduino-cli_${CLI_VERSION}_Linux_${arch}.tar.gz"
+        base="https://github.com/arduino/arduino-cli/releases/download/v${CLI_VERSION}"
+        dir="$RUNNER_TEMP/arduino-cli"
+        mkdir -p "$dir"
+        cd "$dir"
+        curl -fsSLO "$base/$tarball"
+        curl -fsSL "$base/${CLI_VERSION}-checksums.txt" | grep " ${tarball}\$" | sha256sum -c -
+        tar -xzf "$tarball" arduino-cli
+        echo "$dir" >> "$GITHUB_PATH"
 
     - name: Restore Arduino cache
       if: inputs.use-cache == 'true'
@@ -107,7 +129,7 @@ runs:
         install_lib "GFX Library for Arduino" "$GFX_VERSION"
         install_lib "FastIMU"                 "$FASTIMU_VERSION"
 
-    # LVGL 9.5 resolves its config in this order:
+    # LVGL 9.x resolves its config in this order:
     #   1. LV_CONF_PATH
     #   2. lv_conf.h reachable via __has_include  (finds the sketch-folder copy)
     #   3. ../../lv_conf.h                        (i.e. libraries/lv_conf.h)

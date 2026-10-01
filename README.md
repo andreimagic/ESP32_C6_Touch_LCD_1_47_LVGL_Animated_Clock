@@ -53,7 +53,7 @@ One sketch builds for both boards. The target is detected at compile time and ev
 | **Flip a Coin** | Instant flip with ASCII coin art (heads/tails) |
 | **Tennis Letters** | Breakout-style ASCII game. Catch cycling letters (a-z) with a tilt-controlled paddle. Score points and complete alphabets |
 | **Letters Rain** | Falling-letters ASCII game. Letters and modifiers rain in waves; catch the target letter (A→Z) with a gyro-controlled paddle. Wrong catches shrink the paddle; `+` / `-` modify its size; `*` restores the default. Miss the target letter and the game ends. Last score saved to `config.ini` |
-| **Snake Letters** | Classic snake ASCII game. Steer using tilt to eat the alphabet (a-z). Avoid distraction letters and manage length with modifiers. High scores persisted to `config.ini` |
+| **Snake Letters** | Classic snake ASCII game in two modes: **Alphabet** — steer using tilt to eat a-z in order — and **Words** — catch the letter missing from a word (`d_g`). Avoid distraction letters and manage length with modifiers. Each mode's high score is persisted to `config.ini` |
 | **KY-023 joystick** *(S3)* | Optional £2 module on the expansion header that stands in for the missing IMU, bringing Tennis Letters, Letters Rain, Snake Letters and ToneQuest back to the S3. Off by default and claims no pins until enabled — see [KY-023 Joystick](#ky-023-joystick-s3-only) |
 | **Bingo!** | On-device 1–90 number caller. Tap or tilt to draw a ball with a cycling reveal animation and buzzer; long-press the circle for a history popup of every number called. No repeats — powered by a fresh Fisher-Yates shuffle each game |
 | **Printable Bingo tickets** | Web Configuration page links to `/bingo` — a self-contained, in-browser generator for UK/housie-style 3×9 ticket sheets (1–90) to pair with the on-device caller. Fresh tickets every load, no PIN needed |
@@ -310,6 +310,7 @@ for the screen mid-game:
 | Where | Button press |
 |---|---|
 | Apps carousel | Enters the highlighted item, like tapping the middle |
+| Snake Letters mode carousel | Starts the highlighted mode. Push **up** to back out to the apps carousel; left/right pages the modes |
 | Tennis Letters, Letters Rain, Snake Letters — playing | **Pauses**, like tapping the field |
 | Same games — paused | **Resumes**, like tapping the *Paused* popup |
 | Any joystick game — game over | Plays again, like tapping the popup |
@@ -596,6 +597,8 @@ vertical_walls = true
 horizontal_walls = false
 distractions = 3
 next_level_score = 10
+words_high_score = 0
+words = ["box", "cat", "dog", "cactus", "rainbow"]
 
 [tonequest]
 high_score = 0
@@ -1091,7 +1094,22 @@ An ASCII falling-letters game. Letters and modifiers descend in separate waves �
 Each successive target spawns within 5–15 columns of the previous one, keeping the action in a natural zone. Speed increases with every correct catch. Last score is persisted to `config.ini`.
 
 #### Snake Letters
-Classic snake ASCII game. Steer using tilt — or a [joystick](#ky-023-joystick-s3-only) on an S3, in all four directions — to eat the alphabet (a-z) in order. Avoid "distraction" letters that end the game instantly. Look out for modifiers: `-` shrinks the snake, and `/` halves its length. High scores are persisted to `config.ini`.
+Classic snake ASCII game. Steer using tilt — or a [joystick](#ky-023-joystick-s3-only) on an S3, in all four directions. Avoid "distraction" letters that end the game instantly. Look out for modifiers: `-` shrinks the snake, and `/` halves its length.
+
+Entering the game first shows a **mode carousel** — page it with the arrows, a swipe or the joystick, tap (or press the joystick button) to play, and long-press (or push the joystick up) to go back:
+
+- **Alphabet** — *Catch the Alphabet!* Eat a-z in order, looping forever. Distraction letters join in once your score reaches `next_level_score`.
+- **Words** — *Fix the words!* The status bar shows a word with one letter blanked (`d_g`); eat the letter that fills it. The blank moves at random each time a word comes round, the list loops forever, and distractions are on from the very first word. Your score is the number of words fixed.
+
+Each mode keeps its own best score, both persisted to `config.ini`. The winning tune plays the first time a run beats its mode's best (and, in Alphabet, every time you finish a-z).
+
+| Key (`[snake]`) | Default | Meaning |
+|---|---|---|
+| `high_score` | `0` | Alphabet best. Written by the game. |
+| `words_high_score` | `0` | Words best, in words fixed. Written by the game. |
+| `words` | `["box", "cat", "dog", "cactus", "rainbow"]` | Words mode list, played in order and looped. Lowercase a-z only (anything else is stripped); up to 24 words of up to 15 letters. A bare `box, cat, dog` list works too. |
+| `distractions` | `3` | Letters on screen that end the game when touched (0–10). Shared by both modes. |
+| `next_level_score` | `10` | Alphabet only: score at which distractions appear. |
 
 #### Bingo!
 

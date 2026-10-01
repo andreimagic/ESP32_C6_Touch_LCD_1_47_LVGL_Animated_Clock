@@ -23,7 +23,10 @@
 # ESP32-C6:
 #   USB CDC On Boot = Enabled      -> CDCOnBoot=cdc
 #   Flash Size      = 8MB (64Mb)   -> FlashSize=8M
-#   Partition       = 8M w/ spiffs -> PartitionScheme=default_8MB  (3MB APP)
+#   Partition       = Custom       -> PartitionScheme=custom, plus the entry's
+#                     "partitions" CSV (3MB APP + 4.9MB FFat). No core preset
+#                     pairs a 3MB app with FAT on 8MB, so the table lives in
+#                     partitions/ and partition-props.sh applies it.
 #   CPU 160MHz / QIO / 80MHz / JTAG Disabled / Zigbee Disabled
 #
 # ESP32-S3 — four traps, all of which change the produced binary:
@@ -112,6 +115,7 @@ jobs:
         uses: ./.github/actions/arduino-build
         with:
           fqbn: ${{ matrix.fqbn }}
+          partitions: ${{ matrix.partitions }}
           core-version: ${{ matrix.core-version }}
           lvgl-version: ${{ matrix.lvgl-version }}
           gfx-version: ${{ matrix.gfx-version }}

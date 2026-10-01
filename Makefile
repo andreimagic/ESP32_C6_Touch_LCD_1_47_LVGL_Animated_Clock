@@ -15,7 +15,10 @@
 
 TARGETS := .github/board-targets.json
 CHIPS   := $(shell jq -r '.[].chip' $(TARGETS))
-field    = $(shell jq -r --arg c '$(1)' '.[] | select(.chip == $$c) | .["$(2)"]' $(TARGETS))
+field    = $(shell jq -r --arg c '$(1)' '.[] | select(.chip == $$c) | .["$(2)"] // empty' $(TARGETS))
+
+# Recipes use bash arrays for the optional partition-table build properties.
+SHELL := bash
 
 CHIP ?= esp32c6
 PORT ?=
@@ -27,9 +30,18 @@ all: $(CHIPS)
 
 # Always delegate to arduino-cli: it tracks sketch dependencies itself and
 # reuses its build cache, so a rebuild with no changes is quick.
+# A board with "partitions" in board-targets.json gets its repo-local table
+# through partition-props.sh, exactly as the arduino-build action applies it.
 $(CHIPS):
+	@props=(); \
+	if [ -n "$(call field,$@,partitions)" ]; then \
+	  while IFS= read -r p; do props+=(--build-property "$$p"); done \
+	    < <(bash .github/scripts/partition-props.sh "$(call field,$@,partitions)"); \
+	fi; \
+	set -x; \
 	arduino-cli compile \
 	  --fqbn "$(call field,$@,fqbn)" \
+	  "$${props[@]}" \
 	  --warnings default \
 	  --output-dir "build-out/$(call field,$@,slug)" \
 	  .

@@ -10,6 +10,13 @@ inputs:
   fqbn:
     description: Fully-qualified board name, including every pinned menu option.
     required: true
+  partitions:
+    description: >-
+      Partition table CSV in this repository, relative to the sketch folder, for
+      a board whose layout is not one of the core's presets. Requires
+      PartitionScheme=custom in the FQBN. Empty uses the FQBN's preset.
+    required: false
+    default: ""
   core-version:
     description: >-
       esp32:esp32 core version, matching Boards Manager on the dev machine.
@@ -130,12 +137,19 @@ runs:
       shell: bash
       env:
         FQBN: ${{ inputs.fqbn }}
+        PARTITIONS: ${{ inputs.partitions }}
         OUTPUT_DIR: ${{ inputs.output-dir }}
         LOG_FILE: ${{ inputs.log-file }}
       run: |
         set -o pipefail
+        props=()
+        if [ -n "$PARTITIONS" ]; then
+          while IFS= read -r p; do props+=(--build-property "$p"); done \
+            < <(bash .github/scripts/partition-props.sh "$PARTITIONS")
+        fi
         arduino-cli compile \
           --fqbn "$FQBN" \
+          "${props[@]}" \
           --warnings default \
           --output-dir "$OUTPUT_DIR" \
           . 2>&1 | tee "$LOG_FILE"

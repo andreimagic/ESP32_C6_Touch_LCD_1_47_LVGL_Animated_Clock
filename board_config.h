@@ -80,10 +80,13 @@
   // asset size here — there is no menu option that could add headroom.
   #define BOARD_EXPECTS_PSRAM 0
 
-  // PartitionScheme=default_8MB leaves 1.5MB of SPIFFS, not FAT, and the two
-  // 3.19MB OTA slots leave no room to grow one. So there is no internal
-  // filesystem to fall back to here: an SD card is required.
-  #define BOARD_HAS_INTERNAL_FS   0
+  // partitions/esp32c6-ffat-8MB.csv provides a 4.9MB 'ffat' partition (the
+  // C6 counterpart of the S3's 9.9MB one), so this board also runs with no
+  // card. STORAGE falls back to it when no SD is mounted, a card is mirrored
+  // onto it at boot, and FFat.begin(true) formats it once on a virgin board —
+  // or on one upgraded from the old SPIFFS layout, whose leftovers fail to
+  // mount as FAT.
+  #define BOARD_HAS_INTERNAL_FS   1
 
   // The C6 has only one general-purpose SPI host, shared by LCD and SD.
   // Arduino_HWSPI rides the global `SPI` object that setup() already begins.

@@ -40,7 +40,8 @@ jobs:
           # is that the canary tests a slightly different board config, which
           # costs nothing real. Do not copy the FQBN into anything that ships.
           fqbn: >-
-            esp32:esp32:esp32c6:JTAGAdapter=default,CDCOnBoot=cdc,PartitionScheme=default_8MB,CPUFreq=160,FlashMode=qio,FlashFreq=80,FlashSize=8M,ZigbeeMode=default,DebugLevel=none
+            esp32:esp32:esp32c6:JTAGAdapter=default,CDCOnBoot=cdc,PartitionScheme=custom,CPUFreq=160,FlashMode=qio,FlashFreq=80,FlashSize=8M,ZigbeeMode=default,DebugLevel=none
+          partitions: partitions/esp32c6-ffat-8MB.csv
           core-version: latest
           lvgl-version: latest
           gfx-version: latest

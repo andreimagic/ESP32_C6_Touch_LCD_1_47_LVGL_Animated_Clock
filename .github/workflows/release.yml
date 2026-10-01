@@ -164,6 +164,7 @@ jobs:
         uses: ./.github/actions/arduino-build
         with:
           fqbn: ${{ matrix.fqbn }}
+          partitions: ${{ matrix.partitions }}
           core-version: ${{ matrix.core-version }}
           lvgl-version: ${{ matrix.lvgl-version }}
           gfx-version: ${{ matrix.gfx-version }}
@@ -356,12 +357,17 @@ jobs:
             echo "bootloader, partition table and app in one write, and deliberately ends"
             echo "there instead of spanning the whole chip."
             echo ""
-            echo "> **ESP32-S3 owners:** if you run without an SD card, your \`config.ini\` and"
-            echo "> GIFs live on the internal FFat partition at \`0x610000\` — above everything"
-            echo "> this image writes, so an update keeps them. An explicit *erase all flash*"
-            echo "> still wipes them, as does flashing a raw \`merged.bin\` from a local build,"
-            echo "> which the ESP32 core pads out across the entire flash. On the C6, settings"
-            echo "> live on the SD card and are never at risk."
+            echo "> **Running without an SD card:** your \`config.ini\` and GIFs live on the"
+            echo "> internal FFat partition — \`0x310000\` on the C6, \`0x610000\` on the S3 —"
+            echo "> above everything this image writes, so an update keeps them. An explicit"
+            echo "> *erase all flash* still wipes them, as does flashing a raw \`merged.bin\`"
+            echo "> from a local build, which the ESP32 core pads out across the entire flash."
+            echo ">"
+            echo "> **ESP32-C6, coming from v3.4.0 or earlier:** flash the \`-full.bin\`, not the"
+            echo "> \`-app.bin\`. v3.5.0 replaced the C6's partition table (3MB app + 4.9MB FFat"
+            echo "> instead of two OTA slots + SPIFFS), and only the full image writes it."
+            echo "> Settings and GIFs on the SD card are untouched; with a card inserted the"
+            echo "> first boot mirrors them onto the new FFat partition."
             echo ""
             echo "### esptool"
             echo ""
@@ -389,7 +395,7 @@ jobs:
             echo "Built from \`${GITHUB_SHA}\` with the toolchain pinned in"
             echo "\`.github/board-targets.json\`, the same file CI validates against:"
             echo ""
-            jq -r '.[] | "- **\(.name)** — core `\(."core-version")`, LVGL `\(."lvgl-version")`, GFX `\(."gfx-version")`, FastIMU `\(."fastimu-version")`\n  - `\(.fqbn)`"' \
+            jq -r '.[] | "- **\(.name)** — core `\(."core-version")`, LVGL `\(."lvgl-version")`, GFX `\(."gfx-version")`, FastIMU `\(."fastimu-version")`\n  - `\(.fqbn)`" + (if .partitions then "\n  - partition table `\(.partitions)`" else "" end)' \
               .github/board-targets.json
             echo ""
             echo "\`\`\`"

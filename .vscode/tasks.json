@@ -8,7 +8,11 @@
       "args": [
         "compile",
         "--fqbn",
-        "esp32:esp32:esp32c6:JTAGAdapter=default,CDCOnBoot=cdc,PartitionScheme=default_8MB,CPUFreq=160,FlashMode=qio,FlashFreq=80,FlashSize=8M,ZigbeeMode=default,DebugLevel=none",
+        "esp32:esp32:esp32c6:JTAGAdapter=default,CDCOnBoot=cdc,PartitionScheme=custom,CPUFreq=160,FlashMode=qio,FlashFreq=80,FlashSize=8M,ZigbeeMode=default,DebugLevel=none",
+        "--build-property",
+        "recipe.hooks.prebuild.9.pattern=/usr/bin/env bash -c \"cp -f '{build.source.path}/partitions/esp32c6-ffat-8MB.csv' '{build.path}/partitions.csv'\"",
+        "--build-property",
+        "upload.maximum_size=3145728",
         "--warnings",
         "default",
         "--output-dir",

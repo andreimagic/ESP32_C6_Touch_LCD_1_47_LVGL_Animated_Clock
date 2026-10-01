@@ -1,0 +1,22 @@
+# ESP32-C6-Touch-LCD-1.47 (8MB flash): one 3MB app slot + 4.9MB FFat.
+#
+# The C6 counterpart of the S3's app3M_fat9M_16MB: the same 3MB app at 0x10000,
+# with the rest of the chip given to a FAT partition the firmware falls back to
+# when no SD card is inserted (and mirrors the card onto when one is).
+#
+# Laid out the way the core's own "No OTA" presets are (noota_ffat, huge_app):
+# otadata stays at 0xe000 because the core's upload and merge-bin recipes always
+# write boot_app0.bin there, and app0 stays ota_0 so that boot_app0 selects it.
+# There is no app1 — the firmware has no OTA updater, and a second 3MB slot
+# would leave FFat at under 2MB.
+#
+# Applied to the C6 build only, via board-targets.json "partitions" — see
+# .github/scripts/partition-props.sh. Not named partitions.csv on purpose: the
+# core would pick that up for every board, the S3 included.
+#
+# Name,   Type, SubType,  Offset,   Size,     Flags
+nvs,      data, nvs,      0x9000,   0x5000,
+otadata,  data, ota,      0xe000,   0x2000,
+app0,     app,  ota_0,    0x10000,  0x300000,
+ffat,     data, fat,      0x310000, 0x4E0000,
+coredump, data, coredump, 0x7F0000, 0x10000,

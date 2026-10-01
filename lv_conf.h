@@ -50,8 +50,10 @@
    COLOR SETTINGS
  *====================*/
 
-/** Color depth: 1 (I1), 8 (L8), 16 (RGB565), 24 (RGB888), 32 (XRGB8888) */
-#define LV_COLOR_DEPTH 16
+/** Default color format of the display: LV_COLOR_FORMAT_I1, _L8, _RGB565,
+ *  _RGB888, _XRGB8888, ... Replaces LV_COLOR_DEPTH (deprecated in LVGL 9.6),
+ *  which LVGL now derives from this. */
+#define LV_COLOR_FORMAT_DEFAULT LV_COLOR_FORMAT_RGB565
 
 /*=========================
    STDLIB WRAPPER SETTINGS
@@ -533,8 +535,9 @@
 #define LV_USE_ASSERT_MEM_INTEGRITY 0   /**< Check the integrity of `lv_mem` after critical operations. (Slow) */
 #define LV_USE_ASSERT_OBJ           0   /**< Check the object's type and existence (e.g. not deleted). (Slow) */
 
-/** Add a custom handler when assert happens e.g. to restart MCU. */
-#define LV_ASSERT_HANDLER_INCLUDE <stdint.h>
+/** Add a custom handler when assert happens e.g. to restart MCU. A handler that
+ *  needs its own header goes in LV_ASSERT_CUSTOM_INCLUDE (with
+ *  LV_ASSERT_USE_CUSTOM_INCLUDE 1); LV_ASSERT_HANDLER_INCLUDE is deprecated. */
 #define LV_ASSERT_HANDLER while(1);     /**< Halt by default */
 
 /*-------------
@@ -807,13 +810,30 @@
 #define LV_USE_CALENDAR   1
 #if LV_USE_CALENDAR
     #define LV_CALENDAR_WEEK_STARTS_MONDAY 0
-    #if LV_CALENDAR_WEEK_STARTS_MONDAY
-        #define LV_CALENDAR_DEFAULT_DAY_NAMES {"Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"}
-    #else
-        #define LV_CALENDAR_DEFAULT_DAY_NAMES {"Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"}
-    #endif
 
-    #define LV_CALENDAR_DEFAULT_MONTH_NAMES {"January", "February", "March",  "April", "May",  "June", "July", "August", "September", "October", "November", "December"}
+    /* Day and month names, one macro each. They replace the deprecated
+     * LV_CALENDAR_DEFAULT_DAY_NAMES / _MONTH_NAMES arrays; LVGL orders the
+     * days itself from LV_CALENDAR_WEEK_STARTS_MONDAY. */
+    #define LV_MONDAY_STR    "Mo"
+    #define LV_TUESDAY_STR   "Tu"
+    #define LV_WEDNESDAY_STR "We"
+    #define LV_THURSDAY_STR  "Th"
+    #define LV_FRIDAY_STR    "Fr"
+    #define LV_SATURDAY_STR  "Sa"
+    #define LV_SUNDAY_STR    "Su"
+
+    #define LV_JANUARY_STR   "January"
+    #define LV_FEBRUARY_STR  "February"
+    #define LV_MARCH_STR     "March"
+    #define LV_APRIL_STR     "April"
+    #define LV_MAY_STR       "May"
+    #define LV_JUNE_STR      "June"
+    #define LV_JULY_STR      "July"
+    #define LV_AUGUST_STR    "August"
+    #define LV_SEPTEMBER_STR "September"
+    #define LV_OCTOBER_STR   "October"
+    #define LV_NOVEMBER_STR  "November"
+    #define LV_DECEMBER_STR  "December"
     #define LV_USE_CALENDAR_HEADER_ARROW 1
     #define LV_USE_CALENDAR_HEADER_DROPDOWN 1
     #define LV_USE_CALENDAR_CHINESE 0

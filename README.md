@@ -80,7 +80,7 @@ Two boards are supported, both from Waveshare and both built around the same
 | PSRAM | none | 8 MB OPI |
 | IMU | QMI8658 | **none** |
 | SD card slot | shares the LCD SPI bus | own dedicated SPI pins |
-| Internal filesystem | — | 9.9 MB FFat partition |
+| Internal filesystem | 4.9 MB FFat partition | 9.9 MB FFat partition |
 | Panel | 172 × 320, JD9853 (ST7789 command set) | identical |
 
 The C6 is the original target and the board this project was developed on. It
@@ -187,7 +187,7 @@ Besides the pins above it exposes the capability flags the firmware branches on:
 |---|---|---|---|
 | `BOARD_HAS_IMU` | 1 | 0 | A QMI8658 is fitted (tilt features compile in) |
 | `BOARD_HAS_JOYSTICK` | 0 | 1 | A KY-023 can stand in for the missing IMU (joystick driver and the Extra Games setting compile in) |
-| `BOARD_HAS_INTERNAL_FS` | 0 | 1 | An FFat partition exists to fall back to |
+| `BOARD_HAS_INTERNAL_FS` | 1 | 1 | An FFat partition exists to fall back to |
 | `BOARD_SD_SHARES_LCD_BUS` | 1 | 0 | The card and panel share one SPI bus |
 | `BOARD_NEW_LCD_BUS()` | `Arduino_HWSPI` | `Arduino_ESP32SPI` on HSPI | Expands to the right bus constructor |
 | `BOARD_NAME` | `"ESP32-C6-Touch-LCD-1.47"` | `"ESP32-S3-Touch-LCD-1.47"` | Printed in the boot log |
@@ -334,7 +334,7 @@ Install all libraries through **Arduino IDE → Library Manager** unless noted o
 | **FastIMU** | 1.3.0 | QMI8658 accelerometer (tilt brightness + emotion tilt) |
 | **esp_lcd_touch_axs5106l** | board-specific (included in repo) | Capacitive touch controller |
 | **SD** | built-in ESP32 (pre-install with esp32 Board) | SD card file access |
-| **FFat** | built-in ESP32 (pre-install with esp32 Board) | Internal-flash fallback storage (S3) |
+| **FFat** | built-in ESP32 (pre-install with esp32 Board) | Internal-flash fallback storage (both boards) |
 | **WiFi / WiFiMulti** | built-in ESP32 (pre-install with esp32 Board) | WiFi connection |
 
 > `SD`, `FFat`, `WiFi`, `WiFiMulti`, `SPI`, and `time.h` are part of the ESP32 Arduino core — no separate install needed.
@@ -432,7 +432,7 @@ SD root/
 The firmware picks **one** filesystem at boot and uses it for everything:
 
 1. An **SD card**, if one mounts. A card always wins.
-2. Otherwise the **internal FFat partition**, on boards where one exists (S3 only).
+2. Otherwise the **internal FFat partition** — 4.9 MB on the C6, 9.9 MB on the S3.
 
 Everything — `config.ini`, the GIFs, the web config editor — routes through that
 single choice, so the layout above is identical whichever backend is active. The
@@ -444,7 +444,7 @@ complete default one on first boot, including the `[clock]`, `[animation]` and
 without a valid config has no valid credentials either, and on internal flash the
 web UI is the only way to set them.
 
-> **A cardless S3 needs its GIFs put on flash once.** Boot the board with a card
+> **A cardless board needs its GIFs put on flash once.** Boot the board with a card
 > in the slot and the animations are mirrored onto the FFat partition
 > automatically at step `[7a]`, after which the card can come out for good. On a
 > board that has never seen a card, upload them through the
@@ -478,7 +478,7 @@ On cold boot with no WiFi, the firmware reads the last line and restores the RTC
 
 > **The log is SD-card-only by design**, because it grows without bound and the
 > internal flash partition is not the place for that. The consequence is that a
-> **cardless S3 cannot restore its clock** from a log — with no WiFi it starts
+> **cardless board cannot restore its clock** from a log — with no WiFi it starts
 > with an unset RTC and shows `Status` instead of the date until the time is set
 > from the web UI or the clock editor.
 
@@ -829,7 +829,7 @@ Three deliberate restrictions:
 
 Nothing is protected by name — with the PIN you can delete `config.ini`. That is
 recoverable: `bootstrap_config()` writes a fresh default on the next boot, though
-on a cardless S3 you would have to re-enter WiFi credentials over the AP.
+on a cardless board you would have to re-enter WiFi credentials over the AP.
 
 > **Uploading to internal flash stalls the CPU.** Writing FFat means writing the
 > same SPI flash the firmware executes from, which briefly disables the
@@ -897,7 +897,7 @@ The point is that you can watch it happen. Open a text editor, tap a picture on 
 
 Three samples ship in `sd_card_root/scripts/`: **`ASCII_house.art`**, **`ASCII_hut.art`** and **`ASCII_penguin.art`**. Copy the folder to the card, or upload the files through the [file manager](#file-manager) on a cardless board.
 
-**Where scripts live.** `/scripts` on whichever backend is active (SD card, or internal flash on a cardless S3). The directory is created automatically at boot, so the [file manager](#file-manager) always has somewhere to upload to.
+**Where scripts live.** `/scripts` on whichever backend is active (SD card, or internal flash on a cardless board). The directory is created automatically at boot, so the [file manager](#file-manager) always has somewhere to upload to.
 
 > **Scripts do not migrate from card to internal flash.** Boot provisioning mirrors GIFs and `config.ini` only, so pulling the card out takes the art with it. To put art on flash: **remove the card**, boot from flash, then upload the files at `/files`. Uploading while a card is inserted writes to the *card*, since the file manager follows whichever backend is live — so with the card still in, you would be filling the storage you are about to remove. There is **no extension filter** — every file in the directory is listed, so `.txt`, `.art` and extensionless files all work. Subdirectories are ignored; the listing is one level deep and caps at 24 entries, showing `4/24+` when more are present.
 
@@ -1371,11 +1371,22 @@ You do not need to erase the flash first — the image replaces the bootloader,
 partition table and app in a single write.
 
 Your settings survive it. On a card they live in `/config.ini`, outside flash
-entirely. On a cardless S3 they sit on the internal FFat partition at
-`0x610000`, and the release image deliberately **ends just after the app**
-(around `0x1ba000`), so nothing above that offset is touched.
+entirely. On a cardless board they sit on the internal FFat partition — at
+`0x310000` on the C6 and `0x610000` on the S3 — and the release image
+deliberately **ends just after the app** (around `0x1ba000`), so nothing above
+that offset is touched.
 
-> **What does still erase FFat**, taking a cardless S3's config and GIFs with it:
+> **Upgrading a C6 from v3.4.0 or earlier: flash the `-full.bin`, not the
+> `-app.bin`.** v3.5.0 gave the C6 a new partition table — one 3 MB app slot and
+> a 4.9 MB FFat partition, replacing two OTA slots and 1.5 MB of SPIFFS — and
+> only the full image writes it. Anything stored in the old SPIFFS partition is
+> discarded (the firmware never used it). SD-card content, `config.ini` on the
+> card included, is unaffected: with a card inserted, the first boot mirrors the
+> GIFs and `config.ini` onto FFat, after which the card can come out. Without a
+> card, FFat starts empty and the board shows the usual "GIF not found" and
+> default-config fallbacks until you add them.
+
+> **What does still erase FFat**, taking a cardless board's config and GIFs with it:
 > **Erase All Flash Before Sketch Upload** (keep it *Disabled*), **Burn
 > Bootloader**, and any image that spans the whole chip.
 >
@@ -1430,7 +1441,7 @@ esptool --chip esp32s3 write-flash 0x0 firmware-<version>-esp32s3-full.bin
    | **USB Mode** | — | **`USB-OTG (TinyUSB)`** |
    | **PSRAM** | — | **`OPI PSRAM`** |
    | **Flash Size** | `8MB (64Mb)` | `16MB (128Mb)` |
-   | **Partition Scheme** | `8MB with spiffs (3MB APP/1.5MB SPIFFS)` | `16M Flash (3MB APP/9.9MB FATFS)` |
+   | **Partition Scheme** | **`Custom`** — see below | `16M Flash (3MB APP/9.9MB FATFS)` |
    | CPU Frequency | `160MHz (WiFi)` _(recommended)_ | `240MHz (WiFi)` |
    | Flash Frequency | `80MHz` | _(no such menu — see below)_ |
    | Flash Mode | `QIO` | `QIO 80MHz` |
@@ -1442,6 +1453,20 @@ esptool --chip esp32s3 write-flash 0x0 firmware-<version>-esp32s3-full.bin
 
    > **USB CDC On Boot must be Enabled on the C6** — without it the Serial Monitor will not receive any output and the device may not be recognised on the port.
    > **Flash Size and Partition Scheme must match** — the 3MB APP partition is required to fit the firmware with LVGL v9 and all libraries.
+
+   > **C6 partition table.** No partition scheme in the C6 menu pairs a 3 MB app
+   > with a FAT partition on 8 MB, so the table lives in this repository, at
+   > `partitions/esp32c6-ffat-8MB.csv`: one 3 MB app slot at `0x10000` and a
+   > 4.9 MB FFat partition at `0x310000`. To build the C6 in the IDE, select
+   > **Partition Scheme = `Custom`** and copy that file to the sketch folder as
+   > **`partitions.csv`**. With `Custom` and no `partitions.csv` the build fails
+   > outright, which is the intent.
+   >
+   > **Remove `partitions.csv` again before building the S3.** The core gives a
+   > sketch-folder `partitions.csv` priority over the menu on every board, so
+   > left in place it would give the S3 the C6's 8 MB table and lose its 9.9 MB
+   > FFat. `make` and CI never create that file: they apply the CSV to the C6
+   > build only, through `.github/scripts/partition-props.sh`.
 
    Four S3-specific traps, all of which change the produced binary:
 
@@ -1466,9 +1491,10 @@ esptool --chip esp32s3 write-flash 0x0 firmware-<version>-esp32s3-full.bin
    > **The S3 has no Flash Frequency menu.** It is folded into the Flash Mode
    > label, so `QIO 80MHz` is one choice rather than two settings.
 
-   > **Keep Erase All Flash Before Sketch Upload Disabled** on the S3. A normal
+   > **Keep Erase All Flash Before Sketch Upload Disabled** on both boards. A normal
    > upload writes only the bootloader, partition table and app (up to
-   > ~`0x1a8fff`), leaving the FFat partition at `0x610000` intact. Erasing wipes
+   > ~`0x1a8fff`), leaving the FFat partition (`0x310000` on the C6, `0x610000`
+   > on the S3) intact. Erasing wipes
    > the config and GIFs stored there, which on a cardless board is everything.
 
 5. Set the correct **Port** (e.g. `COM3` on Windows, `/dev/ttyUSB0` on Linux/macOS)
@@ -1515,7 +1541,7 @@ table in Option B — and the pinned versions are read from
 from. The trim is done by
 [`build-full-bin.sh`](.devcontainer/scripts/build-full-bin.sh), which
 reproduces the release pipeline's step, so the image ends just after the app
-and a cardless S3's FFat survives the flash.
+and a cardless board's FFat survives the flash.
 
 > **Flash the `dist/` file, not `build-out/<board>/*.merged.bin`.** The
 > compile also leaves the core's untrimmed `merged.bin` there, which spans the
@@ -1664,7 +1690,10 @@ which takes a few seconds — expect a one-off pause on the very first cardless 
 | **S3:** compile error `unsupported target` | Wrong board selected in the IDE | `board_config.h` only knows ESP32-C6 and ESP32-S3; pick `ESP32S3 Dev Module` |
 | **S3:** no serial output at all | `USB Mode` set to `Hardware CDC and JTAG` | Set **USB Mode = `USB-OTG (TinyUSB)`** and re-upload — see [Option B](#option-b--build-from-source) |
 | **S3:** `PSRAM not enabled` on screen, or `[GIF] ... PSRAM is not enabled` in the serial log | `PSRAM` left `Disabled` | Set **PSRAM = `OPI PSRAM`** and re-upload; the boot log must then say `PSRAM yes`. Do **not** resize the GIF — the asset is fine, the build was not |
-| **S3:** config and GIFs vanished after upload | **Erase All Flash Before Sketch Upload** was Enabled | Keep it `Disabled`; it wipes the FFat partition holding both |
+| Config and GIFs vanished after upload (cardless board) | **Erase All Flash Before Sketch Upload** was Enabled | Keep it `Disabled`; it wipes the FFat partition holding both |
+| **C6:** build fails with no `partitions.csv` | Partition Scheme is `Custom` but the table wasn't copied in | Copy `partitions/esp32c6-ffat-8MB.csv` to the sketch folder as `partitions.csv` — see [Option B](#option-b--build-from-source) |
+| **S3:** FFat missing or only ~4.9 MB after a build | A C6 `partitions.csv` was left in the sketch folder | Delete `partitions.csv` and rebuild the S3; it uses the menu's `16M Flash (3MB APP/9.9MB FATFS)` |
+| **C6:** `FFat mount failed` right after upgrading | Only the `-app.bin` was flashed, so the old SPIFFS table is still in place | Flash the `-full.bin` at `0x0` — it writes the new partition table |
 | **S3:** three games missing from the carousel | Working as intended — no IMU | Tennis Letters, Letters Rain and Snake Letters steer only by tilt. Fit a [KY-023 joystick](#ky-023-joystick-s3-only) and turn on *Extra Games* to get them back |
 | **S3:** joystick does nothing | *Extra Games* still off, so no pin is claimed | Long-press the analog clock → page right to **Extra Games** → tap. Or set `[joystick] extra_games = true` in `config.ini` |
 | **S3:** joystick moves the wrong way on one axis | The module is rotated relative to the firmware's assumption | Set `[joystick] invert_x` or `invert_y` to `true` — no rewiring needed |
@@ -1768,7 +1797,8 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v3.3.0 | ✅ released | **ToneQuest** — a Simon-says tone-memory game, ported from the [Arduino original](https://github.com/andreimagic/ToneQuest_Game) where a joystick picked the directions and four LEDs echoed them. The joystick is now the IMU and the LEDs are four "sunset" domes rising from the screen edges, but the direction→tone table is the original one note for note (UP D4, DOWN C4, LEFT E4, RIGHT F4). Every game opens on a **bubble level**: hold the ball inside the centre ring for 700 ms and the round begins. Then watch the sequence play back — each step lights its edge as a semicircle that fades out like a setting sun — and roll the ball into the same walls in the same order, coming back near the centre between moves the way the original joystick sprang back. Level 1 is four moves and every level adds one, revealed as a prefix of one pattern drawn per game, so level N is always level N−1 plus one new move. There is no win state: the score *is* the level you reach, persisted as `[tonequest] high_score` and tunable via `start_moves` / `flash_ms` / `gap_ms` / `tilt_percent`. Sits between Bingo! and the sounds toggle. Unlike the other tilt games it does **not** hide where no accelerometer answers &mdash; it takes four-way **swipes** instead, with the ball flying to the wall it was sent to so the screen still reads the same, making it the first app here that swaps input method per board rather than disappearing |
 | v3.3.1 | ✅ released | **Improvements** - Ensure GIFs and Scripts folders are created at Boot, allowing users to upload files from the Web interface on a fresh device; Exiting the configuration carousel items with a long-press will now Save and Exit directly to the Clock view |
 | v3.3.2 | ✅ released | **Bugfix** - Fix boot panic in ensure_dir() when no storage is mounted |
-| v3.4.0 | 🚀 new | **KY-023 joystick (S3)** — an optional £2 analog joystick on the expansion header stands in for the IMU the S3 does not have, bringing **Tennis Letters**, **Letters Rain**, **Snake Letters** and **ToneQuest** back to that board. VRy/VRx on GPIO 9/10 (ADC1, so the WiFi radio cannot disturb them) and SW on GPIO 8, powered from 3V3. Opt-in via a new **Extra Games** toggle in the USB carousel, or `[joystick] extra_games` in `config.ini`: until it is on, no pin is claimed, no ADC is read and the four games stay hidden. The resting centre is measured at boot rather than assumed, and each half-travel is scaled against its own span, so an off-centre stick still reaches both walls. Two control schemes, both reusing the games' existing speeds — **direction** (push and it slides, what the tilt does today) and **position** (deflection sets and holds the object, what the bubble level does today) — selectable per paddle game with `paddle_mode`; Snake is four-way direction and ToneQuest is position on both axes, keeping its levelling gate, its tones and its scoring untouched. Tunable via `dead_zone_percent` / `edge_percent`, with `invert_x` / `invert_y` for a module mounted rotated. Left/right on the stick pages the apps carousel (with auto-repeat while held); the button enters the highlighted item, pauses and resumes Tennis Letters, Letters Rain and Snake Letters, and restarts a finished game. The C6 compiles none of it: `BOARD_HAS_JOYSTICK` is 0 there, so the setting does not exist rather than merely being hidden |
+| v3.4.0 | ✅ released | **KY-023 joystick (S3)** — an optional £2 analog joystick on the expansion header stands in for the IMU the S3 does not have, bringing **Tennis Letters**, **Letters Rain**, **Snake Letters** and **ToneQuest** back to that board. VRy/VRx on GPIO 9/10 (ADC1, so the WiFi radio cannot disturb them) and SW on GPIO 8, powered from 3V3. Opt-in via a new **Extra Games** toggle in the USB carousel, or `[joystick] extra_games` in `config.ini`: until it is on, no pin is claimed, no ADC is read and the four games stay hidden. The resting centre is measured at boot rather than assumed, and each half-travel is scaled against its own span, so an off-centre stick still reaches both walls. Two control schemes, both reusing the games' existing speeds — **direction** (push and it slides, what the tilt does today) and **position** (deflection sets and holds the object, what the bubble level does today) — selectable per paddle game with `paddle_mode`; Snake is four-way direction and ToneQuest is position on both axes, keeping its levelling gate, its tones and its scoring untouched. Tunable via `dead_zone_percent` / `edge_percent`, with `invert_x` / `invert_y` for a module mounted rotated. Left/right on the stick pages the apps carousel (with auto-repeat while held); the button enters the highlighted item, pauses and resumes Tennis Letters, Letters Rain and Snake Letters, and restarts a finished game. The C6 compiles none of it: `BOARD_HAS_JOYSTICK` is 0 there, so the setting does not exist rather than merely being hidden |
+| v3.5.0 | 🚀 new | **Internal flash on the ESP32-C6** — the C6 gets the same SD-primary, FFat-fallback storage the S3 has. A new partition table (`partitions/esp32c6-ffat-8MB.csv`: one 3 MB app slot plus a 4.9 MB FFat partition, replacing two OTA slots and an unused 1.5 MB SPIFFS) lets a C6 run with no card: GIFs and `config.ini` are mirrored from the card onto flash at boot, and the board falls back to them once the card is removed. Applied to the C6 build only, by CI, `make` and the release pipeline alike. **Upgrading a C6 needs the `-full.bin`** — the `-app.bin` alone does not write the new table. The S3 is unchanged |
 
 ## License
 

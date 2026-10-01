@@ -1351,7 +1351,7 @@ static void provision_internal_flash()
   lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(scr, 0, 0);
   lv_obj_set_style_radius(scr, 0, 0);
-  lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(scr, false);
 
   lv_obj_t *title = lv_label_create(scr);
   lv_label_set_text(title, LV_SYMBOL_DOWNLOAD "  Copying to internal flash");
@@ -3569,7 +3569,7 @@ static void show_wifi_detail_popup()
   lv_obj_set_style_border_width(wifi_detail_popup, 1, 0);
   lv_obj_set_style_radius(wifi_detail_popup, 8, 0);
   lv_obj_set_style_pad_all(wifi_detail_popup, 0, 0);
-  lv_obj_clear_flag(wifi_detail_popup, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(wifi_detail_popup, false);
   // Tap closes only the popup, not the whole status screen
   lv_obj_add_event_cb(wifi_detail_popup, [](lv_event_t *ev) {
     if (lv_event_get_code(ev) != LV_EVENT_CLICKED) return;
@@ -3736,7 +3736,7 @@ static void countdown_tick_cb(lv_timer_t * /*t*/)
     if (countdown_timer) { lv_timer_del(countdown_timer); countdown_timer=nullptr; }
     Serial.println("[TIMER] Done.");
     // Hide the 00:00 label immediately — GIF animation takes over
-    if (home_timer_lbl) lv_obj_add_flag(home_timer_lbl, LV_OBJ_FLAG_HIDDEN);
+    if (home_timer_lbl) lv_obj_set_hidden(home_timer_lbl, true);
     close_scheduled_gif();  // evict any running scheduled animation
     show_gif_fullscreen(timer_gif_path());
     buzzer_start_timer();
@@ -3755,7 +3755,7 @@ static void timer_start_countdown()
   if (home_timer_lbl) {
     int m=countdown_sec/60, s=countdown_sec%60;
     lv_label_set_text_fmt(home_timer_lbl, LV_SYMBOL_STOP " %02d:%02d",m,s);
-    lv_obj_clear_flag(home_timer_lbl, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(home_timer_lbl, false);
   }
 }
 
@@ -3763,7 +3763,7 @@ static void timer_stop()
 {
   if (countdown_timer) { lv_timer_del(countdown_timer); countdown_timer=nullptr; }
   timer_running = false;
-  if (home_timer_lbl) lv_obj_add_flag(home_timer_lbl, LV_OBJ_FLAG_HIDDEN);
+  if (home_timer_lbl) lv_obj_set_hidden(home_timer_lbl, true);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -3978,7 +3978,7 @@ static void show_shutdown_popup()
   lv_obj_set_style_border_width(shutdown_popup, 1, 0);
   lv_obj_set_style_radius(shutdown_popup, 8, 0);
   lv_obj_set_style_pad_all(shutdown_popup, 0, 0);
-  lv_obj_clear_flag(shutdown_popup, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(shutdown_popup, false);
 
   shutdown_cntdown_lbl = lv_label_create(shutdown_popup);
   lv_label_set_text_fmt(shutdown_cntdown_lbl,
@@ -4530,7 +4530,7 @@ static lv_obj_t *make_overlay(lv_color_t bg_color)
   lv_obj_set_style_border_width(cont, 0, 0);
   lv_obj_set_style_pad_all(cont, 0, 0);
   lv_obj_set_style_radius(cont, 0, 0);
-  lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(cont, false);
   lv_obj_add_event_cb(cont, overlay_close_event_cb, LV_EVENT_CLICKED, nullptr);
   return cont;
 }
@@ -4542,7 +4542,7 @@ static void add_back_hint(lv_obj_t *parent)
   lv_obj_set_style_text_color(hint, lv_color_make(120, 120, 120), 0);
   lv_obj_set_style_text_opa(hint, LV_OPA_50, 0);
   lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
-  lv_obj_add_flag(hint, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  lv_obj_set_ignore_layout(hint, true);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -4638,7 +4638,7 @@ static void show_gif_fullscreen(const char *path)
       lv_image_set_scale(gif, 512);                 // 256=1x  512=2x
       lv_obj_align(gif, LV_ALIGN_CENTER, 0, 0);
       lv_obj_set_style_pad_all(gif, 0, 0);
-      lv_obj_add_flag(gif, LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_set_clickable(gif, true);
       lv_obj_add_event_cb(gif, overlay_close_event_cb, LV_EVENT_CLICKED, nullptr);
     }
   } else {
@@ -4756,7 +4756,7 @@ static void show_status_screen(void)
   lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(title, lv_color_make(180, 180, 220), 0);
   lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
-  lv_obj_add_flag(title, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  lv_obj_set_ignore_layout(title, true);
 
   // ── Separator ─────────────────────────────────────────────────────────────
   lv_obj_t *sep = lv_obj_create(overlay_cont);
@@ -4766,7 +4766,7 @@ static void show_status_screen(void)
   lv_obj_set_style_border_width(sep, 0, 0);
   lv_obj_set_style_radius(sep, 0, 0);
   lv_obj_align(sep, LV_ALIGN_TOP_MID, 0, 30);
-  lv_obj_add_flag(sep, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  lv_obj_set_ignore_layout(sep, true);
 
   // ── Row 1: WiFi  (y = -28 from mid = ~58px from top) ─────────────────────
   lv_obj_t *wifi_icon = lv_label_create(overlay_cont);
@@ -4779,7 +4779,7 @@ static void show_status_screen(void)
   else                                          wifi_color = lv_color_make(200, 80, 80);   // red
   lv_obj_set_style_text_color(wifi_icon, wifi_color, 0);
   lv_obj_align(wifi_icon, LV_ALIGN_LEFT_MID, 20, -28);
-  lv_obj_add_flag(wifi_icon, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  lv_obj_set_ignore_layout(wifi_icon, true);
 
   lv_obj_t *wifi_val = lv_label_create(overlay_cont);
   if (wifiMode == WM_STA && wifiConnected) {
@@ -4809,7 +4809,7 @@ static void show_status_screen(void)
   }
   lv_obj_set_style_text_color(wifi_val, wifi_color, 0);
   lv_obj_align(wifi_val, LV_ALIGN_LEFT_MID, 44, -28);
-  lv_obj_add_flag(wifi_val, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  lv_obj_set_ignore_layout(wifi_val, true);
 
   // Long-press anywhere on the status overlay shows the WiFi detail popup
   // (SSID / IP / URL) — mirrors how the battery screen shows the shutdown popup.
@@ -4835,20 +4835,20 @@ static void show_status_screen(void)
   lv_label_set_text(ntp_icon, LV_SYMBOL_REFRESH);
   lv_obj_set_style_text_color(ntp_icon, ntp_col, 0);
   lv_obj_align(ntp_icon, LV_ALIGN_LEFT_MID, 20, 0);
-  lv_obj_add_flag(ntp_icon, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  lv_obj_set_ignore_layout(ntp_icon, true);
 
   lv_obj_t *ntp_val = lv_label_create(overlay_cont);
   lv_label_set_text(ntp_val, ntp_txt);
   lv_obj_set_style_text_color(ntp_val, ntp_col, 0);
   lv_obj_align(ntp_val, LV_ALIGN_LEFT_MID, 44, 0);
-  lv_obj_add_flag(ntp_val, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  lv_obj_set_ignore_layout(ntp_val, true);
 
   // ── Row 3: Brightness  (y = +28 from mid = ~114px from top) ──────────────
   label_brightness = lv_label_create(overlay_cont);
   brightness_label_refresh(brightnessPercent);
   lv_obj_set_style_text_color(label_brightness, lv_color_make(200, 200, 100), 0);
   lv_obj_align(label_brightness, LV_ALIGN_LEFT_MID, 20, 28);
-  lv_obj_add_flag(label_brightness, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  lv_obj_set_ignore_layout(label_brightness, true);
 
   // Swipe left/right to adjust brightness — available on both boards.
   //
@@ -4859,7 +4859,7 @@ static void show_status_screen(void)
   // the event to the screen, whose parent is NULL. Clearing it makes the overlay
   // the end of the walk, which also means a gesture starting on a child (the
   // separator is clickable, being an lv_obj) still lands here.
-  lv_obj_clear_flag(overlay_cont, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_set_gesture_bubble(overlay_cont, false);
   lv_obj_add_event_cb(overlay_cont, brightness_swipe_cb, LV_EVENT_GESTURE, nullptr);
 
   // Start tilt poll timer — 400 ms, runs while this screen is open. Skipped
@@ -4889,7 +4889,7 @@ static void show_battery_screen(void)
   lv_obj_set_style_text_font(label_percent, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(label_percent, lv_color_make(180, 180, 220), 0);
   lv_obj_align(label_percent, LV_ALIGN_TOP_MID, 0, 8);
-  lv_obj_add_flag(label_percent, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  lv_obj_set_ignore_layout(label_percent, true);
 
   lv_obj_t *sep = lv_obj_create(overlay_cont);
   lv_obj_set_size(sep, LV_PCT(85), 1);
@@ -4898,49 +4898,49 @@ static void show_battery_screen(void)
   lv_obj_set_style_border_width(sep, 0, 0);
   lv_obj_set_style_radius(sep, 0, 0);
   lv_obj_align(sep, LV_ALIGN_TOP_MID, 0, 30);
-  lv_obj_add_flag(sep, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  lv_obj_set_ignore_layout(sep, true);
 
   // ── Row 1: Voltage ────────────────────────────────────────────────────────
   lv_obj_t *v_key = lv_label_create(overlay_cont);
   lv_label_set_text(v_key, "Voltage");
   lv_obj_set_style_text_color(v_key, lv_color_make(140, 140, 180), 0);
   lv_obj_align(v_key, LV_ALIGN_LEFT_MID, 24, -22);
-  lv_obj_add_flag(v_key, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  lv_obj_set_ignore_layout(v_key, true);
 
   label_voltage = lv_label_create(overlay_cont);
   lv_label_set_text(label_voltage, "--- V");
   lv_obj_set_style_text_font(label_voltage, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(label_voltage, lv_color_make(100, 220, 120), 0);
   lv_obj_align(label_voltage, LV_ALIGN_RIGHT_MID, -24, -22);
-  lv_obj_add_flag(label_voltage, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  lv_obj_set_ignore_layout(label_voltage, true);
 
   // ── Row 2: ADC raw ────────────────────────────────────────────────────────
   lv_obj_t *adc_key = lv_label_create(overlay_cont);
   lv_label_set_text(adc_key, "ADC raw");
   lv_obj_set_style_text_color(adc_key, lv_color_make(140, 140, 180), 0);
   lv_obj_align(adc_key, LV_ALIGN_LEFT_MID, 24, 4);
-  lv_obj_add_flag(adc_key, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  lv_obj_set_ignore_layout(adc_key, true);
 
   label_adc_raw = lv_label_create(overlay_cont);
   lv_label_set_text(label_adc_raw, "---");
   lv_obj_set_style_text_font(label_adc_raw, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(label_adc_raw, lv_color_white(), 0);
   lv_obj_align(label_adc_raw, LV_ALIGN_RIGHT_MID, -24, 4);
-  lv_obj_add_flag(label_adc_raw, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  lv_obj_set_ignore_layout(label_adc_raw, true);
 
   // ── Row 3: Firmware version ──────────────────────────────────────────────
   lv_obj_t *fw_key = lv_label_create(overlay_cont);
   lv_label_set_text(fw_key, "Firmware");
   lv_obj_set_style_text_color(fw_key, lv_color_make(140, 140, 180), 0);
   lv_obj_align(fw_key, LV_ALIGN_LEFT_MID, 24, 30);
-  lv_obj_add_flag(fw_key, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  lv_obj_set_ignore_layout(fw_key, true);
 
   lv_obj_t *fw_val = lv_label_create(overlay_cont);
   lv_label_set_text(fw_val, FW_VERSION);
   lv_obj_set_style_text_font(fw_val, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(fw_val, lv_color_white(), 0);
   lv_obj_align(fw_val, LV_ALIGN_RIGHT_MID, -24, 30);
-  lv_obj_add_flag(fw_val, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  lv_obj_set_ignore_layout(fw_val, true);
 
   // ── Row 4: Power-off hint ─────────────────────────────────────────────────
   lv_obj_t *pwr_hint = lv_label_create(overlay_cont);
@@ -4948,7 +4948,7 @@ static void show_battery_screen(void)
   lv_obj_set_style_text_color(pwr_hint, lv_color_make(160, 100, 100), 0);
   lv_obj_set_style_text_opa(pwr_hint, LV_OPA_70, 0);
   lv_obj_align(pwr_hint, LV_ALIGN_LEFT_MID, 24, 56);
-  lv_obj_add_flag(pwr_hint, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  lv_obj_set_ignore_layout(pwr_hint, true);
 
   // Long-press triggers the 5-second shutdown countdown popup
   lv_obj_add_event_cb(overlay_cont, battery_longpress_cb,
@@ -5063,7 +5063,7 @@ static lv_obj_t *se_zone(lv_obj_t *p,int x,int y,int w,int h,lv_event_cb_t cb)
   lv_obj_set_style_bg_opa(z,LV_OPA_TRANSP,0);
   lv_obj_set_style_border_width(z,0,0); lv_obj_set_style_pad_all(z,0,0);
   lv_obj_set_style_radius(z,0,0); lv_obj_set_style_shadow_width(z,0,0);
-  lv_obj_clear_flag(z,LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(z, false);
   lv_obj_add_event_cb(z,cb,LV_EVENT_PRESSED,nullptr);
   lv_obj_add_event_cb(z,modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
   return z;
@@ -5150,7 +5150,7 @@ static void open_clock_editor()
   lv_obj_set_style_border_width(editor_cont,0,0);
   lv_obj_set_style_pad_all(editor_cont,0,0);
   lv_obj_set_style_radius(editor_cont,0,0);
-  lv_obj_clear_flag(editor_cont,LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(editor_cont, false);
   lv_obj_add_event_cb(editor_cont,modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
 
   // ── Layout constants ────────────────────────────────────────────────────────
@@ -5174,8 +5174,8 @@ static void open_clock_editor()
     lv_obj_set_size(cont,w,h); lv_obj_set_pos(cont,x,y);
     lv_obj_set_style_bg_opa(cont,LV_OPA_TRANSP,0);
     lv_obj_set_style_border_width(cont,0,0); lv_obj_set_style_pad_all(cont,0,0);
-    lv_obj_set_style_radius(cont,0,0); lv_obj_clear_flag(cont,LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(cont,LV_OBJ_FLAG_CLICKABLE);   // decorative only — never eat a touch
+    lv_obj_set_style_radius(cont,0,0); lv_obj_set_scrollable(cont, false);
+    lv_obj_set_clickable(cont, false);   // decorative only — never eat a touch
     return cont;
   };
   auto mkarr=[&](int x,int w,int y,const char*s,bool small){
@@ -5228,7 +5228,7 @@ static void open_clock_editor()
   lv_obj_set_style_bg_color(div,lv_color_make(50,60,100),0);
   lv_obj_set_style_bg_opa(div,LV_OPA_COVER,0);
   lv_obj_set_style_border_width(div,0,0); lv_obj_set_style_radius(div,0,0);
-  lv_obj_clear_flag(div,LV_OBJ_FLAG_CLICKABLE);   // sits inside the HH/mm ▼ zone
+  lv_obj_set_clickable(div, false);   // sits inside the HH/mm ▼ zone
 
   // ── Date row ─────────────────────────────────────────────────────────────
   lv_obj_t*dc=mkcont(DDX,DDW,DY,DH);
@@ -5301,7 +5301,7 @@ static void open_editor(int h,int m,bool enabled,bool show_toggle)
   lv_obj_set_style_border_width(editor_cont,0,0);
   lv_obj_set_style_pad_all(editor_cont,0,0);
   lv_obj_set_style_radius(editor_cont,0,0);
-  lv_obj_clear_flag(editor_cont,LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(editor_cont, false);
   lv_obj_add_event_cb(editor_cont,modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
 
   const int VY=54,VH=52,AH=20;
@@ -5312,7 +5312,7 @@ static void open_editor(int h,int m,bool enabled,bool show_toggle)
     lv_obj_set_size(cont,w,h2); lv_obj_set_pos(cont,x,y);
     lv_obj_set_style_bg_opa(cont,LV_OPA_TRANSP,0);
     lv_obj_set_style_border_width(cont,0,0); lv_obj_set_style_pad_all(cont,0,0);
-    lv_obj_set_style_radius(cont,0,0); lv_obj_clear_flag(cont,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_radius(cont,0,0); lv_obj_set_scrollable(cont, false);
     return cont;
   };
   auto mkarr=[&](int x,int w,int y,const char*s){
@@ -5396,7 +5396,7 @@ static void open_wifi_editor()
   lv_obj_set_style_border_width(editor_cont,0,0);
   lv_obj_set_style_pad_all(editor_cont,0,0);
   lv_obj_set_style_radius(editor_cont,0,0);
-  lv_obj_clear_flag(editor_cont,LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(editor_cont, false);
   lv_obj_add_event_cb(editor_cont,modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
 
   // Title
@@ -5495,9 +5495,9 @@ static void close_alarm_editor()
     if (cfg.alarm_enabled) {
       lv_label_set_text_fmt(home_bell_lbl,LV_SYMBOL_BELL " %02d:%02d",
                             cfg.alarm_hour,cfg.alarm_minute);
-      lv_obj_clear_flag(home_bell_lbl,LV_OBJ_FLAG_HIDDEN);
+      lv_obj_set_hidden(home_bell_lbl, false);
     } else {
-      lv_obj_add_flag(home_bell_lbl,LV_OBJ_FLAG_HIDDEN);
+      lv_obj_set_hidden(home_bell_lbl, true);
     }
   }
 }
@@ -5650,7 +5650,7 @@ static void carousel_build()
     lv_obj_set_style_bg_opa(z,LV_OPA_TRANSP,0);
     lv_obj_set_style_border_width(z,0,0); lv_obj_set_style_pad_all(z,0,0);
     lv_obj_set_style_radius(z,0,0); lv_obj_set_style_shadow_width(z,0,0);
-    lv_obj_clear_flag(z,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(z, false);
     lv_obj_add_event_cb(z,carousel_tap_cb,LV_EVENT_CLICKED,nullptr);
     lv_obj_add_event_cb(z,modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
   }
@@ -5688,7 +5688,7 @@ static void show_carousel(void)
   lv_obj_set_style_border_width(modal_cont,0,0);
   lv_obj_set_style_pad_all(modal_cont,0,0);
   lv_obj_set_style_radius(modal_cont,0,0);
-  lv_obj_clear_flag(modal_cont,LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(modal_cont, false);
   alarm_cont=modal_cont;  // keep existing guards working
   carousel_build();
 }
@@ -5703,9 +5703,9 @@ static void update_home_bell()
   if (cfg.alarm_enabled) {
     lv_label_set_text_fmt(home_bell_lbl, LV_SYMBOL_BELL " %02d:%02d",
                           cfg.alarm_hour, cfg.alarm_minute);
-    lv_obj_clear_flag(home_bell_lbl, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(home_bell_lbl, false);
   } else {
-    lv_obj_add_flag(home_bell_lbl, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(home_bell_lbl, true);
   }
 }
 
@@ -5719,7 +5719,7 @@ static void clock_face_show(lv_timer_t *t)
   lv_timer_del(t);
 
   if (home_hello_lbl) {
-    lv_obj_add_flag(home_hello_lbl, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(home_hello_lbl, true);
     home_hello_lbl = nullptr;
   }
 
@@ -5745,7 +5745,7 @@ static void clock_face_show(lv_timer_t *t)
   lv_obj_set_style_text_font(home_timer_lbl,&lv_font_montserrat_14,0);
   lv_obj_set_style_text_color(home_timer_lbl,lv_color_make(100,200,255),0);
   lv_obj_align(home_timer_lbl,LV_ALIGN_BOTTOM_LEFT,8,-4);
-  if (!timer_running) lv_obj_add_flag(home_timer_lbl,LV_OBJ_FLAG_HIDDEN);
+  if (!timer_running) lv_obj_set_hidden(home_timer_lbl, true);
 
   // ── Bell icon (bottom-right, shown only when alarm is enabled) ──────────
   home_bell_lbl = lv_label_create(lv_scr_act());
@@ -6168,7 +6168,7 @@ static void math_btn_cb(lv_event_t *e)
     lv_obj_set_style_bg_opa(math_cont, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(math_cont, 0, 0);
     lv_obj_set_style_pad_all(math_cont, 0, 0);
-    lv_obj_clear_flag(math_cont, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(math_cont, false);
     lv_obj_t *xl = lv_label_create(math_cont);
     lv_label_set_text(xl, "X");
     lv_obj_set_style_text_font(xl, &lv_font_montserrat_48, 0);
@@ -6202,7 +6202,7 @@ static void show_math_challenge()
   lv_obj_set_style_border_width(math_cont, 2, 0);
   lv_obj_set_style_radius(math_cont, 6, 0);
   lv_obj_set_style_pad_all(math_cont, 0, 0);
-  lv_obj_clear_flag(math_cont, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(math_cont, false);
 
   lv_obj_t *title = lv_label_create(math_cont);
   lv_label_set_text(title, "Solve to enter:");
@@ -6293,7 +6293,7 @@ static lv_obj_t *app_tapzone(lv_obj_t *p, lv_event_cb_t cb)
   lv_obj_set_size(z, 320, 172); lv_obj_set_pos(z, 0, 0);
   lv_obj_set_style_bg_opa(z, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(z, 0, 0); lv_obj_set_style_pad_all(z, 0, 0);
-  lv_obj_set_style_radius(z, 0, 0); lv_obj_clear_flag(z, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_radius(z, 0, 0); lv_obj_set_scrollable(z, false);
   if (cb) lv_obj_add_event_cb(z, cb, LV_EVENT_CLICKED, nullptr);
   lv_obj_add_event_cb(z, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
   return z;
@@ -6917,8 +6917,8 @@ static lv_obj_t *metro_btn(lv_obj_t *p, int x, int y, int w, int h,
   lv_obj_set_style_border_width(btn, 1, 0);
   lv_obj_set_style_radius(btn, 6, 0);
   lv_obj_set_style_pad_all(btn, 0, 0);
-  lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_scrollable(btn, false);
+  lv_obj_set_clickable(btn, true);
   if (cb) lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, ud);
   lv_obj_add_event_cb(btn, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
   lv_obj_t *lbl = lv_label_create(btn);
@@ -7034,7 +7034,8 @@ static void metro_build_ui()
     lv_obj_set_style_radius(dot, 6, 0);
     lv_obj_set_style_border_width(dot, 0, 0);
     lv_obj_set_style_pad_all(dot, 0, 0);
-    lv_obj_clear_flag(dot, (lv_obj_flag_t)(LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE));
+    lv_obj_set_scrollable(dot, false);
+    lv_obj_set_clickable(dot, false);
     metro_dots[i] = dot;
     dx += DW + D_GAP;
   }
@@ -7054,8 +7055,8 @@ static void metro_build_ui()
     lv_obj_set_style_border_width(tab, 1, 0);
     lv_obj_set_style_radius(tab, 5, 0);
     lv_obj_set_style_pad_all(tab, 0, 0);
-    lv_obj_clear_flag(tab, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(tab, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scrollable(tab, false);
+    lv_obj_set_clickable(tab, true);
     lv_obj_add_event_cb(tab, metro_sig_cb, LV_EVENT_CLICKED, (void*)(intptr_t)sigs[i]);
     lv_obj_add_event_cb(tab, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
     char stxt[6]; snprintf(stxt, sizeof(stxt), "%d/4", sigs[i]);
@@ -7242,7 +7243,7 @@ static void tl_show_popup(bool new_high)
   lv_obj_set_style_border_width(pop, 2, 0);
   lv_obj_set_style_radius(pop, 8, 0);
   lv_obj_set_style_pad_all(pop, 0, 0);
-  lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(pop, false);
   lv_obj_add_event_cb(pop, tl_popup_tap_cb,       LV_EVENT_CLICKED,       nullptr);
   lv_obj_add_event_cb(pop, tl_popup_longpress_cb, LV_EVENT_LONG_PRESSED,  nullptr);
 
@@ -7333,7 +7334,7 @@ static void tl_show_pause_popup()
   lv_obj_set_style_border_width(pop, 2, 0);
   lv_obj_set_style_radius(pop, 8, 0);
   lv_obj_set_style_pad_all(pop, 0, 0);
-  lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(pop, false);
   lv_obj_add_event_cb(pop, tl_pause_tap_cb,       LV_EVENT_CLICKED,      nullptr);
   lv_obj_add_event_cb(pop, tl_pause_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
 
@@ -8131,7 +8132,7 @@ static void lr_show_popup(bool won)
   lv_obj_set_style_border_width(pop, 2, 0);
   lv_obj_set_style_radius(pop, 8, 0);
   lv_obj_set_style_pad_all(pop, 0, 0);
-  lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(pop, false);
   lv_obj_add_event_cb(pop, lr_popup_tap_cb,       LV_EVENT_CLICKED,      nullptr);
   lv_obj_add_event_cb(pop, lr_popup_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
 
@@ -8211,7 +8212,7 @@ static void lr_show_pause_popup()
   lv_obj_set_style_border_width(pop, 2, 0);
   lv_obj_set_style_radius(pop, 8, 0);
   lv_obj_set_style_pad_all(pop, 0, 0);
-  lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(pop, false);
   lv_obj_add_event_cb(pop, lr_pause_tap_cb,       LV_EVENT_CLICKED,      nullptr);
   lv_obj_add_event_cb(pop, lr_pause_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
 
@@ -8771,7 +8772,7 @@ static void sn_show_popup(bool won)
   lv_obj_set_style_border_width(pop, 2, 0);
   lv_obj_set_style_radius(pop, 8, 0);
   lv_obj_set_style_pad_all(pop, 0, 0);
-  lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(pop, false);
   lv_obj_add_event_cb(pop, sn_popup_tap_cb,       LV_EVENT_CLICKED,      nullptr);
   lv_obj_add_event_cb(pop, sn_popup_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
 
@@ -8865,7 +8866,7 @@ static void sn_show_pause_popup()
   lv_obj_set_style_border_width(pop, 2, 0);
   lv_obj_set_style_radius(pop, 8, 0);
   lv_obj_set_style_pad_all(pop, 0, 0);
-  lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(pop, false);
   lv_obj_add_event_cb(pop, sn_pause_tap_cb,       LV_EVENT_CLICKED,      nullptr);
   lv_obj_add_event_cb(pop, sn_pause_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
 
@@ -9563,7 +9564,7 @@ static void bn_show_history_popup()
   lv_obj_set_style_border_width(pop, 2, 0);
   lv_obj_set_style_radius(pop, 8, 0);
   lv_obj_set_style_pad_all(pop, 3, 0);
-  lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(pop, false);
   lv_obj_add_event_cb(pop, bn_pop_tap_cb,       LV_EVENT_CLICKED,      nullptr);
   lv_obj_add_event_cb(pop, bn_pop_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
 
@@ -9685,7 +9686,7 @@ static void bn_game_start()
   lv_obj_set_style_border_width(bn_circle, 3, 0);
   lv_obj_set_style_border_color(bn_circle, lv_color_make(80, 100, 180), 0);
   lv_obj_set_style_pad_all(bn_circle, 0, 0);
-  lv_obj_clear_flag(bn_circle, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(bn_circle, false);
   lv_obj_add_event_cb(bn_circle, bn_tap_cb, LV_EVENT_CLICKED, nullptr);
   lv_obj_add_event_cb(bn_circle, bn_circle_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
 
@@ -9995,7 +9996,7 @@ static void tq_start_round()
   // judged. Every round therefore has to put it back.
   if (game_steering_ready() && !tq_poll_timer)
     tq_poll_timer = lv_timer_create(tq_poll_cb, TQ_POLL_MS, nullptr);
-  if (tq_note) lv_obj_add_flag(tq_note, LV_OBJ_FLAG_HIDDEN);
+  if (tq_note) lv_obj_set_hidden(tq_note, true);
   tq_status_refresh();
   if (tq_demo_timer) lv_timer_del(tq_demo_timer);
   tq_demo_timer = lv_timer_create(tq_demo_tick_cb, TQ_LEAD_IN_MS, nullptr);
@@ -10285,7 +10286,7 @@ static void tq_show_popup()
   lv_obj_set_style_border_width(pop, 2, 0);
   lv_obj_set_style_radius(pop, 8, 0);
   lv_obj_set_style_pad_all(pop, 0, 0);
-  lv_obj_clear_flag(pop, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(pop, false);
   lv_obj_add_event_cb(pop, tq_popup_tap_cb,       LV_EVENT_CLICKED,      nullptr);
   lv_obj_add_event_cb(pop, tq_popup_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
 
@@ -10343,8 +10344,8 @@ static void tq_build_dome(int dir, int wx, int wy, int ww, int wh,
   lv_obj_set_style_border_width(wrap, 0, 0);
   lv_obj_set_style_pad_all(wrap, 0, 0);
   lv_obj_set_style_radius(wrap, 0, 0);
-  lv_obj_clear_flag(wrap, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_clear_flag(wrap, LV_OBJ_FLAG_CLICKABLE);   // taps fall through to the tap zone
+  lv_obj_set_scrollable(wrap, false);
+  lv_obj_set_clickable(wrap, false);   // taps fall through to the tap zone
 
   lv_obj_t *dome = lv_obj_create(wrap);
   lv_obj_set_size(dome, TQ_DOME_R * 2, TQ_DOME_R * 2);
@@ -10352,8 +10353,8 @@ static void tq_build_dome(int dir, int wx, int wy, int ww, int wh,
   lv_obj_set_style_radius(dome, LV_RADIUS_CIRCLE, 0);
   lv_obj_set_style_border_width(dome, 0, 0);
   lv_obj_set_style_pad_all(dome, 0, 0);
-  lv_obj_clear_flag(dome, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_clear_flag(dome, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_scrollable(dome, false);
+  lv_obj_set_clickable(dome, false);
 
   const lv_color_t hue   = lv_color_make(TQ_HUE[dir][0], TQ_HUE[dir][1], TQ_HUE[dir][2]);
   const lv_color_t white = lv_color_white();
@@ -10418,8 +10419,8 @@ static void tq_game_start()
   lv_obj_set_style_border_width(zone, 0, 0);
   lv_obj_set_style_pad_all(zone, 0, 0);
   lv_obj_set_style_radius(zone, 0, 0);
-  lv_obj_clear_flag(zone, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_clear_flag(zone, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_set_scrollable(zone, false);
+  lv_obj_set_gesture_bubble(zone, false);
   lv_obj_add_event_cb(zone, tq_tap_cb,       LV_EVENT_CLICKED,      nullptr);
   lv_obj_add_event_cb(zone, tq_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
   lv_obj_add_event_cb(zone, tq_gesture_cb,   LV_EVENT_GESTURE,      nullptr);
@@ -10443,8 +10444,8 @@ static void tq_game_start()
   lv_obj_set_style_border_width(tq_ring, 2, 0);
   lv_obj_set_style_border_color(tq_ring, lv_color_make(80, 100, 180), 0);
   lv_obj_set_style_pad_all(tq_ring, 0, 0);
-  lv_obj_clear_flag(tq_ring, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_clear_flag(tq_ring, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_scrollable(tq_ring, false);
+  lv_obj_set_clickable(tq_ring, false);
   tq_ring_tint = 0;
 
   // Ball
@@ -10456,8 +10457,8 @@ static void tq_game_start()
   lv_obj_set_style_bg_opa(tq_ball, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(tq_ball, 0, 0);
   lv_obj_set_style_pad_all(tq_ball, 0, 0);
-  lv_obj_clear_flag(tq_ball, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_clear_flag(tq_ball, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_scrollable(tq_ball, false);
+  lv_obj_set_clickable(tq_ball, false);
   tq_ball_tint = 0;
 
   // Sub-note — only up while the player is at the start gate
@@ -10727,7 +10728,7 @@ static void apps_carousel_build()
     lv_obj_set_size(z,60,172); lv_obj_set_pos(z,0,0);
     lv_obj_set_style_bg_opa(z,LV_OPA_TRANSP,0); lv_obj_set_style_border_width(z,0,0);
     lv_obj_set_style_pad_all(z,0,0); lv_obj_set_style_radius(z,0,0);
-    lv_obj_clear_flag(z,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(z, false);
     lv_obj_add_event_cb(z,apps_left_cb,LV_EVENT_PRESSED,nullptr);
     lv_obj_add_event_cb(z,apps_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr); }
 
@@ -10741,7 +10742,7 @@ static void apps_carousel_build()
     lv_obj_set_size(z,60,172); lv_obj_set_pos(z,260,0);
     lv_obj_set_style_bg_opa(z,LV_OPA_TRANSP,0); lv_obj_set_style_border_width(z,0,0);
     lv_obj_set_style_pad_all(z,0,0); lv_obj_set_style_radius(z,0,0);
-    lv_obj_clear_flag(z,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(z, false);
     lv_obj_add_event_cb(z,apps_right_cb,LV_EVENT_PRESSED,nullptr);
     lv_obj_add_event_cb(z,apps_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr); }
 
@@ -10913,7 +10914,7 @@ static void apps_carousel_build()
     lv_obj_set_size(z,200,172); lv_obj_set_pos(z,60,0);
     lv_obj_set_style_bg_opa(z,LV_OPA_TRANSP,0); lv_obj_set_style_border_width(z,0,0);
     lv_obj_set_style_pad_all(z,0,0); lv_obj_set_style_radius(z,0,0);
-    lv_obj_clear_flag(z,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(z, false);
     lv_obj_add_event_cb(z,apps_tap_enter_cb,LV_EVENT_CLICKED,nullptr);
     lv_obj_add_event_cb(z,apps_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr); }
 
@@ -10958,7 +10959,7 @@ static void show_apps()
   lv_obj_set_style_border_width(apps_cont, 0, 0);
   lv_obj_set_style_pad_all(apps_cont, 0, 0);
   lv_obj_set_style_radius(apps_cont, 0, 0);
-  lv_obj_clear_flag(apps_cont, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(apps_cont, false);
   // Register longpress ONCE at creation — lv_obj_clean() keeps this alive
   // through all rebuilds, so we must NOT add it again in any rebuild path.
   lv_obj_add_event_cb(apps_cont, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
@@ -11109,7 +11110,7 @@ static lv_obj_t *usb_zone(lv_obj_t *p,int x,int y,int w,int h,lv_event_cb_t cb)
   lv_obj_set_style_bg_opa(z,LV_OPA_TRANSP,0);
   lv_obj_set_style_border_width(z,0,0); lv_obj_set_style_pad_all(z,0,0);
   lv_obj_set_style_radius(z,0,0); lv_obj_set_style_shadow_width(z,0,0);
-  lv_obj_clear_flag(z,LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(z, false);
   lv_obj_add_event_cb(z,cb,LV_EVENT_PRESSED,nullptr);
   lv_obj_add_event_cb(z,usb_modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
   return z;
@@ -11129,7 +11130,7 @@ static void open_usb_editor()
   lv_obj_set_style_border_width(usb_editor_cont,0,0);
   lv_obj_set_style_pad_all(usb_editor_cont,0,0);
   lv_obj_set_style_radius(usb_editor_cont,0,0);
-  lv_obj_clear_flag(usb_editor_cont,LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(usb_editor_cont, false);
   lv_obj_add_event_cb(usb_editor_cont,usb_modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
 
   lv_obj_t*title=lv_label_create(usb_editor_cont);
@@ -11303,7 +11304,7 @@ static void usb_carousel_build()
     lv_obj_set_style_bg_opa(z,LV_OPA_TRANSP,0);
     lv_obj_set_style_border_width(z,0,0); lv_obj_set_style_pad_all(z,0,0);
     lv_obj_set_style_radius(z,0,0); lv_obj_set_style_shadow_width(z,0,0);
-    lv_obj_clear_flag(z,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(z, false);
     lv_obj_add_event_cb(z,usb_carousel_tap_cb,LV_EVENT_CLICKED,nullptr);
     lv_obj_add_event_cb(z,usb_modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
   }
@@ -11446,8 +11447,8 @@ static void macro_show_countdown()
   lv_obj_set_style_border_width(macro_cd_popup, 0, 0);
   lv_obj_set_style_pad_all(macro_cd_popup, 0, 0);
   lv_obj_set_style_radius(macro_cd_popup, 0, 0);
-  lv_obj_clear_flag(macro_cd_popup, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_add_flag(macro_cd_popup, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_scrollable(macro_cd_popup, false);
+  lv_obj_set_clickable(macro_cd_popup, true);
   lv_obj_add_event_cb(macro_cd_popup, macro_countdown_cancel_cb, LV_EVENT_CLICKED, nullptr);
 
   lv_obj_t *card = lv_obj_create(macro_cd_popup);
@@ -11459,8 +11460,8 @@ static void macro_show_countdown()
   lv_obj_set_style_border_width(card, 1, 0);
   lv_obj_set_style_radius(card, 8, 0);
   lv_obj_set_style_pad_all(card, 0, 0);
-  lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_scrollable(card, false);
+  lv_obj_set_clickable(card, true);
   lv_obj_add_event_cb(card, macro_countdown_cancel_cb, LV_EVENT_CLICKED, nullptr);
 
   macro_cd_lbl = lv_label_create(card);
@@ -11505,8 +11506,8 @@ static void macro_show_no_hid()
   lv_obj_set_style_bg_opa(macro_cd_popup, LV_OPA_70, 0);
   lv_obj_set_style_border_width(macro_cd_popup, 0, 0);
   lv_obj_set_style_pad_all(macro_cd_popup, 0, 0);
-  lv_obj_clear_flag(macro_cd_popup, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_add_flag(macro_cd_popup, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_scrollable(macro_cd_popup, false);
+  lv_obj_set_clickable(macro_cd_popup, true);
   lv_obj_add_event_cb(macro_cd_popup, macro_countdown_cancel_cb, LV_EVENT_CLICKED, nullptr);
 
   lv_obj_t *msg = lv_label_create(macro_cd_popup);
@@ -11535,8 +11536,8 @@ static void macro_play_ui_open(const char *name, uint32_t total)
   lv_obj_set_style_border_width(macro_play_cont,0,0);
   lv_obj_set_style_pad_all(macro_play_cont,0,0);
   lv_obj_set_style_radius(macro_play_cont,0,0);
-  lv_obj_clear_flag(macro_play_cont,LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_add_flag(macro_play_cont,LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_scrollable(macro_play_cont, false);
+  lv_obj_set_clickable(macro_play_cont, true);
   lv_obj_add_event_cb(macro_play_cont,macro_abort_cb,LV_EVENT_CLICKED,nullptr);
 
   lv_obj_t*t=lv_label_create(macro_play_cont);
@@ -11729,7 +11730,7 @@ static void macro_list_build()
     lv_obj_set_style_bg_opa(z,LV_OPA_TRANSP,0);
     lv_obj_set_style_border_width(z,0,0); lv_obj_set_style_pad_all(z,0,0);
     lv_obj_set_style_radius(z,0,0); lv_obj_set_style_shadow_width(z,0,0);
-    lv_obj_clear_flag(z,LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(z, false);
     lv_obj_add_event_cb(z,macro_item_tap_cb,LV_EVENT_CLICKED,nullptr);
     lv_obj_add_event_cb(z,usb_modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
   }
@@ -11765,7 +11766,7 @@ static void open_macropad_list()
   lv_obj_set_style_border_width(macro_list_cont,0,0);
   lv_obj_set_style_pad_all(macro_list_cont,0,0);
   lv_obj_set_style_radius(macro_list_cont,0,0);
-  lv_obj_clear_flag(macro_list_cont,LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(macro_list_cont, false);
   macro_list_build();
 }
 
@@ -11808,7 +11809,7 @@ static void show_usb_carousel(void)
   lv_obj_set_style_border_width(usb_modal_cont,0,0);
   lv_obj_set_style_pad_all(usb_modal_cont,0,0);
   lv_obj_set_style_radius(usb_modal_cont,0,0);
-  lv_obj_clear_flag(usb_modal_cont,LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(usb_modal_cont, false);
   usb_carousel_build();
 }
 
@@ -12152,7 +12153,7 @@ static void home_screen_init(void)
   lv_obj_t *scr = lv_scr_act();
   lv_obj_set_style_bg_color(scr, lv_color_make(8, 8, 16), 0);
   lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
-  lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(scr, false);
 
   // ── Splash: "Hello!" on cold boot, brief "Salut!" on wake-from-sleep
   home_hello_lbl = lv_label_create(scr);
@@ -12198,7 +12199,7 @@ static void home_screen_init(void)
     lv_obj_set_style_pad_all(z, 0, 0);
     lv_obj_set_style_radius(z, 0, 0);
     lv_obj_set_style_shadow_width(z, 0, 0);
-    lv_obj_clear_flag(z, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(z, false);
     lv_obj_add_event_cb(z, zones[i].cb, LV_EVENT_CLICKED, nullptr);
     lv_obj_add_event_cb(z, home_longpress, LV_EVENT_LONG_PRESSED, nullptr);
   }

@@ -97,6 +97,12 @@ enum UsbPersona : uint8_t { USB_HID_ONLY = 0, USB_HID_SERIAL = 1, USB_SERIAL_ONL
 //                   is the wall. The same mapping ToneQuest's ball uses.
 enum JoyPaddleMode : uint8_t { JPM_DIRECTION = 0, JPM_POSITION = 1 };
 
+// Snake Letters Words mode list bounds. 24 words of up to 15 letters keeps the
+// whole `words = [...]` line inside load_config()'s line buffer, and a 15-letter
+// word still fits the centre of the status bar.
+#define SN_WORDS_MAX 24
+#define SN_WORD_LEN  16
+
 struct AppConfig {
   char wifi_ssid[64]                 = "myhomewifi";     // [wifi] ssid
   char wifi_password[64]             = "changeme";       // [wifi] password
@@ -155,7 +161,12 @@ struct AppConfig {
   bool sn_horizontal_walls         = false;      // [snake] horizontal_walls
   int  sn_distractions             = 3;         // [snake] distractions (letters that kill on touch)
   int  sn_next_level_score         = 10;        // [snake] next_level_score (score at which distractions appear)
-  int  tq_high_score               = 0;         // [tonequest] high_score (highest level completed)
+  int  sn_words_high_score         = 0;         // [snake] words_high_score (Words mode best, in words)
+  // [snake] words — the Words mode list, lowercase a-z only, played in order
+  // and looped. Up to SN_WORDS_MAX entries of SN_WORD_LEN-1 letters each.
+  char sn_words[SN_WORDS_MAX][SN_WORD_LEN] = {"box","cat","dog","cactus","rainbow"};
+  int  sn_word_count               = 5;         // number of parsed words
+  int  tq_high_score              = 0;         // [tonequest] high_score (highest level completed)
   int  tq_start_moves              = 4;         // [tonequest] start_moves (sequence length at level 1)
   int  tq_flash_ms                 = 420;       // [tonequest] flash_ms (dome lit + tone, per playback step)
   int  tq_gap_ms                   = 220;       // [tonequest] gap_ms (silence between playback steps)
@@ -564,6 +575,7 @@ static uint32_t joy_sw_since  = 0;
 #define JOY_NAV_BLOCKED 2
 static int      joy_nav_dir   = JOY_NAV_BLOCKED;
 static uint32_t joy_nav_next  = 0;
+static bool     joy_nav_up_armed = false;   // push-up "back" on a game's mode carousel
 
 // Defined far below, next to the games and carousel they drive. Declared here
 // so the poll callback can reach them without the Arduino prototype injector
@@ -649,6 +661,7 @@ static void joy_stop()
   joy_vx = joy_vy = 0.0f;
   joy_sw_stable = joy_sw_last = true;
   joy_nav_dir   = JOY_NAV_BLOCKED;
+  joy_nav_up_armed = false;
 }
 
 static void joy_start()
@@ -1125,6 +1138,10 @@ vertical_walls = true
 horizontal_walls = false
 distractions = 3
 next_level_score = 10
+# Words mode: fill in the missing letter. Lowercase a-z, played in order and
+# looped. Up to 24 words of up to 15 letters.
+words_high_score = 0
+words = ["box", "cat", "dog", "cactus", "rainbow"]
 
 [tonequest]
 high_score = 0
@@ -1393,6 +1410,48 @@ static void provision_internal_flash()
 }
 #endif  // BOARD_HAS_INTERNAL_FS
 
+// ── [snake] words — Words mode list ──────────────────────────────────────────
+// Accepts the JSON-style array the template writes, ["box", "cat"], and a bare
+// comma list, box,cat, alike. Each word is folded to lowercase and stripped to
+// a-z — the field only ever shows lowercase letters, so anything else could
+// never be caught. Words that end up shorter than two letters are dropped (one
+// letter blanked is just "_"). An entry that leaves the list empty keeps the
+// built-in defaults rather than leaving Words mode with nothing to play.
+static void sn_words_parse(const char *val)
+{
+  char parsed[SN_WORDS_MAX][SN_WORD_LEN];
+  int  n = 0, len = 0;
+  for (const char *p = val; ; p++) {
+    const char c = *p;
+    if (c == ',' || c == '\0') {
+      if (len >= 2 && n < SN_WORDS_MAX) { parsed[n][len] = '\0'; n++; }
+      len = 0;
+      if (c == '\0') break;
+      continue;
+    }
+    const char lc = (char)tolower((unsigned char)c);
+    if (lc >= 'a' && lc <= 'z' && len < SN_WORD_LEN - 1 && n < SN_WORDS_MAX)
+      parsed[n][len++] = lc;
+  }
+  if (n == 0) {
+    Serial.println("[CFG]   snake.words               = (no usable words, keeping defaults)");
+    return;
+  }
+  memcpy(cfg.sn_words, parsed, sizeof(parsed));
+  cfg.sn_word_count = n;
+  Serial.printf("[CFG]   snake.words               = %d words\n", cfg.sn_word_count);
+}
+
+// Writes the value half of the `words = ...` line, in the same JSON-style
+// array form sn_words_parse() reads back.
+static void sn_words_print(Print &out)
+{
+  out.print('[');
+  for (int i = 0; i < cfg.sn_word_count; i++)
+    out.printf(i ? ", \"%s\"" : "\"%s\"", cfg.sn_words[i]);
+  out.print("]\n");
+}
+
 static void load_config()
 {
   Serial.println("[CFG] Loading /config.ini...");
@@ -1404,7 +1463,7 @@ static void load_config()
     return;
   }
 
-  char   line[128];
+  char   line[512];   // [snake] words is the longest line, ~470 chars at its cap
   char   section[32] = "";
   int    lineNum = 0;
   bool   wifi_mode_seen = false;   // [wifi] mode wins over the legacy enabled key
@@ -1730,6 +1789,14 @@ static void load_config()
         cfg.sn_next_level_score = max(1, atoi(val));
         Serial.printf("[CFG]   snake.next_level_score    = %d\n", cfg.sn_next_level_score);
       }
+      // sn_-prefixed spellings accepted too, as the keys were first proposed
+      else if (strcmp(key, "words_high_score") == 0 || strcmp(key, "sn_words_high_score") == 0) {
+        cfg.sn_words_high_score = max(0, atoi(val));
+        Serial.printf("[CFG]   snake.words_high_score    = %d\n", cfg.sn_words_high_score);
+      }
+      else if (strcmp(key, "words") == 0 || strcmp(key, "sn_words") == 0) {
+        sn_words_parse(val);
+      }
     }
 
     // ── [tonequest] ──────────────────────────────────────────────────────────
@@ -2025,6 +2092,8 @@ static void save_config()
   fw.printf("horizontal_walls = %s\n",     cfg.sn_horizontal_walls ? "true" : "false");
   fw.printf("distractions = %d\n",         cfg.sn_distractions);
   fw.printf("next_level_score = %d\n",     cfg.sn_next_level_score);
+  fw.printf("words_high_score = %d\n",     cfg.sn_words_high_score);
+  fw.print("words = ");                    sn_words_print(fw);
 
   fw.print("\n[tonequest]\n");
   fw.printf("high_score = %d\n",           cfg.tq_high_score);
@@ -2225,6 +2294,8 @@ static void seed_snake_config()
   fa.printf("horizontal_walls = %s\n",     cfg.sn_horizontal_walls ? "true" : "false");
   fa.printf("distractions = %d\n",         cfg.sn_distractions);
   fa.printf("next_level_score = %d\n",     cfg.sn_next_level_score);
+  fa.printf("words_high_score = %d\n",     cfg.sn_words_high_score);
+  fa.print("words = ");                    sn_words_print(fa);
   fa.close();
   Serial.println("[CFG] [snake] section seeded into config.ini.");
 }
@@ -6002,7 +6073,7 @@ static int apps_step(int from, int dir)
   }
   return from;
 }
-static int         app_subphase   = 0;   // 0=carousel  1=game
+static int         app_subphase   = 0;   // 0=carousel  1=game  2=game's mode carousel (Snake)
 static lv_timer_t *app_anim_timer = nullptr;
 static lv_timer_t *app_gyro_timer = nullptr;  // shake/tilt watcher for RPS & Dice
 static float        app_gyro_z0   = 0.0f;     // previous accelZ for spike detection
@@ -8301,10 +8372,21 @@ static void lr_stop()
 //  Classic snake on a 40×9 ASCII grid.  The snake is a chain of '*' chars
 //  steered by tilting the device (gyro, 150 ms poll).
 //
-//  Sequence of target objects (one at a time, cycling forever):
-//    'a' → 'z' → 'a' → 'z' → ...  (sn_seq_idx % 26 gives the current letter)
+//  Entering the game first shows a mode carousel (app_subphase == 2):
+//    Alphabet — "Catch the Alphabet!"  the original game, described below
+//    Words    — "Fix the words!"       fill in the blank, see below
+//  Left/right (arrows, swipe or joystick) pages it, tap or the joystick button
+//  starts the highlighted mode, and a long press or joystick up backs out to
+//  the apps carousel. Play-again restarts the same mode.
 //
-//  Distraction letters (active once sn_score ≥ next_level_score):
+//  Sequence of target objects (one at a time, cycling forever):
+//    Alphabet: 'a' → 'z' → 'a' → 'z' → ...  (sn_seq_idx % 26 gives the letter)
+//    Words:    cfg.sn_words[sn_seq_idx % sn_word_count], looped, with one
+//              letter blanked at a random position each time a word comes up
+//              ("d_g"); the target is the letter that fills the blank
+//
+//  Distraction letters (Alphabet: active once sn_score ≥ next_level_score;
+//  Words: active from the first word, since dodging them is the game):
 //    N randomly chosen lowercase letters (≠ target) placed each round.
 //    Touching any distraction ends the game immediately.
 //    All letters (target + distractions) are cleared and re-spawned fresh
@@ -8325,13 +8407,15 @@ static void lr_stop()
 //    walls=false           → snake wraps to the opposite edge
 //
 //  Win conditions (async tune plays, game continues):
-//    · ate 'z'  (sn_seq_idx % 26 == 0 after increment — fires every cycle)
-//    · score exceeds stored high score (fires once per game via sn_beat_high)
+//    · Alphabet only: ate 'z' (sn_seq_idx % 26 == 0 after increment — every cycle)
+//    · score exceeds the mode's stored high score (once per game, sn_beat_high)
+//      — cfg.sn_high_score for Alphabet, cfg.sn_words_high_score for Words
 //  End-game popup honours the win flag for win/lose styling.
 //
 //  Screen layout identical to Tennis Letters / Letters Rain:
 //    Field  : 40 cols × 9 rows  (dejavu_mono_14, 8×16 px per cell = 320×144 px)
-//    Status : "Score: X  [target]  Best: Y"  one line below the field
+//    Status : "Score: X  [target]  Best: Y"  one line below the field, where
+//             [target] is the letter (Alphabet) or the blanked word (Words)
 // ══════════════════════════════════════════════════════════════════════════════
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -8348,6 +8432,10 @@ static void lr_stop()
 // Phase-3 (uppercase + symbols) removed — sequence now cycles a→z forever
 #define SN_MAX_DISTRACTS 10   // hard cap on simultaneous distraction letters
 
+#define SN_MODE_ALPHA  0
+#define SN_MODE_WORDS  1
+#define SN_MODE_COUNT  2
+
 // ── Snake body ─────────────────────────────────────────────────────────────────
 static int   sn_body_col[SN_MAX_LEN];
 static int   sn_body_row[SN_MAX_LEN];
@@ -8359,6 +8447,11 @@ static bool  sn_running      = false;
 static bool  sn_paused       = false;
 static bool  sn_won          = false;
 static bool  sn_beat_high    = false;
+static int   sn_mode         = SN_MODE_ALPHA;  // highlighted on the mode carousel, then played
+
+// Words mode: the word being filled in, and which letter of it is blanked
+static const char *sn_word   = "";
+static int   sn_blank_pos    = 0;
 
 // ── Distraction letters ────────────────────────────────────────────────────────
 // Active only when sn_score >= cfg.sn_next_level_score.
@@ -8409,10 +8502,26 @@ static bool sn_cell_on_body(int col, int row)
   return false;
 }
 
-// ── Target always cycles a→z→a→z... forever ──────────────────────────────────
+// Each mode keeps its own record; everything that reads or writes "the" high
+// score goes through here.
+static int &sn_best()
+{
+  return sn_mode == SN_MODE_WORDS ? cfg.sn_words_high_score : cfg.sn_high_score;
+}
+
+// ── Next target ───────────────────────────────────────────────────────────────
+// Alphabet cycles a→z→a→z... forever. Words walks the list the same way and
+// blanks a fresh random letter every time a word comes round, so a replayed
+// word need not ask for the same letter.
 static void sn_next_target_ch()
 {
-  sn_target_ch = (char)('a' + (sn_seq_idx % 26));
+  if (sn_mode == SN_MODE_WORDS) {
+    sn_word      = cfg.sn_words[sn_seq_idx % cfg.sn_word_count];
+    sn_blank_pos = random(strlen(sn_word));
+    sn_target_ch = sn_word[sn_blank_pos];
+  } else {
+    sn_target_ch = (char)('a' + (sn_seq_idx % 26));
+  }
 }
 
 // ── True if (col,row) lies within min_gap steps directly ahead of the snake head
@@ -8432,7 +8541,8 @@ static bool sn_is_blocked_ahead(int col, int row, int min_gap)
 
 // ── Spawn target + distractions in one call ───────────────────────────────────
 // Called at game-start and every time the target is eaten.
-// Distractions appear only once sn_score >= cfg.sn_next_level_score.
+// Distractions appear only once sn_score >= cfg.sn_next_level_score in
+// Alphabet mode, and from the very first word in Words mode.
 // All positions respect a 4-cell clearance directly ahead of the snake head.
 static void sn_spawn_all_letters()
 {
@@ -8456,7 +8566,7 @@ static void sn_spawn_all_letters()
              sn_target_row == sn_mod_row)));
 
   // ── Distractions ──────────────────────────────────────────────────────────
-  int n_want = (sn_score >= cfg.sn_next_level_score)
+  int n_want = (sn_mode == SN_MODE_WORDS || sn_score >= cfg.sn_next_level_score)
                ? min(cfg.sn_distractions, SN_MAX_DISTRACTS)
                : 0;
   sn_distract_n = 0;
@@ -8578,9 +8688,15 @@ static void sn_render()
 
   // Status bar
   lv_label_set_text_fmt(sn_score_lbl, "Score: %d", sn_score);
-  char tbuf[4]; snprintf(tbuf, sizeof(tbuf), "%c", (char)(sn_target_ch - 'a' + 'A'));
+  char tbuf[SN_WORD_LEN];
+  if (sn_mode == SN_MODE_WORDS) {
+    strlcpy(tbuf, sn_word, sizeof(tbuf));
+    tbuf[sn_blank_pos] = '_';
+  } else {
+    snprintf(tbuf, sizeof(tbuf), "%c", (char)(sn_target_ch - 'a' + 'A'));
+  }
   lv_label_set_text(sn_target_lbl, tbuf);
-  lv_label_set_text_fmt(sn_hi_lbl, "Best: %d", cfg.sn_high_score);
+  lv_label_set_text_fmt(sn_hi_lbl, "Best: %d", sn_best());
 }
 
 // ── Beep helper (non-blocking) ────────────────────────────────────────────────
@@ -8677,7 +8793,10 @@ static void sn_show_popup(bool won)
   // Score line
   lv_obj_t *score_lbl = lv_label_create(pop);
   char buf[40];
-  snprintf(buf, sizeof(buf), "%d eaten", sn_score);
+  if (sn_mode == SN_MODE_WORDS)
+    snprintf(buf, sizeof(buf), "%d word%s fixed", sn_score, sn_score == 1 ? "" : "s");
+  else
+    snprintf(buf, sizeof(buf), "%d eaten", sn_score);
   lv_label_set_text(score_lbl, buf);
   lv_obj_set_style_text_font(score_lbl, &lv_font_montserrat_16, 0);
   lv_obj_set_style_text_color(score_lbl, lv_color_white(), 0);
@@ -8685,7 +8804,7 @@ static void sn_show_popup(bool won)
 
   // Best score line
   lv_obj_t *hi_lbl = lv_label_create(pop);
-  snprintf(buf, sizeof(buf), "Best: %d", cfg.sn_high_score);
+  snprintf(buf, sizeof(buf), "Best: %d", sn_best());
   lv_label_set_text(hi_lbl, buf);
   lv_obj_set_style_text_font(hi_lbl, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(hi_lbl, lv_color_make(160, 200, 255), 0);
@@ -8845,8 +8964,7 @@ static void sn_game_start()
   }
   sn_dir = SN_RIGHT;
 
-  // Set first target character (seq_idx == 0 → 'a')
-  sn_target_ch = 'a';
+  // First target is picked by sn_spawn_all_letters() below
 
   // Build game screen
   lv_obj_clean(apps_cont);
@@ -8869,27 +8987,27 @@ static void sn_game_start()
   lv_obj_set_style_text_color(sn_score_lbl, lv_color_make(180, 180, 100), 0);
   lv_obj_set_style_text_align(sn_score_lbl, LV_TEXT_ALIGN_LEFT, 0);
   lv_obj_set_pos(sn_score_lbl, FIELD_X + 2, status_y);
-  lv_obj_set_size(sn_score_lbl, 120, 16);
+  lv_obj_set_size(sn_score_lbl, 86, 16);
 
   sn_target_lbl = lv_label_create(apps_cont);
   lv_obj_set_style_text_font(sn_target_lbl, &dejavu_mono_14, 0);
   lv_obj_set_style_text_color(sn_target_lbl, lv_color_make(100, 220, 255), 0);
   lv_obj_set_style_text_align(sn_target_lbl, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_pos(sn_target_lbl, 120, status_y);
-  lv_obj_set_size(sn_target_lbl, 80, 16);
+  lv_obj_set_pos(sn_target_lbl, 88, status_y);   // wide enough for a 15-letter word
+  lv_obj_set_size(sn_target_lbl, 144, 16);
 
   sn_hi_lbl = lv_label_create(apps_cont);
   lv_obj_set_style_text_font(sn_hi_lbl, &dejavu_mono_14, 0);
   lv_obj_set_style_text_color(sn_hi_lbl, lv_color_make(180, 180, 100), 0);
   lv_obj_set_style_text_align(sn_hi_lbl, LV_TEXT_ALIGN_RIGHT, 0);
-  lv_obj_set_pos(sn_hi_lbl, 200, status_y);
-  lv_obj_set_size(sn_hi_lbl, 118, 16);
+  lv_obj_set_pos(sn_hi_lbl, 232, status_y);
+  lv_obj_set_size(sn_hi_lbl, 86, 16);
 
   // Transparent full-screen tap zone — tap pauses the game; long-press exits
   // (added last so it sits on top, above the field/status labels)
   app_tapzone(apps_cont, sn_field_tap_cb);
 
-  // Spawn first target (no distractions yet — score starts at 0)
+  // Spawn first target (Alphabet: no distractions yet — score starts at 0)
   sn_spawn_all_letters();
   sn_render();
 
@@ -8993,10 +9111,10 @@ static void sn_end_game()
 
   // Final high-score check — handles scoring that continued after the
   // initial win trigger; also ensures sn_won is set so the popup is correct
-  if (sn_score > cfg.sn_high_score) {
-    sn_beat_high      = true;
-    sn_won            = true;   // may not have been set if only beaten here
-    cfg.sn_high_score = sn_score;
+  if (sn_score > sn_best()) {
+    sn_beat_high = true;
+    sn_won       = true;        // may not have been set if only beaten here
+    sn_best()    = sn_score;
     save_config();
   }
 
@@ -9013,7 +9131,8 @@ static void sn_end_game()
   static bool s_sn_completed_alpha;   // true once 'z' has been eaten (seq_idx ≥ 26)
   s_sn_won             = sn_won;
   s_sn_beat_high       = sn_beat_high;
-  s_sn_completed_alpha = (sn_seq_idx >= 26);  // grows monotonically → correct across cycles
+  s_sn_completed_alpha = (sn_mode == SN_MODE_ALPHA &&
+                          sn_seq_idx >= 26);   // grows monotonically → correct across cycles
 
   lv_timer_t *et = lv_timer_create([](lv_timer_t *t) {
     lv_timer_del(t);
@@ -9123,18 +9242,20 @@ static void sn_move_tick_cb(lv_timer_t * /*t*/)
     }
 
     // Win tune fires on two independent conditions:
-    //   · completed_cycle — every time 'z' is eaten (sn_seq_idx % 26 == 0 after
-    //     incrementing, i.e. seq just crossed a multiple of 26)
-    //   · new_high — first time this game the stored high score is surpassed
-    //     (!sn_beat_high guard prevents re-firing on every subsequent letter
-    //     after the record is broken)
-    bool completed_cycle = (sn_seq_idx % 26 == 0);
-    bool new_high        = (!sn_beat_high && sn_score > cfg.sn_high_score);
+    //   · completed_cycle — Alphabet only, every time 'z' is eaten
+    //     (sn_seq_idx % 26 == 0 after incrementing, i.e. seq just crossed a
+    //     multiple of 26). Words has no "finished the list" win: the list is
+    //     config-driven and simply loops.
+    //   · new_high — first time this game the mode's stored high score is
+    //     surpassed (!sn_beat_high guard prevents re-firing on every
+    //     subsequent catch after the record is broken)
+    bool completed_cycle = (sn_mode == SN_MODE_ALPHA && sn_seq_idx % 26 == 0);
+    bool new_high        = (!sn_beat_high && sn_score > sn_best());
     if (completed_cycle || new_high) {
       sn_won = true;
       if (new_high) {
-        sn_beat_high      = true;
-        cfg.sn_high_score = sn_score;
+        sn_beat_high = true;
+        sn_best()    = sn_score;
         save_config();
       }
       tune_play_success();     // async win tune — no separate beep
@@ -9148,6 +9269,140 @@ static void sn_move_tick_cb(lv_timer_t * /*t*/)
 
   // ── 8. Repaint ────────────────────────────────────────────────────────────
   sn_render();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  SNAKE LETTERS — Mode carousel (app_subphase == 2)
+//
+//  One full-screen card per mode, built like an apps carousel card: arrow
+//  zones page it, the centre zone starts the highlighted mode, and a long
+//  press goes back. The centre zone also takes swipes — it clears
+//  GESTURE_BUBBLE so the gesture stops there rather than reaching the screen's
+//  brightness swipe, and it ignores the CLICKED / LONG_PRESSED that a swipe
+//  can still produce (see the ToneQuest notes on the same indev quirks).
+//  Cards stay clean: no scores or progress, those belong in the game.
+//  sn_mode survives a trip back to the apps carousel, so re-entering lands on
+//  the mode last played.
+// ══════════════════════════════════════════════════════════════════════════════
+static void sn_mode_select_build();
+
+static void sn_mode_step(int dir)
+{
+  sn_mode = (sn_mode + dir + SN_MODE_COUNT) % SN_MODE_COUNT;
+  sn_mode_select_build();
+}
+
+// Back out to the apps carousel, on Snake Letters' own card
+static void sn_mode_back()
+{
+  app_subphase = 0;
+  apps_carousel_build();
+}
+
+static void sn_mode_left_cb(lv_event_t *e)
+{ if (lv_event_get_code(e) == LV_EVENT_PRESSED) sn_mode_step(-1); }
+static void sn_mode_right_cb(lv_event_t *e)
+{ if (lv_event_get_code(e) == LV_EVENT_PRESSED) sn_mode_step(+1); }
+
+static void sn_mode_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_NONE) return;  // that was a swipe
+  sn_game_start();
+}
+
+// Swipe left brings in the next card, swipe right the previous one
+static void sn_mode_gesture_cb(lv_event_t * /*e*/)
+{
+  switch (lv_indev_get_gesture_dir(lv_indev_get_act())) {
+    case LV_DIR_LEFT:  sn_mode_step(+1); break;
+    case LV_DIR_RIGHT: sn_mode_step(-1); break;
+    default: break;
+  }
+}
+
+static void sn_mode_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_NONE) return;  // a swipe, not a hold
+  apps_longpress_cb(e);   // app_subphase > 0 → back to the apps carousel
+}
+
+static lv_obj_t *sn_mode_zone(int x, int w, lv_event_code_t code, lv_event_cb_t cb)
+{
+  lv_obj_t *z = lv_obj_create(apps_cont);
+  lv_obj_set_size(z, w, 172); lv_obj_set_pos(z, x, 0);
+  lv_obj_set_style_bg_opa(z, LV_OPA_TRANSP, 0); lv_obj_set_style_border_width(z, 0, 0);
+  lv_obj_set_style_pad_all(z, 0, 0); lv_obj_set_style_radius(z, 0, 0);
+  lv_obj_clear_flag(z, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(z, cb, code, nullptr);
+  lv_obj_add_event_cb(z, sn_mode_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+  return z;
+}
+
+static void sn_mode_select_build()
+{
+  sn_stop();
+  lv_obj_clean(apps_cont);
+  app_subphase = 2;
+
+  static const struct { const char *glyph; const char *name; const char *tag; }
+    cards[SN_MODE_COUNT] = {
+      {"abc", "Alphabet", "Catch the Alphabet!"},
+      {"d_g", "Words",    "Fix the words!"},
+    };
+
+  lv_obj_t *larr = lv_label_create(apps_cont);
+  lv_label_set_text(larr, LV_SYMBOL_LEFT);
+  lv_obj_set_style_text_font(larr, &lv_font_montserrat_48, 0);
+  lv_obj_set_style_text_color(larr, lv_color_make(80, 100, 180), 0);
+  lv_obj_align(larr, LV_ALIGN_LEFT_MID, 6, 0);
+
+  lv_obj_t *rarr = lv_label_create(apps_cont);
+  lv_label_set_text(rarr, LV_SYMBOL_RIGHT);
+  lv_obj_set_style_text_font(rarr, &lv_font_montserrat_48, 0);
+  lv_obj_set_style_text_color(rarr, lv_color_make(80, 100, 180), 0);
+  lv_obj_align(rarr, LV_ALIGN_RIGHT_MID, -6, 0);
+
+  lv_obj_t *glyph = lv_label_create(apps_cont);
+  lv_label_set_text(glyph, cards[sn_mode].glyph);
+  lv_obj_set_style_text_font(glyph, &lv_font_montserrat_48, 0);
+  lv_obj_set_style_text_color(glyph, lv_color_make(100, 220, 255), 0);
+  lv_obj_align(glyph, LV_ALIGN_CENTER, 0, -34);
+
+  lv_obj_t *name_lbl = lv_label_create(apps_cont);
+  lv_label_set_text(name_lbl, cards[sn_mode].name);
+  lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_color(name_lbl, lv_color_white(), 0);
+  lv_obj_align(name_lbl, LV_ALIGN_CENTER, 0, 10);
+
+  lv_obj_t *tag_lbl = lv_label_create(apps_cont);
+  lv_label_set_text(tag_lbl, cards[sn_mode].tag);
+  lv_obj_set_style_text_font(tag_lbl, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(tag_lbl, lv_color_make(100, 180, 100), 0);
+  lv_obj_align(tag_lbl, LV_ALIGN_CENTER, 0, 36);
+
+  sn_mode_zone(0,   60,  LV_EVENT_PRESSED, sn_mode_left_cb);
+  sn_mode_zone(260, 60,  LV_EVENT_PRESSED, sn_mode_right_cb);
+  lv_obj_t *mid = sn_mode_zone(60, 200, LV_EVENT_CLICKED, sn_mode_tap_cb);
+  lv_obj_clear_flag(mid, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_event_cb(mid, sn_mode_gesture_cb, LV_EVENT_GESTURE, nullptr);
+
+  lv_obj_t *hint = lv_label_create(apps_cont);
+  lv_label_set_text(hint, "tap to play  .  hold to go back");
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(hint, lv_color_make(70, 70, 95), 0);
+  lv_obj_set_style_text_opa(hint, LV_OPA_60, 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -18);
+
+  int dot_x0 = ((int)screenWidth - SN_MODE_COUNT * 14) / 2;
+  for (int i = 0; i < SN_MODE_COUNT; i++) {
+    lv_obj_t *dot = lv_label_create(apps_cont);
+    lv_obj_set_style_text_font(dot, &dejavu_mono_14, 0);
+    lv_label_set_text(dot, i == sn_mode ? "\xe2\x97\x8f" : "\xe2\x97\x8b");
+    lv_obj_set_style_text_color(dot, i == sn_mode ? lv_color_white() : lv_color_make(80, 80, 100), 0);
+    lv_obj_set_pos(dot, dot_x0 + i * 14, 156);
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -10273,7 +10528,7 @@ static void app_screen_start()
     return;
   }
   if (apps_idx == 6) {
-    sn_game_start();
+    sn_mode_select_build();   // pick Alphabet or Words first
     return;
   }
   if (apps_idx == 7) {
@@ -10336,6 +10591,7 @@ static void apps_tap_enter_cb(lv_event_t *e)
 // to reach over for. Exiting (a long press) stays touch-only.
 //
 //   carousel  → enter the highlighted item, exactly as tapping the middle does
+//               (Snake's mode carousel too: it starts the highlighted mode)
 //   mid-play  → pause, exactly as tapping the field does
 //   paused    → resume, exactly as tapping the "Paused" popup does
 //   game over → play again, exactly as tapping the popup does
@@ -10367,7 +10623,7 @@ static void joy_click_dispatch()
       else                 lr_pause_game();
       break;
     case 6:
-      if (!sn_running)     sn_game_start();
+      if (!sn_running)     sn_game_start();   // also the mode carousel: play it
       else if (sn_paused)  sn_resume_game();
       else                 sn_pause_game();
       break;
@@ -10377,13 +10633,33 @@ static void joy_click_dispatch()
 }
 
 // ── Joystick left/right → page the apps carousel ─────────────────────────────
-// Called on every poll. Only acts while the carousel itself is showing; inside
-// a game the stick steers, and nothing here runs.
+// Called on every poll. Only acts while a carousel is showing — the apps one,
+// or Snake Letters' mode carousel, where a push up also backs out. Inside a
+// game the stick steers, and nothing here runs.
 static void joy_nav_update(uint32_t now)
 {
-  if (!apps_cont || app_subphase != 0) {
-    joy_nav_dir = JOY_NAV_BLOCKED;
+  const bool in_modes = apps_cont && app_subphase == 2 && apps_idx == 6;
+  if (!apps_cont || (app_subphase != 0 && !in_modes)) {
+    joy_nav_dir      = JOY_NAV_BLOCKED;
+    joy_nav_up_armed = false;
     return;
+  }
+
+  if (in_modes) {
+    // Up is one-shot, no repeat, and like left/right it has to come back
+    // towards centre to re-arm, so a stick still held up cannot back out of a
+    // carousel the moment it appears.
+    const float y = joy_vy;        // on-screen axis, invert_y already applied
+    if (fabsf(y) < JOY_NAV_REARM) {
+      joy_nav_up_armed = true;
+    } else if (y >= JOY_NAV_PUSH && joy_nav_up_armed) {
+      joy_nav_up_armed = false;
+      joy_nav_dir      = JOY_NAV_BLOCKED;   // a diagonal must not page what we land on
+      sn_mode_back();
+      return;
+    }
+  } else {
+    joy_nav_up_armed = false;
   }
 
   const float x = joy_vx;          // on-screen axis, invert_x already applied
@@ -10407,6 +10683,10 @@ static void joy_nav_update(uint32_t now)
     return;
   }
 
+  if (in_modes) {
+    sn_mode_step(want);
+    return;
+  }
   apps_idx = apps_step(apps_idx, want);
   apps_carousel_build();
 }

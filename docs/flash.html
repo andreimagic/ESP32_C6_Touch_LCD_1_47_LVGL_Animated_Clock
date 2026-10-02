@@ -212,6 +212,67 @@
     font-size:13px;
   }
 
+  .monitor{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:18px;
+    padding:24px 24px 20px;
+    margin-bottom:28px;
+  }
+  .monitor-head{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    margin-bottom:12px;
+  }
+  .monitor-head h2{
+    font-family:'Fredoka', sans-serif;
+    font-size:16px;
+    font-weight:600;
+    margin:0;
+  }
+  .monitor-actions{ display:flex; gap:8px; }
+  .monitor-btn{
+    font-family:'Work Sans', sans-serif;
+    font-weight:600;
+    font-size:12px;
+    border:1px solid var(--line);
+    background:transparent;
+    color:var(--cream);
+    border-radius:999px;
+    padding:6px 14px;
+    cursor:pointer;
+  }
+  .monitor-btn.primary{ background:var(--sun); color:#1a1200; border-color:var(--sun); }
+  .monitor-btn:disabled{ opacity:0.4; cursor:default; }
+  .monitor-log{
+    background:#0a1020;
+    border:1px solid var(--line);
+    border-radius:12px;
+    padding:12px 14px;
+    height:200px;
+    overflow-y:auto;
+    font-family:ui-monospace, Menlo, Consolas, monospace;
+    font-size:12px;
+    line-height:1.5;
+    color:var(--mint);
+    white-space:pre-wrap;
+    word-break:break-all;
+  }
+  .monitor-hint{
+    font-size:12px;
+    color:var(--muted);
+    margin:10px 0 0;
+  }
+  .reconnect-hint{
+    display:none;
+    font-size:12px;
+    color:var(--muted);
+    margin:10px 0 0;
+    text-align:center;
+  }
+  .reconnect-hint a{ color:var(--mint); }
+
   footer{
     text-align:center;
     color:var(--muted);
@@ -247,6 +308,7 @@
       <div class="install-slot" data-role="install-slot">
         <p class="status" data-role="status">Checking latest release&hellip;</p>
       </div>
+      <p class="reconnect-hint" data-role="reconnect-hint">Flashed &mdash; <a href="#" data-role="open-monitor">watch it boot in the serial monitor&nbsp;&darr;</a></p>
     </div>
     <div class="board" id="board-s3" data-chip-family="ESP32-S3" data-chip-token="esp32s3">
       <h2>ESP32-S3</h2>
@@ -262,6 +324,7 @@
       <div class="install-slot" data-role="install-slot">
         <p class="status" data-role="status">Checking latest release&hellip;</p>
       </div>
+      <p class="reconnect-hint" data-role="reconnect-hint">Flashed &mdash; <a href="#" data-role="open-monitor">watch it boot in the serial monitor&nbsp;&darr;</a></p>
     </div>
   </div>
   <p class="erase-hint" style="text-align:center;margin:-18px 0 28px;">Erasing wipes the whole chip, including saved settings/GIFs on an SD-less S3.</p>
@@ -274,6 +337,18 @@
       <li>If your OS asks which driver to use, pick the one matching your board's USB-to-serial chip (usually CP210x or CH9102).</li>
       <li>Click Install, choose the matching serial port from the browser prompt, and keep the tab open until it finishes. The full image writes bootloader, partition table and app in one go, so your FFat settings/GIFs on an SD-less S3 are left alone.</li>
     </ol>
+  </div>
+
+  <div class="monitor">
+    <div class="monitor-head">
+      <h2>Serial Monitor</h2>
+      <div class="monitor-actions">
+        <button type="button" class="monitor-btn" id="monitor-restart" disabled>Restart</button>
+        <button type="button" class="monitor-btn primary" id="monitor-toggle">Connect</button>
+      </div>
+    </div>
+    <div class="monitor-log" id="monitor-log" aria-live="polite">Not connected.</div>
+    <p class="monitor-hint">Opens its own port picker &mdash; pick the same board you just flashed. Disconnect here before clicking Install (a port can't be open in two places at once); flashing will also disconnect it for you automatically.</p>
   </div>
 
   <footer>
@@ -305,12 +380,25 @@ function manifestUrlFor(board, release, asset) {
 function makeInstallButton(board, release, asset) {
   const btn = document.createElement("esp-web-install-button");
   btn.setAttribute("manifest", manifestUrlFor(board, release, asset));
+  btn.setAttribute("log-console", ""); // live log instead of a bare progress bar
   if (board.erase) btn.setAttribute("erase-first", "");
   btn.innerHTML = `
     <button slot="activate">Install ${release.tag_name}</button>
     <span slot="unsupported">Open this page in Chrome or Edge on a computer.</span>
     <span slot="not-allowed">This page needs to be served over HTTPS.</span>
   `;
+
+  const reconnectHint = board.el.querySelector('[data-role="reconnect-hint"]');
+  reconnectHint.style.display = "none";
+  btn.addEventListener("state-changed", (ev) => {
+    const s = ev.detail;
+    if (s.state === "initializing") {
+      monitorDisconnect(); // free the port in case our own monitor is holding it
+    } else if (s.state === "finished") {
+      reconnectHint.style.display = "block";
+    }
+  });
+
   return btn;
 }
 
@@ -414,8 +502,99 @@ async function init() {
     boards.forEach(b => { b.releases.stable = "error"; render(b); });
     console.error(err);
   }
+
+  document.querySelectorAll('[data-role="open-monitor"]').forEach(a => {
+    a.addEventListener("click", (e) => { e.preventDefault(); monitorConnect(); });
+  });
 }
 init();
+
+// ---- Serial monitor (plain Web Serial, independent of the install flow) ----
+const MONITOR_BAUD = 115200; // standard Arduino default; change if your sketch uses another rate
+let monitorPort = null;
+let monitorReader = null;
+let monitorKeepReading = false;
+
+const monitorLogEl = document.getElementById("monitor-log");
+const monitorToggleBtn = document.getElementById("monitor-toggle");
+const monitorRestartBtn = document.getElementById("monitor-restart");
+
+function monitorLog(text) {
+  if (monitorLogEl.textContent === "Not connected.") monitorLogEl.textContent = "";
+  monitorLogEl.textContent += text;
+  monitorLogEl.scrollTop = monitorLogEl.scrollHeight;
+}
+
+async function monitorConnect() {
+  if (monitorPort) return;
+  try {
+    monitorPort = await navigator.serial.requestPort();
+    await monitorPort.open({ baudRate: MONITOR_BAUD });
+  } catch (err) {
+    monitorLog(`\n[connect failed: ${err.message}]\n`);
+    monitorPort = null;
+    return;
+  }
+  monitorToggleBtn.textContent = "Disconnect";
+  monitorRestartBtn.disabled = false;
+  monitorLogEl.textContent = "";
+  monitorKeepReading = true;
+  monitorReadLoop();
+}
+
+async function monitorReadLoop() {
+  const decoder = new TextDecoderStream();
+  const closed = monitorPort.readable.pipeTo(decoder.writable).catch(() => {});
+  const reader = decoder.readable.getReader();
+  monitorReader = reader;
+  try {
+    while (monitorKeepReading) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) monitorLog(value);
+    }
+  } catch (err) {
+    monitorLog(`\n[monitor error: ${err.message}]\n`);
+  } finally {
+    reader.releaseLock();
+    await closed;
+  }
+}
+
+async function monitorDisconnect() {
+  if (!monitorPort) return;
+  monitorKeepReading = false;
+  if (monitorReader) { try { await monitorReader.cancel(); } catch (e) {} }
+  try { await monitorPort.close(); } catch (e) {}
+  monitorPort = null;
+  monitorReader = null;
+  monitorToggleBtn.textContent = "Connect";
+  monitorRestartBtn.disabled = true;
+  monitorLog("\n[disconnected]\n");
+}
+
+async function monitorRestart() {
+  if (!monitorPort) return;
+  try {
+    // Standard auto-reset sequence (CP210x/CH9102-style USB-serial boards):
+    // RTS toggles the EN/reset pin; DTR stays released so it boots the app, not the bootloader.
+    await monitorPort.setSignals({ dataTerminalReady: false, requestToSend: true });
+    await new Promise(r => setTimeout(r, 150));
+    await monitorPort.setSignals({ dataTerminalReady: false, requestToSend: false });
+  } catch (err) {
+    monitorLog(`\n[restart failed: ${err.message}]\n`);
+  }
+}
+
+monitorToggleBtn.addEventListener("click", () => {
+  monitorPort ? monitorDisconnect() : monitorConnect();
+});
+monitorRestartBtn.addEventListener("click", monitorRestart);
+
+if (!("serial" in navigator)) {
+  monitorToggleBtn.disabled = true;
+  monitorLog("Web Serial isn't supported in this browser. Use Chrome or Edge on a computer.");
+}
 </script>
 </body>
 </html>

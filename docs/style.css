@@ -370,6 +370,7 @@ pre code {
     font-family: 'Fira Code', monospace;
     line-height: 1.2;
     white-space: pre;
+    color: var(--code-text);
 }
 
 /* Lists */

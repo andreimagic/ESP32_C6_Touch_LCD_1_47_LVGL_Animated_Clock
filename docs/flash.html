@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flash the Clock</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⏰</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+<style>
+  :root{
+    --navy:#131f38;
+    --navy-deep:#0d1628;
+    --panel:#1c2c4e;
+    --cream:#f3ead9;
+    --muted:#8fa0c4;
+    --sun:#ffa552;
+    --mint:#78d9c5;
+    --line:rgba(243,234,217,0.12);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:radial-gradient(ellipse at top, var(--navy) 0%, var(--navy-deep) 65%);
+    color:var(--cream);
+    font-family:'Work Sans', sans-serif;
+    min-height:100vh;
+    display:flex;
+    justify-content:center;
+    padding:48px 20px 72px;
+    line-height:1.55;
+  }
+  main{width:100%;max-width:560px;}
+
+  .clockface{
+    background:var(--navy-deep);
+    border:1px solid var(--line);
+    border-radius:28px;
+    padding:36px 20px;
+    text-align:center;
+    margin-bottom:36px;
+    box-shadow: inset 0 0 40px rgba(0,0,0,0.35);
+  }
+  .time{
+    font-family:'Fredoka', sans-serif;
+    font-weight:700;
+    font-size:clamp(48px, 13vw, 76px);
+    letter-spacing:2px;
+    color:var(--sun);
+    text-shadow:0 0 24px rgba(255,165,82,0.45);
+  }
+  .time .colon{ animation: blink 1.6s steps(1) infinite; }
+  @keyframes blink{ 50%{ opacity:0.25; } }
+  .date{
+    font-size:14px;
+    color:var(--muted);
+    margin-top:8px;
+    letter-spacing:0.4px;
+  }
+
+  h1{
+    font-family:'Fredoka', sans-serif;
+    font-weight:600;
+    font-size:30px;
+    margin:0 0 10px;
+  }
+  p.lede{
+    color:var(--muted);
+    margin:0 0 36px;
+    font-size:16px;
+  }
+
+  .boards{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:14px;
+    margin-bottom:28px;
+  }
+  @media (max-width:480px){ .boards{ grid-template-columns:1fr; } }
+
+  .board{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:18px;
+    padding:22px 18px;
+    text-align:center;
+  }
+  .board h2{
+    font-family:'Fredoka', sans-serif;
+    font-size:18px;
+    font-weight:600;
+    margin:0 0 4px;
+  }
+  .board .sub{
+    color:var(--muted);
+    font-size:13px;
+    margin:0 0 18px;
+  }
+  .board .status{
+    color:var(--muted);
+    font-size:13px;
+    margin:0;
+  }
+
+  .channel-toggle{
+    display:flex;
+    gap:4px;
+    background:rgba(0,0,0,0.25);
+    border-radius:999px;
+    padding:3px;
+    margin-bottom:12px;
+  }
+  .channel-btn{
+    flex:1;
+    border:none;
+    background:transparent;
+    color:var(--muted);
+    font-family:'Work Sans', sans-serif;
+    font-weight:600;
+    font-size:12px;
+    padding:6px 0;
+    border-radius:999px;
+    cursor:pointer;
+  }
+  .channel-btn.active{
+    background:var(--sun);
+    color:#1a1200;
+  }
+
+  .erase-row{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:6px;
+    font-size:12px;
+    color:var(--muted);
+    margin-bottom:14px;
+    cursor:pointer;
+  }
+  .erase-row input{ accent-color: var(--sun); }
+  .erase-hint{
+    display:block;
+    font-size:11px;
+    color:var(--muted);
+    opacity:0.75;
+    margin-top:2px;
+  }
+
+  .edge-check-btn{
+    width:100%;
+    font-family:'Work Sans', sans-serif;
+    font-weight:600;
+    font-size:14px;
+    border:1px solid var(--line);
+    background:transparent;
+    color:var(--cream);
+    border-radius:999px;
+    padding:11px 20px;
+    cursor:pointer;
+  }
+  .edge-check-btn:disabled{ opacity:0.6; cursor:default; }
+
+  esp-web-install-button{
+    --esp-tools-button-color: var(--sun);
+    --esp-tools-button-text-color: #1a1200;
+    --esp-tools-success-color: var(--mint);
+    --esp-tools-error-color: #ff6b6b;
+    --esp-tools-progress-color: var(--sun);
+    display:block;
+  }
+  esp-web-install-button button{
+    font-family:'Work Sans', sans-serif;
+    font-weight:600;
+    font-size:14px;
+    border:none;
+    border-radius:999px;
+    padding:11px 20px;
+    cursor:pointer;
+    width:100%;
+  }
+  esp-web-install-button [slot="unsupported"],
+  esp-web-install-button [slot="not-allowed"]{
+    font-size:13px;
+    color:var(--muted);
+  }
+
+  .steps{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:18px;
+    padding:24px 24px 20px;
+    margin-bottom:28px;
+  }
+  .steps h2{
+    font-family:'Fredoka', sans-serif;
+    font-size:16px;
+    font-weight:600;
+    margin:0 0 14px;
+  }
+  .steps ol{
+    margin:0;
+    padding-left:20px;
+    color:var(--cream);
+  }
+  .steps li{ margin-bottom:10px; font-size:15px; }
+  .steps li:last-child{ margin-bottom:0; }
+  .steps code{
+    background:rgba(0,0,0,0.3);
+    padding:1px 6px;
+    border-radius:6px;
+    font-size:13px;
+  }
+
+  footer{
+    text-align:center;
+    color:var(--muted);
+    font-size:13px;
+  }
+  footer a{ color:var(--mint); text-decoration:none; }
+  footer a:hover{ text-decoration:underline; }
+</style>
+</head>
+<body>
+<main>
+
+  <div class="clockface">
+    <div class="time">07<span class="colon">:</span>42</div>
+    <div class="date">Ready to flash</div>
+  </div>
+
+  <h1>Flash your clock</h1>
+  <p class="lede">Pick your board, plug the clock into your computer with a USB&nbsp;cable, and install straight from the browser — no Arduino IDE needed.</p>
+
+  <div class="boards">
+    <div class="board" id="board-c6" data-chip-family="ESP32-C6" data-chip-token="esp32c6">
+      <h2>ESP32-C6</h2>
+      <p class="sub">Touch LCD 1.47&Prime;</p>
+      <div class="channel-toggle">
+        <button type="button" class="channel-btn active" data-channel="stable">Stable</button>
+        <button type="button" class="channel-btn" data-channel="edge">Edge</button>
+      </div>
+      <label class="erase-row">
+        <input type="checkbox" class="erase-check">
+        Erase flash first
+      </label>
+      <div class="install-slot" data-role="install-slot">
+        <p class="status" data-role="status">Checking latest release&hellip;</p>
+      </div>
+    </div>
+    <div class="board" id="board-s3" data-chip-family="ESP32-S3" data-chip-token="esp32s3">
+      <h2>ESP32-S3</h2>
+      <p class="sub">Touch LCD 1.47&Prime;</p>
+      <div class="channel-toggle">
+        <button type="button" class="channel-btn active" data-channel="stable">Stable</button>
+        <button type="button" class="channel-btn" data-channel="edge">Edge</button>
+      </div>
+      <label class="erase-row">
+        <input type="checkbox" class="erase-check">
+        Erase flash first
+      </label>
+      <div class="install-slot" data-role="install-slot">
+        <p class="status" data-role="status">Checking latest release&hellip;</p>
+      </div>
+    </div>
+  </div>
+  <p class="erase-hint" style="text-align:center;margin:-18px 0 28px;">Erasing wipes the whole chip, including saved settings/GIFs on an SD-less S3.</p>
+
+  <div class="steps">
+    <h2>Before you click Install</h2>
+    <ol>
+      <li>Use Chrome or Edge on a laptop or desktop — Web Serial isn't supported on mobile browsers.</li>
+      <li>Connect the board's USB-C port directly to your computer (skip hubs if the port isn't recognized).</li>
+      <li>If your OS asks which driver to use, pick the one matching your board's USB-to-serial chip (usually CP210x or CH9102).</li>
+      <li>Click Install, choose the matching serial port from the browser prompt, and keep the tab open until it finishes. The full image writes bootloader, partition table and app in one go, so your FFat settings/GIFs on an SD-less S3 are left alone.</li>
+    </ol>
+  </div>
+
+  <footer>
+    Always installs the latest tagged release &middot;
+    Firmware source on <a href="https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock" target="_blank" rel="noopener">GitHub</a>
+  </footer>
+
+</main>
+
+<script>
+const REPO = "andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock";
+const RELEASE_URL = { stable: `https://api.github.com/repos/${REPO}/releases/latest`,
+                       edge:   `https://api.github.com/repos/${REPO}/releases/tags/edge` };
+
+function findAsset(release, chipToken) {
+  return release.assets.find(a => a.name.includes(chipToken) && a.name.endsWith("-full.bin"));
+}
+
+function manifestUrlFor(board, release, asset) {
+  const manifest = {
+    name: `${board.chipFamily} — ${release.tag_name}`,
+    version: release.tag_name,
+    new_install_prompt_erase: false,
+    builds: [{ chipFamily: board.chipFamily, parts: [{ path: asset.browser_download_url, offset: 0 }] }],
+  };
+  return URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: "application/json" }));
+}
+
+function makeInstallButton(board, release, asset) {
+  const btn = document.createElement("esp-web-install-button");
+  btn.setAttribute("manifest", manifestUrlFor(board, release, asset));
+  if (board.erase) btn.setAttribute("erase-first", "");
+  btn.innerHTML = `
+    <button slot="activate">Install ${release.tag_name}</button>
+    <span slot="unsupported">Open this page in Chrome or Edge on a computer.</span>
+    <span slot="not-allowed">This page needs to be served over HTTPS.</span>
+  `;
+  return btn;
+}
+
+function render(board) {
+  const slot = board.el.querySelector('[data-role="install-slot"]');
+  slot.innerHTML = "";
+
+  const release = board.releases[board.channel];
+
+  if (release === "error") {
+    const p = document.createElement("p");
+    p.className = "status";
+    p.textContent = `Couldn't check the ${board.channel} release — try again.`;
+    slot.appendChild(p);
+    return;
+  }
+
+  if (release) {
+    const asset = findAsset(release, board.chipToken);
+    if (!asset) {
+      const p = document.createElement("p");
+      p.className = "status";
+      p.textContent = `No ${release.tag_name} build for this board yet.`;
+      slot.appendChild(p);
+      return;
+    }
+    slot.appendChild(makeInstallButton(board, release, asset));
+    return;
+  }
+
+  if (board.channel === "stable") {
+    const p = document.createElement("p");
+    p.className = "status";
+    p.textContent = "Checking latest release\u2026";
+    slot.appendChild(p);
+    return;
+  }
+
+  // Edge, not fetched yet: show a plain button. The GitHub API call for the
+  // edge release only happens when this is clicked, not when the toggle above is.
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "edge-check-btn";
+  btn.textContent = "Check for edge build";
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    btn.textContent = "Checking\u2026";
+    try {
+      const res = await fetch(RELEASE_URL.edge);
+      if (!res.ok) throw new Error(`GitHub API returned ${res.status}`);
+      board.releases.edge = await res.json();
+    } catch (err) {
+      board.releases.edge = "error";
+      console.error(err);
+    }
+    if (board.channel === "edge") render(board);
+  });
+  slot.appendChild(btn);
+}
+
+function initBoard(el) {
+  const board = {
+    el,
+    chipFamily: el.dataset.chipFamily,
+    chipToken: el.dataset.chipToken,
+    channel: "stable",
+    erase: false,
+    releases: { stable: null, edge: null },
+  };
+
+  el.querySelectorAll(".channel-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      if (btn.dataset.channel === board.channel) return;
+      board.channel = btn.dataset.channel;
+      el.querySelectorAll(".channel-btn").forEach(b => b.classList.toggle("active", b === btn));
+      render(board); // switching channels never calls the API by itself
+    });
+  });
+
+  el.querySelector(".erase-check").addEventListener("change", (e) => {
+    board.erase = e.target.checked;
+    const existing = el.querySelector("esp-web-install-button");
+    if (existing) {
+      if (board.erase) existing.setAttribute("erase-first", "");
+      else existing.removeAttribute("erase-first");
+    }
+  });
+
+  return board;
+}
+
+async function init() {
+  const boards = Array.from(document.querySelectorAll(".board")).map(initBoard);
+
+  try {
+    const res = await fetch(RELEASE_URL.stable);
+    if (!res.ok) throw new Error(`GitHub API returned ${res.status}`);
+    const release = await res.json();
+    boards.forEach(b => { b.releases.stable = release; render(b); });
+  } catch (err) {
+    boards.forEach(b => { b.releases.stable = "error"; render(b); });
+    console.error(err);
+  }
+}
+init();
+</script>
+</body>
+</html>

@@ -37,25 +37,55 @@
     background:var(--navy-deep);
     border:1px solid var(--line);
     border-radius:28px;
-    padding:36px 20px;
+    padding:28px 20px;
     text-align:center;
     margin-bottom:36px;
     box-shadow: inset 0 0 40px rgba(0,0,0,0.35);
   }
-  .time{
+  .screen{
+    position:relative;
+    width:100%;
+    max-width:320px;
+    margin:0 auto;
+    aspect-ratio:160/86;
+    background:#05070a;
+    border-radius:16px;
+    border:3px solid rgba(255,255,255,0.08);
+    overflow:hidden;
+    box-shadow: inset 0 0 20px rgba(0,0,0,0.7);
+  }
+  .screen-time{
+    position:absolute;
+    inset:0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
     font-family:'Fredoka', sans-serif;
     font-weight:700;
-    font-size:clamp(48px, 13vw, 76px);
-    letter-spacing:2px;
+    font-size:clamp(34px, 9vw, 50px);
+    letter-spacing:1px;
     color:var(--sun);
-    text-shadow:0 0 24px rgba(255,165,82,0.45);
+    text-shadow:0 0 18px rgba(255,165,82,0.5);
+    transition:opacity .6s ease;
   }
-  .time .colon{ animation: blink 1.6s steps(1) infinite; }
+  .screen-time .colon{ animation: blink 1.6s steps(1) infinite; }
   @keyframes blink{ 50%{ opacity:0.25; } }
+  .screen-anim{
+    position:absolute;
+    inset:0;
+    width:100%;
+    height:100%;
+    object-fit:cover;
+    opacity:0;
+    transition:opacity .6s ease;
+    pointer-events:none;
+  }
+  .screen.playing .screen-time{ opacity:0; }
+  .screen.playing .screen-anim{ opacity:1; }
   .date{
     font-size:14px;
     color:var(--muted);
-    margin-top:8px;
+    margin-top:14px;
     letter-spacing:0.4px;
   }
 
@@ -286,7 +316,10 @@
 <main>
 
   <div class="clockface">
-    <div class="time">07<span class="colon">:</span>42</div>
+    <div class="screen" id="device-screen">
+      <div class="screen-time"><span id="clock-h">07</span><span class="colon">:</span><span id="clock-m">42</span></div>
+      <img class="screen-anim" id="screen-anim" src="assets/cruzr_smile.gif" alt="Clock's happy animation">
+    </div>
     <div class="date">Ready to flash</div>
   </div>
 
@@ -595,6 +628,38 @@ if (!("serial" in navigator)) {
   monitorToggleBtn.disabled = true;
   monitorLog("Web Serial isn't supported in this browser. Use Chrome or Edge on a computer.");
 }
+
+// ---- Device screen: shows the time, plays the smile animation on a cycle,
+// same as the real clock's 07:42 + periodic animation behaviour ----
+(function () {
+  const screenEl = document.getElementById("device-screen");
+  const animEl = document.getElementById("screen-anim");
+  const hEl = document.getElementById("clock-h");
+  const mEl = document.getElementById("clock-m");
+
+  const PLAY_DURATION_MS = 10000; // one full loop of the (half-speed) GIF
+  const CYCLE_MS = 30 * 1000;     // web-page cadence, more often than the real device's 2 min so it stays visible
+  const FIRST_PLAY_DELAY_MS = 3000;
+
+  function updateClock() {
+    const now = new Date();
+    hEl.textContent = String(now.getHours()).padStart(2, "0");
+    mEl.textContent = String(now.getMinutes()).padStart(2, "0");
+  }
+  updateClock();
+  setInterval(updateClock, 1000);
+
+  function playSmile() {
+    animEl.src = "assets/cruzr_smile.gif?t=" + Date.now(); // restart from frame 0
+    screenEl.classList.add("playing");
+    setTimeout(() => screenEl.classList.remove("playing"), PLAY_DURATION_MS);
+  }
+
+  setTimeout(() => {
+    playSmile();
+    setInterval(playSmile, CYCLE_MS);
+  }, FIRST_PLAY_DELAY_MS);
+})();
 </script>
 </body>
 </html>

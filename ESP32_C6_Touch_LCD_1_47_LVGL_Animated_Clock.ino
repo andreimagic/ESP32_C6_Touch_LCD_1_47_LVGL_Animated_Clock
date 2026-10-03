@@ -5754,6 +5754,13 @@ static void clock_face_show(lv_timer_t *t)
   lv_obj_align(home_bell_lbl, LV_ALIGN_BOTTOM_RIGHT, -8, -4);
   update_home_bell();  // set text + hidden state from cfg
 
+  // The touch zones are live during the splash, so a screen (e.g. the smile
+  // GIF from an upper-left tap) may already be open. Labels created now would
+  // otherwise draw on top of it — send them to the back of the z-order.
+  lv_obj_move_background(home_bell_lbl);
+  lv_obj_move_background(home_timer_lbl);
+  lv_obj_move_background(home_time_lbl);
+
   // Show immediately rather than waiting one full second
   clock_tick_cb(nullptr);
   clock_timer = lv_timer_create(clock_tick_cb, 1000, nullptr);

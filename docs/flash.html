@@ -82,6 +82,7 @@
   }
   .screen.playing .screen-time{ opacity:0; }
   .screen.playing .screen-anim{ opacity:1; }
+  .screen.installing{ box-shadow: inset 0 0 20px rgba(0,0,0,0.7), 0 0 0 2px var(--mint); }
   .date{
     font-size:14px;
     color:var(--muted);
@@ -392,31 +393,50 @@
 </main>
 
 <script>
-const REPO = "andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock";
-const RELEASE_URL = { stable: `https://api.github.com/repos/${REPO}/releases/latest`,
-                       edge:   `https://api.github.com/repos/${REPO}/releases/tags/edge` };
+// ---- Firmware source -------------------------------------------------
+// Firmware is NOT fetched from GitHub Release asset URLs: those don't send
+// Access-Control-Allow-Origin (confirmed — this is what broke things), so a
+// browser can't fetch them cross-origin from andreimagic.github.io, no
+// matter what this page or ESP Web Tools does. Instead, a CI step
+// (.github/workflows/mirror-firmware.yml) mirrors each release's *-full.bin
+// into docs/firmware/{stable,edge}/ on every publish, which Pages serves
+// same-origin — zero CORS involved.
+const FIRMWARE_BASE = { stable: "firmware/stable", edge: "firmware/edge" };
+const CHIP_FILES = { esp32c6: "esp32c6-full.bin", esp32s3: "esp32s3-full.bin" };
 
-function findAsset(release, chipToken) {
-  return release.assets.find(a => a.name.includes(chipToken) && a.name.endsWith("-full.bin"));
+function absoluteUrl(path) {
+  // Must be absolute: the manifest itself is served as a blob: URL, and a
+  // relative part.path resolved against a blob: base does not land back on
+  // this page — it has to already point at the real https:// location.
+  return new URL(path, window.location.href).href;
 }
 
-function manifestUrlFor(board, release, asset) {
+async function fetchVersion(channel) {
+  const res = await fetch(`${FIRMWARE_BASE[channel]}/VERSION?t=${Date.now()}`);
+  if (!res.ok) throw new Error(`VERSION not found (${res.status})`);
+  return (await res.text()).trim();
+}
+
+function manifestUrlFor(board, channel, version) {
+  const binPath = `${FIRMWARE_BASE[channel]}/${CHIP_FILES[board.chipToken]}`;
   const manifest = {
-    name: `${board.chipFamily} — ${release.tag_name}`,
-    version: release.tag_name,
+    name: `${board.chipFamily} — ${version}`,
+    version,
     new_install_prompt_erase: false,
-    builds: [{ chipFamily: board.chipFamily, parts: [{ path: asset.browser_download_url, offset: 0 }] }],
+    builds: [{ chipFamily: board.chipFamily, parts: [{ path: absoluteUrl(binPath), offset: 0 }] }],
   };
   return URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: "application/json" }));
 }
 
-function makeInstallButton(board, release, asset) {
+const INSTALL_ACTIVE_STATES = new Set(["initializing", "preparing", "erasing", "writing"]);
+
+function makeInstallButton(board, channel, version) {
   const btn = document.createElement("esp-web-install-button");
-  btn.setAttribute("manifest", manifestUrlFor(board, release, asset));
+  btn.setAttribute("manifest", manifestUrlFor(board, channel, version));
   btn.setAttribute("log-console", ""); // live log instead of a bare progress bar
   if (board.erase) btn.setAttribute("erase-first", "");
   btn.innerHTML = `
-    <button slot="activate">Install ${release.tag_name}</button>
+    <button slot="activate">Install ${version}</button>
     <span slot="unsupported">Open this page in Chrome or Edge on a computer.</span>
     <span slot="not-allowed">This page needs to be served over HTTPS.</span>
   `;
@@ -425,10 +445,12 @@ function makeInstallButton(board, release, asset) {
   reconnectHint.style.display = "none";
   btn.addEventListener("state-changed", (ev) => {
     const s = ev.detail;
-    if (s.state === "initializing") {
-      monitorDisconnect(); // free the port in case our own monitor is holding it
-    } else if (s.state === "finished") {
-      reconnectHint.style.display = "block";
+    if (INSTALL_ACTIVE_STATES.has(s.state)) {
+      if (s.state === "initializing") monitorDisconnect(); // free the port if our monitor holds it
+      installStart(btn); // -> JOY animation, defined in the device-screen section below
+    } else if (s.state === "finished" || s.state === "error") {
+      installEnd(btn); // -> back to normal clock/ambient-animation behaviour
+      if (s.state === "finished") reconnectHint.style.display = "block";
     }
   });
 
@@ -439,26 +461,18 @@ function render(board) {
   const slot = board.el.querySelector('[data-role="install-slot"]');
   slot.innerHTML = "";
 
-  const release = board.releases[board.channel];
+  const status = board.releases[board.channel];
 
-  if (release === "error") {
+  if (status === "error") {
     const p = document.createElement("p");
     p.className = "status";
-    p.textContent = `Couldn't check the ${board.channel} release — try again.`;
+    p.textContent = `Couldn't find the ${board.channel} firmware — try again.`;
     slot.appendChild(p);
     return;
   }
 
-  if (release) {
-    const asset = findAsset(release, board.chipToken);
-    if (!asset) {
-      const p = document.createElement("p");
-      p.className = "status";
-      p.textContent = `No ${release.tag_name} build for this board yet.`;
-      slot.appendChild(p);
-      return;
-    }
-    slot.appendChild(makeInstallButton(board, release, asset));
+  if (status) {
+    slot.appendChild(makeInstallButton(board, board.channel, status.version));
     return;
   }
 
@@ -470,8 +484,8 @@ function render(board) {
     return;
   }
 
-  // Edge, not fetched yet: show a plain button. The GitHub API call for the
-  // edge release only happens when this is clicked, not when the toggle above is.
+  // Edge, not fetched yet: show a plain button. The lookup only happens when
+  // this is clicked, not when the toggle above is.
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "edge-check-btn";
@@ -480,9 +494,8 @@ function render(board) {
     btn.disabled = true;
     btn.textContent = "Checking\u2026";
     try {
-      const res = await fetch(RELEASE_URL.edge);
-      if (!res.ok) throw new Error(`GitHub API returned ${res.status}`);
-      board.releases.edge = await res.json();
+      const version = await fetchVersion("edge");
+      board.releases.edge = { version };
     } catch (err) {
       board.releases.edge = "error";
       console.error(err);
@@ -527,10 +540,8 @@ async function init() {
   const boards = Array.from(document.querySelectorAll(".board")).map(initBoard);
 
   try {
-    const res = await fetch(RELEASE_URL.stable);
-    if (!res.ok) throw new Error(`GitHub API returned ${res.status}`);
-    const release = await res.json();
-    boards.forEach(b => { b.releases.stable = release; render(b); });
+    const version = await fetchVersion("stable");
+    boards.forEach(b => { b.releases.stable = { version }; render(b); });
   } catch (err) {
     boards.forEach(b => { b.releases.stable = "error"; render(b); });
     console.error(err);
@@ -629,37 +640,75 @@ if (!("serial" in navigator)) {
   monitorLog("Web Serial isn't supported in this browser. Use Chrome or Edge on a computer.");
 }
 
-// ---- Device screen: shows the time, plays the smile animation on a cycle,
-// same as the real clock's 07:42 + periodic animation behaviour ----
-(function () {
-  const screenEl = document.getElementById("device-screen");
-  const animEl = document.getElementById("screen-anim");
-  const hEl = document.getElementById("clock-h");
-  const mEl = document.getElementById("clock-m");
+// ---- Device screen ----------------------------------------------------
+// Normally: real local time, with a periodic ambient animation (smile by
+// day, sleep from 8pm on). While any board is installing: JOY plays
+// continuously instead, regardless of the ambient schedule, then hands
+// back to normal behaviour the moment that install finishes or errors.
+// installStart/installEnd are called from makeInstallButton() above —
+// function declarations are hoisted, so the call site above being earlier
+// in the file than this definition is fine.
+const screenEl = document.getElementById("device-screen");
+const animEl = document.getElementById("screen-anim");
+const hEl = document.getElementById("clock-h");
+const mEl = document.getElementById("clock-m");
 
-  const PLAY_DURATION_MS = 10000; // one full loop of the (half-speed) GIF
-  const CYCLE_MS = 30 * 1000;     // web-page cadence, more often than the real device's 2 min so it stays visible
-  const FIRST_PLAY_DELAY_MS = 3000;
+const AMBIENT = {
+  day:   { src: "assets/cruzr_smile.gif", duration: 10000 }, // one loop of the half-speed smile gif
+  night: { src: "assets/cruzr_sleep.gif", duration: 10000 }, // placeholder — re-tune once cruzr_sleep.gif is in hand
+};
+const JOY_SRC = "assets/cruzr_joy.gif";
+const NIGHT_START_HOUR = 20; // 8pm local time
 
-  function updateClock() {
-    const now = new Date();
-    hEl.textContent = String(now.getHours()).padStart(2, "0");
-    mEl.textContent = String(now.getMinutes()).padStart(2, "0");
-  }
-  updateClock();
-  setInterval(updateClock, 1000);
+const CYCLE_MS = 30 * 1000; // web-page cadence, more often than the real device's 2 min so it stays visible
+const FIRST_PLAY_DELAY_MS = 3000;
 
-  function playSmile() {
-    animEl.src = "assets/cruzr_smile.gif?t=" + Date.now(); // restart from frame 0
-    screenEl.classList.add("playing");
-    setTimeout(() => screenEl.classList.remove("playing"), PLAY_DURATION_MS);
-  }
+let ambientHideTimer = null;
+const installingButtons = new Set();
 
-  setTimeout(() => {
-    playSmile();
-    setInterval(playSmile, CYCLE_MS);
-  }, FIRST_PLAY_DELAY_MS);
-})();
+function updateClock() {
+  const now = new Date();
+  hEl.textContent = String(now.getHours()).padStart(2, "0");
+  mEl.textContent = String(now.getMinutes()).padStart(2, "0");
+}
+updateClock();
+setInterval(updateClock, 1000);
+
+function currentAmbient() {
+  return new Date().getHours() >= NIGHT_START_HOUR ? AMBIENT.night : AMBIENT.day;
+}
+
+function playAmbient() {
+  if (installingButtons.size > 0) return; // an install owns the screen right now
+  const ambient = currentAmbient();
+  animEl.src = ambient.src + "?t=" + Date.now(); // restart from frame 0
+  screenEl.classList.add("playing");
+  ambientHideTimer = setTimeout(() => {
+    screenEl.classList.remove("playing");
+    ambientHideTimer = null;
+  }, ambient.duration);
+}
+
+function installStart(btn) {
+  const wasIdle = installingButtons.size === 0;
+  installingButtons.add(btn);
+  if (!wasIdle) return; // another board is already driving the JOY overlay
+  if (ambientHideTimer) { clearTimeout(ambientHideTimer); ambientHideTimer = null; }
+  animEl.src = JOY_SRC + "?t=" + Date.now();
+  screenEl.classList.add("installing", "playing");
+}
+
+function installEnd(btn) {
+  installingButtons.delete(btn);
+  if (installingButtons.size > 0) return; // a different board is still installing
+  screenEl.classList.remove("installing", "playing");
+  // the regular 30s cycle (already running below) resumes the ambient gif on its own schedule
+}
+
+setTimeout(() => {
+  playAmbient();
+  setInterval(playAmbient, CYCLE_MS);
+}, FIRST_PLAY_DELAY_MS);
 </script>
 </body>
 </html>

@@ -57,8 +57,12 @@ name: Build
 on:
   pull_request:
     branches: [development, main]
+    paths-ignore:
+      - 'docs/**'
   push:
     branches: [development, main]
+    paths-ignore:
+      - 'docs/**'
   workflow_dispatch:
 
 # A new push to the same PR cancels the previous run.

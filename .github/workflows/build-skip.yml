@@ -1,0 +1,64 @@
+# .github/workflows/build-skip.yml
+#
+# Companion to build.yml's paths-ignore: docs/**.
+#
+# Required status checks are matched purely by job-name string; branch
+# protection doesn't know (or care) WHY a check never reported — if the
+# workflow that would produce "ESP32-C6 Touch LCD 1.47" never runs on a given
+# PR, that required check just sits as "Expected — waiting" forever and
+# merging is blocked. This fires on the exact inverse path condition
+# (docs/**-only changes) and reports an immediate pass for each board,
+# using the same board-targets.json matrix.name values, so some workflow
+# always reports every required check context either way.
+#
+# If a PR touches both docs/** and firmware source, both this workflow and
+# the real build.yml can fire for the same push — harmless (both reporting
+# the same check name just needs one success), only wasted ~10s of runner
+# time on the skip side.
+
+name: Build
+
+on:
+  pull_request:
+    branches: [development, main]
+    paths: ['docs/**']
+  push:
+    branches: [development, main]
+    paths: ['docs/**']
+
+concurrency:
+  group: build-skip-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  targets:
+    name: Load board targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.load.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Read board-targets.json
+        id: load
+        run: |
+          set -euo pipefail
+          FILE=".github/board-targets.json"
+          echo "matrix=$(jq -c . "$FILE")" >> "$GITHUB_OUTPUT"
+
+  compile:
+    name: ${{ matrix.name }}
+    needs: targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        include: ${{ fromJSON(needs.targets.outputs.matrix) }}
+    steps:
+      - name: Skip — docs-only change
+        run: echo "Only docs/ changed — nothing to compile for ${{ matrix.name }}."

@@ -82,7 +82,6 @@
   }
   .screen.playing .screen-time{ opacity:0; }
   .screen.playing .screen-anim{ opacity:1; }
-  .screen.installing{ box-shadow: inset 0 0 20px rgba(0,0,0,0.7), 0 0 0 2px var(--mint); }
   .date{
     font-size:14px;
     color:var(--muted);
@@ -176,21 +175,15 @@
     color:var(--muted);
     opacity:0.75;
     margin-top:2px;
+    transition:color .15s ease;
+  }
+  .erase-hint.active{
+    color:#ff6b6b;
+    font-weight:700;
+    opacity:1;
   }
 
-  .edge-check-btn{
-    width:100%;
-    font-family:'Work Sans', sans-serif;
-    font-weight:600;
-    font-size:14px;
-    border:1px solid var(--line);
-    background:transparent;
-    color:var(--cream);
-    border-radius:999px;
-    padding:11px 20px;
-    cursor:pointer;
-  }
-  .edge-check-btn:disabled{ opacity:0.6; cursor:default; }
+
 
   esp-web-install-button{
     --esp-tools-button-color: var(--sun);
@@ -361,7 +354,7 @@
       <p class="reconnect-hint" data-role="reconnect-hint">Flashed &mdash; <a href="#" data-role="open-monitor">watch it boot in the serial monitor&nbsp;&darr;</a></p>
     </div>
   </div>
-  <p class="erase-hint" style="text-align:center;margin:-18px 0 28px;">Erasing wipes the whole chip, including saved settings/GIFs on an SD-less S3.</p>
+  <p class="erase-hint" id="erase-hint" style="text-align:center;margin:-18px 0 28px;">Erasing wipes the whole chip, including saved settings/GIFs on an SD-less S3.</p>
 
   <div class="steps">
     <h2>Before you click Install</h2>
@@ -422,13 +415,20 @@ function manifestUrlFor(board, channel, version) {
   const manifest = {
     name: `${board.chipFamily} — ${version}`,
     version,
-    new_install_prompt_erase: false,
+    // true = "ask before erasing" (checkbox defaults UNticked).
+    // false = erase silently, no prompt at all — the opposite of what the
+    // name suggests. ESP Web Tools treats every install as "new" (vs. an
+    // "update") unless Improv Serial reports a firmware name matching this
+    // manifest's `name`; this sketch doesn't implement Improv, so every
+    // single flash is classified as new. With false that erased on every
+    // install regardless of our own page's Erase toggle below. Our own
+    // erase-first attribute (set only when that toggle is checked) remains
+    // the real control; this is just a second safety net, defaulted off.
+    new_install_prompt_erase: true,
     builds: [{ chipFamily: board.chipFamily, parts: [{ path: absoluteUrl(binPath), offset: 0 }] }],
   };
   return URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: "application/json" }));
 }
-
-const INSTALL_ACTIVE_STATES = new Set(["initializing", "preparing", "erasing", "writing"]);
 
 function makeInstallButton(board, channel, version) {
   const btn = document.createElement("esp-web-install-button");
@@ -445,12 +445,10 @@ function makeInstallButton(board, channel, version) {
   reconnectHint.style.display = "none";
   btn.addEventListener("state-changed", (ev) => {
     const s = ev.detail;
-    if (INSTALL_ACTIVE_STATES.has(s.state)) {
-      if (s.state === "initializing") monitorDisconnect(); // free the port if our monitor holds it
-      installStart(btn); // -> JOY animation, defined in the device-screen section below
-    } else if (s.state === "finished" || s.state === "error") {
-      installEnd(btn); // -> back to normal clock/ambient-animation behaviour
-      if (s.state === "finished") reconnectHint.style.display = "block";
+    if (s.state === "initializing") {
+      monitorDisconnect(); // free the port if our monitor holds it
+    } else if (s.state === "finished") {
+      reconnectHint.style.display = "block";
     }
   });
 
@@ -476,33 +474,17 @@ function render(board) {
     return;
   }
 
-  if (board.channel === "stable") {
-    const p = document.createElement("p");
-    p.className = "status";
-    p.textContent = "Checking latest release\u2026";
-    slot.appendChild(p);
-    return;
-  }
+  // Not fetched yet (both channels are now fetched eagerly in init() — this
+  // just covers the brief window before that first fetch resolves).
+  const p = document.createElement("p");
+  p.className = "status";
+  p.textContent = `Checking ${board.channel} version\u2026`;
+  slot.appendChild(p);
+}
 
-  // Edge, not fetched yet: show a plain button. The lookup only happens when
-  // this is clicked, not when the toggle above is.
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "edge-check-btn";
-  btn.textContent = "Check for edge build";
-  btn.addEventListener("click", async () => {
-    btn.disabled = true;
-    btn.textContent = "Checking\u2026";
-    try {
-      const version = await fetchVersion("edge");
-      board.releases.edge = { version };
-    } catch (err) {
-      board.releases.edge = "error";
-      console.error(err);
-    }
-    if (board.channel === "edge") render(board);
-  });
-  slot.appendChild(btn);
+function updateEraseHint() {
+  const anyErase = Array.from(document.querySelectorAll(".erase-check")).some(cb => cb.checked);
+  document.getElementById("erase-hint").classList.toggle("active", anyErase);
 }
 
 function initBoard(el) {
@@ -531,21 +513,32 @@ function initBoard(el) {
       if (board.erase) existing.setAttribute("erase-first", "");
       else existing.removeAttribute("erase-first");
     }
+    updateEraseHint();
   });
 
   return board;
 }
 
+async function loadChannel(boards, channel) {
+  try {
+    const version = await fetchVersion(channel);
+    boards.forEach(b => { b.releases[channel] = { version }; render(b); });
+  } catch (err) {
+    boards.forEach(b => { b.releases[channel] = "error"; render(b); });
+    console.error(err);
+  }
+}
+
 async function init() {
   const boards = Array.from(document.querySelectorAll(".board")).map(initBoard);
 
-  try {
-    const version = await fetchVersion("stable");
-    boards.forEach(b => { b.releases.stable = { version }; render(b); });
-  } catch (err) {
-    boards.forEach(b => { b.releases.stable = "error"; render(b); });
-    console.error(err);
-  }
+  // Both channels are same-origin VERSION-file fetches now (no GitHub API
+  // involved), so there's no rate-limit/cost reason to hold edge back behind
+  // a click anymore — fetch both up front, same as stable always was.
+  await Promise.all([
+    loadChannel(boards, "stable"),
+    loadChannel(boards, "edge"),
+  ]);
 
   document.querySelectorAll('[data-role="open-monitor"]').forEach(a => {
     a.addEventListener("click", (e) => { e.preventDefault(); monitorConnect(); });
@@ -641,13 +634,10 @@ if (!("serial" in navigator)) {
 }
 
 // ---- Device screen ----------------------------------------------------
-// Normally: real local time, with a periodic ambient animation (smile by
-// day, sleep from 8pm on). While any board is installing: JOY plays
-// continuously instead, regardless of the ambient schedule, then hands
-// back to normal behaviour the moment that install finishes or errors.
-// installStart/installEnd are called from makeInstallButton() above —
-// function declarations are hoisted, so the call site above being earlier
-// in the file than this definition is fine.
+// Real local time, with a periodic ambient animation: smile by day, sleep
+// from 8pm on. (No install-triggered animation — the install dialog is a
+// modal that covers this screen anyway, so nothing driven by install state
+// was ever visible while it mattered.)
 const screenEl = document.getElementById("device-screen");
 const animEl = document.getElementById("screen-anim");
 const hEl = document.getElementById("clock-h");
@@ -657,14 +647,10 @@ const AMBIENT = {
   day:   { src: "assets/cruzr_smile.gif", duration: 10000 }, // one loop of the half-speed smile gif
   night: { src: "assets/cruzr_sleep.gif", duration: 10000 }, // placeholder — re-tune once cruzr_sleep.gif is in hand
 };
-const JOY_SRC = "assets/cruzr_joy.gif";
 const NIGHT_START_HOUR = 20; // 8pm local time
 
 const CYCLE_MS = 30 * 1000; // web-page cadence, more often than the real device's 2 min so it stays visible
 const FIRST_PLAY_DELAY_MS = 3000;
-
-let ambientHideTimer = null;
-const installingButtons = new Set();
 
 function updateClock() {
   const now = new Date();
@@ -679,30 +665,10 @@ function currentAmbient() {
 }
 
 function playAmbient() {
-  if (installingButtons.size > 0) return; // an install owns the screen right now
   const ambient = currentAmbient();
   animEl.src = ambient.src + "?t=" + Date.now(); // restart from frame 0
   screenEl.classList.add("playing");
-  ambientHideTimer = setTimeout(() => {
-    screenEl.classList.remove("playing");
-    ambientHideTimer = null;
-  }, ambient.duration);
-}
-
-function installStart(btn) {
-  const wasIdle = installingButtons.size === 0;
-  installingButtons.add(btn);
-  if (!wasIdle) return; // another board is already driving the JOY overlay
-  if (ambientHideTimer) { clearTimeout(ambientHideTimer); ambientHideTimer = null; }
-  animEl.src = JOY_SRC + "?t=" + Date.now();
-  screenEl.classList.add("installing", "playing");
-}
-
-function installEnd(btn) {
-  installingButtons.delete(btn);
-  if (installingButtons.size > 0) return; // a different board is still installing
-  screenEl.classList.remove("installing", "playing");
-  // the regular 30s cycle (already running below) resumes the ambient gif on its own schedule
+  setTimeout(() => screenEl.classList.remove("playing"), ambient.duration);
 }
 
 setTimeout(() => {

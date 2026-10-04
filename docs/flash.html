@@ -101,36 +101,23 @@
     font-size:16px;
   }
 
-  .boards{
-    display:grid;
-    grid-template-columns:1fr 1fr;
-    gap:14px;
-    margin-bottom:28px;
-  }
-  @media (max-width:480px){ .boards{ grid-template-columns:1fr; } }
-
-  .board{
+  .flash-panel{
     background:var(--panel);
     border:1px solid var(--line);
     border-radius:18px;
     padding:22px 18px;
     text-align:center;
+    margin-bottom:28px;
   }
-  .board h2{
-    font-family:'Fredoka', sans-serif;
-    font-size:18px;
-    font-weight:600;
-    margin:0 0 4px;
-  }
-  .board .sub{
-    color:var(--muted);
-    font-size:13px;
-    margin:0 0 18px;
-  }
-  .board .status{
+  .flash-panel .status{
     color:var(--muted);
     font-size:13px;
     margin:0;
+  }
+  .flash-panel .note{
+    color:var(--muted);
+    font-size:12px;
+    margin:14px 0 0;
   }
 
   .channel-toggle{
@@ -230,31 +217,17 @@
   </div>
 
   <h1>Flash your clock</h1>
-  <p class="lede">Pick your board, plug the clock into your computer with a USB&nbsp;cable, and install straight from the browser — no Arduino IDE needed.</p>
+  <p class="lede">Plug the clock into your computer with a USB&nbsp;cable and install straight from the browser — no Arduino IDE needed. Works with both the ESP32-C6 and ESP32-S3 boards; it detects which one's connected and flashes the right build automatically.</p>
 
-  <div class="boards">
-    <div class="board" id="board-c6" data-chip-family="ESP32-C6" data-chip-token="esp32c6">
-      <h2>ESP32-C6</h2>
-      <p class="sub">Touch LCD 1.47&Prime;</p>
-      <div class="channel-toggle">
-        <button type="button" class="channel-btn active" data-channel="stable">Stable</button>
-        <button type="button" class="channel-btn" data-channel="edge">Edge</button>
-      </div>
-      <div class="install-slot" data-role="install-slot">
-        <p class="status" data-role="status">Checking latest release&hellip;</p>
-      </div>
+  <div class="flash-panel">
+    <div class="channel-toggle">
+      <button type="button" class="channel-btn active" data-channel="stable">Stable</button>
+      <button type="button" class="channel-btn" data-channel="edge">Edge</button>
     </div>
-    <div class="board" id="board-s3" data-chip-family="ESP32-S3" data-chip-token="esp32s3">
-      <h2>ESP32-S3</h2>
-      <p class="sub">Touch LCD 1.47&Prime;</p>
-      <div class="channel-toggle">
-        <button type="button" class="channel-btn active" data-channel="stable">Stable</button>
-        <button type="button" class="channel-btn" data-channel="edge">Edge</button>
-      </div>
-      <div class="install-slot" data-role="install-slot">
-        <p class="status" data-role="status">Checking latest release&hellip;</p>
-      </div>
+    <div class="install-slot" data-role="install-slot">
+      <p class="status" data-role="status">Checking latest version&hellip;</p>
     </div>
+    <p class="note">Touch LCD 1.47&Prime; &mdash; ESP32-C6 or ESP32-S3</p>
   </div>
 
   <div class="steps">
@@ -285,7 +258,13 @@
 // into docs/firmware/{stable,edge}/ on every publish, which Pages serves
 // same-origin — zero CORS involved.
 const FIRMWARE_BASE = { stable: "firmware/stable", edge: "firmware/edge" };
-const CHIP_FILES = { esp32c6: "esp32c6-full.bin", esp32s3: "esp32s3-full.bin" };
+// One manifest build per chip family — ESP Web Tools detects which chip is
+// actually connected and picks the matching entry itself, so one button
+// covers both boards instead of needing one per board.
+const CHIP_BUILDS = [
+  { chipFamily: "ESP32-C6", file: "esp32c6-full.bin" },
+  { chipFamily: "ESP32-S3", file: "esp32s3-full.bin" },
+];
 
 function absoluteUrl(path) {
   // Must be absolute: the manifest itself is served as a blob: URL, and a
@@ -300,10 +279,9 @@ async function fetchVersion(channel) {
   return (await res.text()).trim();
 }
 
-function manifestUrlFor(board, channel, version) {
-  const binPath = `${FIRMWARE_BASE[channel]}/${CHIP_FILES[board.chipToken]}`;
+function manifestUrlFor(channel, version) {
   const manifest = {
-    name: board.chipFamily, // version goes in its own field below — don't duplicate it here
+    name: "ESP32 Clock",
     version,
     // true = ESP Web Tools asks before erasing (its own checkbox, defaults
     // UNticked) instead of this page offering a separate erase toggle.
@@ -314,14 +292,17 @@ function manifestUrlFor(board, channel, version) {
     // single flash is classified as new, which is why false is dangerous
     // here specifically (it silently erased on every install).
     new_install_prompt_erase: true,
-    builds: [{ chipFamily: board.chipFamily, parts: [{ path: absoluteUrl(binPath), offset: 0 }] }],
+    builds: CHIP_BUILDS.map(({ chipFamily, file }) => ({
+      chipFamily,
+      parts: [{ path: absoluteUrl(`${FIRMWARE_BASE[channel]}/${file}`), offset: 0 }],
+    })),
   };
   return URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: "application/json" }));
 }
 
-function makeInstallButton(board, channel, version) {
+function makeInstallButton(channel, version) {
   const btn = document.createElement("esp-web-install-button");
-  btn.setAttribute("manifest", manifestUrlFor(board, channel, version));
+  btn.setAttribute("manifest", manifestUrlFor(channel, version));
   btn.setAttribute("log-console", ""); // live log instead of a bare progress bar
   btn.innerHTML = `
     <button slot="activate">Install ${version}</button>
@@ -331,74 +312,57 @@ function makeInstallButton(board, channel, version) {
   return btn;
 }
 
-function render(board) {
-  const slot = board.el.querySelector('[data-role="install-slot"]');
+const state = { channel: "stable", releases: { stable: null, edge: null } };
+
+function render() {
+  const slot = document.querySelector('[data-role="install-slot"]');
   slot.innerHTML = "";
 
-  const status = board.releases[board.channel];
+  const status = state.releases[state.channel];
 
   if (status === "error") {
     const p = document.createElement("p");
     p.className = "status";
-    p.textContent = `Couldn't find the ${board.channel} firmware — try again.`;
+    p.textContent = `Couldn't find the ${state.channel} firmware — try again.`;
     slot.appendChild(p);
     return;
   }
 
   if (status) {
-    slot.appendChild(makeInstallButton(board, board.channel, status.version));
+    slot.appendChild(makeInstallButton(state.channel, status.version));
     return;
   }
 
-  // Not fetched yet (both channels are now fetched eagerly in init() — this
-  // just covers the brief window before that first fetch resolves).
+  // Not fetched yet (both channels are fetched eagerly in init() — this just
+  // covers the brief window before that first fetch resolves).
   const p = document.createElement("p");
   p.className = "status";
-  p.textContent = `Checking ${board.channel} version\u2026`;
+  p.textContent = `Checking ${state.channel} version\u2026`;
   slot.appendChild(p);
 }
 
-function initBoard(el) {
-  const board = {
-    el,
-    chipFamily: el.dataset.chipFamily,
-    chipToken: el.dataset.chipToken,
-    channel: "stable",
-    releases: { stable: null, edge: null },
-  };
-
-  el.querySelectorAll(".channel-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      if (btn.dataset.channel === board.channel) return;
-      board.channel = btn.dataset.channel;
-      el.querySelectorAll(".channel-btn").forEach(b => b.classList.toggle("active", b === btn));
-      render(board); // switching channels never calls the API by itself
-    });
+document.querySelectorAll(".channel-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    if (btn.dataset.channel === state.channel) return;
+    state.channel = btn.dataset.channel;
+    document.querySelectorAll(".channel-btn").forEach(b => b.classList.toggle("active", b === btn));
+    render(); // switching channels never calls the API by itself
   });
+});
 
-  return board;
-}
-
-async function loadChannel(boards, channel) {
+async function loadChannel(channel) {
   try {
     const version = await fetchVersion(channel);
-    boards.forEach(b => { b.releases[channel] = { version }; render(b); });
+    state.releases[channel] = { version };
   } catch (err) {
-    boards.forEach(b => { b.releases[channel] = "error"; render(b); });
+    state.releases[channel] = "error";
     console.error(err);
   }
+  render();
 }
 
 async function init() {
-  const boards = Array.from(document.querySelectorAll(".board")).map(initBoard);
-
-  // Both channels are same-origin VERSION-file fetches now (no GitHub API
-  // involved), so there's no rate-limit/cost reason to hold edge back behind
-  // a click anymore — fetch both up front, same as stable always was.
-  await Promise.all([
-    loadChannel(boards, "stable"),
-    loadChannel(boards, "edge"),
-  ]);
+  await Promise.all([loadChannel("stable"), loadChannel("edge")]);
 }
 init();
 

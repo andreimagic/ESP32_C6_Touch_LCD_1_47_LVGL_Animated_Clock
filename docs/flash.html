@@ -145,6 +145,32 @@
     color:#1a1200;
   }
 
+  .action-buttons {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-top: 2rem;
+  }
+
+  .btn {
+      padding: 0.75rem 1.5rem;
+      border-radius: 6px;
+      font-weight: 600;
+      transition: all 0.2s;
+  }
+
+  .btn:hover { text-decoration: none; }
+
+  .btn.primary {
+      background-color: var(--primary-color);
+      color: #fff;
+  }
+
+  .btn.primary:hover {
+      background-color: var(--primary-hover);
+  }
+
   esp-web-install-button{
     --esp-tools-button-color: var(--sun);
     --esp-tools-button-text-color: #1a1200;
@@ -242,7 +268,7 @@
   </div>
 
   <div class="action-buttons">
-      <a href="index.html" class="btn secondary">← Back to Home</a>
+      <a href="index.html" class="btn primary">← Back to Home</a>
   </div>
 
   <footer>

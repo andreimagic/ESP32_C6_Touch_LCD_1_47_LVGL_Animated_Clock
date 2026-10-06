@@ -1,3 +1,11 @@
+## ⚡ Flash Instantly — No Toolchain Needed
+
+### 👉 **[Flash your clock from the browser](https://andreimagic.github.io/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/flash.html)**
+
+Plug in over USB, pick **Stable** or **Edge**, click **Install** — it detects whether you've got the **ESP32-C6** or the **ESP32-S3** and flashes the matching image automatically. Works in **Chrome, Edge, or Firefox 151+** on desktop — Safari still doesn't support WebSerial. No download, no toolchain, no manual flash offsets.
+
+---
+
 ## 🌐 View Demo
 
 👉 https://andreimagic.github.io/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/
@@ -9,10 +17,11 @@
 [![GitHub](https://img.shields.io/badge/github-andreimagic%2FESP32__C6__Touch__LCD__1__47__LVGL__Animated__Clock-blue?logo=github)](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock)
 [![Build](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock)](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/releases/latest)
+[![Flash in browser](https://img.shields.io/badge/⚡_flash-in%20your%20browser-ffa552)](https://andreimagic.github.io/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/flash.html)
 
 A smart animated clock for kids that runs on **two Waveshare 1.47" touch boards — the ESP32-C6 and the ESP32-S3** — driven by **LVGL v9**. Displays the time in a large custom font, plays animated GIF emotions on a schedule, sounds configurable buzzer alarms, runs a countdown timer, adjusts brightness by swipe (or tilt, where an IMU is fitted), hosts a full apps menu with ASCII mini-games, and supports deep-sleep power-off — all configured from a plain `config.ini`, no recompile needed.
 
-One sketch builds for both boards. The target is detected at compile time and every pin, bus and capability difference is resolved in [`board_config.h`](board_config.h) — see [Board Abstraction](#board-abstraction-board_configh). Storage is chosen at boot: an SD card if one is mounted, otherwise the S3's internal flash.
+One sketch builds for both boards. The target is detected at compile time and every pin, bus and capability difference is resolved in [`board_config.h`](board_config.h) — see [Board Abstraction](#board-abstraction-board_configh). Storage is chosen at boot: an SD card if one is mounted, otherwise the internal FFat partition on either board.
 
 ---
 
@@ -1351,10 +1360,24 @@ There are three routes. Flashing a prebuilt release takes a couple of minutes an
 needs no toolchain; building from source — in the Arduino IDE or with `make` — is
 only necessary if you want to change the firmware.
 
-### Option A — Flash a prebuilt release (no toolchain)
+### Option A — Flash in your browser (recommended, no toolchain)
 
-Every release ships a complete image per board — bootloader, partition table and
-application in one file:
+### 👉 **[Open the browser flasher](https://andreimagic.github.io/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/flash.html)**
+
+Connect the board over USB, pick **Stable** or **Edge**, and click **Install**.
+It detects whether you've got the ESP32-C6 or the ESP32-S3 and flashes the
+matching image automatically — no file to download, no address to set by hand.
+Works in **Chrome, Edge, or Firefox 151+** on desktop; Safari still doesn't support WebSerial.
+
+You do not need to erase the flash first — it replaces the bootloader,
+partition table and app in a single write, and only prompts to erase (unticked
+by default) if you explicitly ask for a clean slate.
+
+#### Prefer a generic tool or the command line?
+
+Every release still publishes the same complete image per board — bootloader,
+partition table and application in one file — if you'd rather flash it with
+something else:
 
 | Board | Full image |
 |---|---|
@@ -1368,8 +1391,8 @@ application in one file:
 1. Download the `-full.bin` **for your board** from
    [Releases](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/releases).
 2. Open **[Espressif's ESP Launchpad](https://espressif.github.io/esp-launchpad/)**
-   in **Chrome or Edge**. It flashes over WebSerial, which Firefox and Safari do
-   not support.
+   in **Chrome, Edge, or Firefox 151+**. It flashes over WebSerial, which Safari
+   still does not support.
 3. Open the **DIY** tab, connect the board over USB, click **Connect** and pick
    its serial port.
 4. Select the `.bin` file and set the flash address to **`0x0`**.
@@ -1812,7 +1835,7 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v3.3.1 | ✅ released | **Improvements** - Ensure GIFs and Scripts folders are created at Boot, allowing users to upload files from the Web interface on a fresh device; Exiting the configuration carousel items with a long-press will now Save and Exit directly to the Clock view |
 | v3.3.2 | ✅ released | **Bugfix** - Fix boot panic in ensure_dir() when no storage is mounted |
 | v3.4.0 | ✅ released | **KY-023 joystick (S3)** — an optional £2 analog joystick on the expansion header stands in for the IMU the S3 does not have, bringing **Tennis Letters**, **Letters Rain**, **Snake Letters** and **ToneQuest** back to that board. VRy/VRx on GPIO 9/10 (ADC1, so the WiFi radio cannot disturb them) and SW on GPIO 8, powered from 3V3. Opt-in via a new **Extra Games** toggle in the USB carousel, or `[joystick] extra_games` in `config.ini`: until it is on, no pin is claimed, no ADC is read and the four games stay hidden. The resting centre is measured at boot rather than assumed, and each half-travel is scaled against its own span, so an off-centre stick still reaches both walls. Two control schemes, both reusing the games' existing speeds — **direction** (push and it slides, what the tilt does today) and **position** (deflection sets and holds the object, what the bubble level does today) — selectable per paddle game with `paddle_mode`; Snake is four-way direction and ToneQuest is position on both axes, keeping its levelling gate, its tones and its scoring untouched. Tunable via `dead_zone_percent` / `edge_percent`, with `invert_x` / `invert_y` for a module mounted rotated. Left/right on the stick pages the apps carousel (with auto-repeat while held); the button enters the highlighted item, pauses and resumes Tennis Letters, Letters Rain and Snake Letters, and restarts a finished game. The C6 compiles none of it: `BOARD_HAS_JOYSTICK` is 0 there, so the setting does not exist rather than merely being hidden |
-| v3.5.0 | ✅ released | **Internal flash on the ESP32-C6** — the C6 gets the same SD-primary, FFat-fallback storage the S3 has. A new partition table (`partitions/esp32c6-ffat-8MB.csv`: one 3 MB app slot plus a 4.9 MB FFat partition, replacing two OTA slots and an unused 1.5 MB SPIFFS) lets a C6 run with no card: GIFs and `config.ini` are mirrored from the card onto flash at boot, and the board falls back to them once the card is removed. Applied to the C6 build only, by CI, `make` and the release pipeline alike. **Upgrading a C6 needs the `-full.bin`** — the `-app.bin` alone does not write the new table. The S3 is unchanged |
+| v3.5.0 | ✅ released | **Snake Letters: Words mode** — a new mode carousel lets you choose Alphabet or Words; in Words, catch the missing letter in each configurable word, with a separate persisted high score. **Toolchain refresh and warning cleanup** — pins LVGL 9.6.0 and Arduino_GFX 1.6.8; updates deprecated LVGL configuration and object-flag APIs, and replaces the deprecated Node 20 Arduino CLI setup action with a pinned, checksum-verified CLI install. Clean builds report zero warnings on both boards. **Internal flash on the ESP32-C6** — the C6 gets the same SD-primary, FFat-fallback storage the S3 has. A new partition table (`partitions/esp32c6-ffat-8MB.csv`: one 3 MB app slot plus a 4.9 MB FFat partition) lets a C6 run without a card: GIFs and `config.ini` are mirrored from SD at boot, then used as fallback when the card is removed. Applied to the C6 build only; the S3 partition layout is unchanged. **Upgrading a C6 from v3.4.0 or earlier requires the `-full.bin`** — the `-app.bin` does not write the new table. SD-card settings and GIFs are untouched; a card inserted on first boot is mirrored to FFat. |
 | v3.6.0 | 🚀 new | **Letters Rain: Alphabet and Words modes** — entering Letters Rain now opens the same mode carousel as Snake Letters (arrows, swipe or joystick to page; tap or the button to play; hold or joystick up to go back). **Words** shows a whole word in the status bar — caught letters white, the next one cyan, the rest grey — and you catch its letters in order; every finished word plays the success tune and scores one, the list loops forever, and the game ends only on a missed target. New `[letter_rain]` keys `words` and `words_high_score`; `last_score` stays the Alphabet letter count. Decoys, modifiers, speed and paddle are unchanged. The mode carousel and the word-list parser are now shared by both games |
 
 ## License

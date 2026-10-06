@@ -1381,7 +1381,7 @@ static void provision_internal_flash()
   lv_obj_align(pct, LV_ALIGN_CENTER, 0, 28);
 
   lv_obj_t *note = lv_label_create(scr);
-  lv_label_set_text(note, "one-off — do not power off");
+  lv_label_set_text(note, "one-off - do not power off");
   lv_obj_set_style_text_color(note, lv_color_make(110, 110, 130), 0);
   lv_obj_align(note, LV_ALIGN_BOTTOM_MID, 0, -8);
   lv_timer_handler();
@@ -5775,6 +5775,13 @@ static void clock_face_show(lv_timer_t *t)
   lv_obj_set_style_text_opa(home_bell_lbl, LV_OPA_70, 0);
   lv_obj_align(home_bell_lbl, LV_ALIGN_BOTTOM_RIGHT, -8, -4);
   update_home_bell();  // set text + hidden state from cfg
+
+  // The touch zones are live during the splash, so a screen (e.g. the smile
+  // GIF from an upper-left tap) may already be open. Labels created now would
+  // otherwise draw on top of it — send them to the back of the z-order.
+  lv_obj_move_background(home_bell_lbl);
+  lv_obj_move_background(home_timer_lbl);
+  lv_obj_move_background(home_time_lbl);
 
   // Show immediately rather than waiting one full second
   clock_tick_cb(nullptr);

@@ -1,0 +1,95 @@
+name: Mirror firmware for web flasher
+
+# GitHub's release-asset download URLs don't send Access-Control-Allow-Origin,
+# so the browser flasher on GitHub Pages can't fetch them directly. This
+# copies the stable and edge *-full.bin into docs/firmware/, which Pages
+# serves same-origin.
+#
+# Triggered on workflow_run (Release workflow finishing), NOT on the
+# `release` event: release.yml publishes using the default GITHUB_TOKEN
+# (`GH_TOKEN: ${{ github.token }}` in its "Publish release" step), and
+# GitHub suppresses *any* workflow run that an action taken with the default
+# token would otherwise trigger -- same rule release.yml's own header comment
+# already calls out for the version tag push, just also applying to the
+# release-create call itself. workflow_run is driven by the Actions system
+# observing a run complete, not by a token side-effect, so it isn't subject
+# to that suppression and needs no extra PAT/secret.
+#
+# Re-mirrors BOTH channels on every successful Release run rather than
+# trying to infer which one just changed -- workflow_run's payload doesn't
+# carry the release that was published, and re-checking both is cheap
+# (a couple of small API calls + file copies, not a rebuild).
+#
+# main has branch protection requiring PRs, so this opens/updates a PR
+# rather than pushing directly. Re-runs update the same branch/PR instead of
+# piling up new ones.
+#
+# Requires, under Settings -> Actions -> General -> Workflow permissions:
+#   - "Read and write permissions"
+#   - "Allow GitHub Actions to create and approve pull requests"
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  mirror:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Mirror stable + edge firmware
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          mirror_channel () {
+            local channel="$1" api_path="$2"
+            local dest="docs/firmware/${channel}"
+            mkdir -p "$dest"
+
+            if ! gh api "repos/${REPO}/${api_path}" > release.json 2>/dev/null; then
+              echo "::notice::No ${channel} release yet, skipping."
+              return
+            fi
+
+            tag=$(jq -r '.tag_name' release.json)
+            for chip in esp32c6 esp32s3; do
+              url=$(jq -r --arg c "$chip" \
+                '.assets[] | select(.name | contains($c) and endswith("-full.bin")) | .browser_download_url' \
+                release.json)
+              if [ -n "$url" ] && [ "$url" != "null" ]; then
+                curl -fL -o "${dest}/${chip}-full.bin" "$url"
+              else
+                echo "::warning::No ${chip} full.bin found on ${channel} release ${tag}"
+              fi
+            done
+            echo "$tag" > "${dest}/VERSION"
+          }
+
+          mirror_channel stable releases/latest
+          mirror_channel edge releases/tags/edge
+          rm -f release.json
+
+      - name: Open or update PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "Mirror firmware for web flasher"
+          branch: firmware-mirror/latest
+          title: "Mirror firmware for web flasher"
+          body: |
+            Auto-generated after the Release workflow finished
+            (run: ${{ github.event.workflow_run.html_url }}).
+            Updates `docs/firmware/stable` and `docs/firmware/edge`.
+          add-paths: docs/firmware
+          delete-branch: false

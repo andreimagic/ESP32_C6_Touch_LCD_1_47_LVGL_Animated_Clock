@@ -1,5 +1,5 @@
 /*
- * ESP32-C6 Touch LCD 1.47" — LVGL Animated Clock
+ * ESP32-C6 Touch LCD 1.47" - LVGL Animated Clock
  * https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock
  *
  * A smart animated clock for kids built on the ESP32-C6, driven by LVGL v9.
@@ -14,7 +14,7 @@
  *          Pins and capabilities are selected in board_config.h.
  * Display: JD9853 172×320 (landscape), ST7789 command set, via Arduino_GFX
  * Touch  : AXS5106L (I²C)
- * IMU    : QMI8658 (I²C, shared bus with touch) — C6 ONLY.
+ * IMU    : QMI8658 (I²C, shared bus with touch) - C6 ONLY.
  *          The S3 board has no accelerometer, so tilt-to-brightness and the
  *          three tilt-steered games (Tennis Letters, Letters Rain, Snake
  *          Letters) are hidden from the apps carousel on that target.
@@ -25,13 +25,13 @@
  *   LV_USE_STDLIB_STRING   = LV_STDLIB_CLIB
  *   LV_USE_STDLIB_SPRINTF  = LV_STDLIB_CLIB
  *   LV_FONT_MONTSERRAT_14/16/48 = 1
- *   (montserrat_96.c is a custom generated font — see README)
+ *   (montserrat_96.c is a custom generated font - see README)
  *
  * SD card filesystem bridge:
  *   A custom lv_fs_drv_t registered under drive letter "S" forwards every
  *   LVGL file operation (open/read/seek/close) to the Arduino SD library.
  *   Any LVGL widget that accepts a path can reference SD files with the
- *   prefix "S:/" — e.g. "S:/cruzr_emotions/cruzr_smile.gif"
+ *   prefix "S:/" - e.g. "S:/cruzr_emotions/cruzr_smile.gif"
  *
  * GIF files must be pre-scaled to 160×86 px (see README for why).
  * The firmware scales them 2× at render time to fill the 320×172 screen.
@@ -45,13 +45,13 @@
 #include <SPI.h>
 #include <WiFi.h>
 #include <esp_mac.h>
-// WiFiMulti removed in v2.8.0 — WiFiMulti::run() performs a *blocking* full
+// WiFiMulti removed in v2.8.0 - WiFiMulti::run() performs a *blocking* full
 // channel scan (~1.5-3 s) on every call while disconnected, which stalled LVGL
 // and kept the radio+CPU busy whenever the SSID was absent or the password
 // wrong. Plain WiFi.begin() is non-blocking and the IDF handles association.
 #include <WebServer.h>
 #if __has_include(<esp_sntp.h>)
-  #include <esp_sntp.h>          // esp_sntp_stop() — halt SNTP in AP / OFF mode
+  #include <esp_sntp.h>          // esp_sntp_stop() - halt SNTP in AP / OFF mode
   #define HAS_ESP_SNTP 1
 #else
   #define HAS_ESP_SNTP 0
@@ -71,29 +71,29 @@
 // Loaded from /config.ini on the SD card at boot.
 // These hardcoded values are the fallback when the card or file is absent.
 
-// Radio policy chosen by the user — [wifi] mode = wifi | ap | off
+// Radio policy chosen by the user - [wifi] mode = wifi | ap | off
 //   WCFG_WIFI : join the configured SSID (STA). NTP runs. Web UI on the LAN.
 //   WCFG_AP   : own hotspot only. No internet, so NTP is never started.
 //   WCFG_OFF  : airplane mode. Radio down, no SNTP, no web server, no polling.
 enum WifiCfgMode : uint8_t { WCFG_WIFI = 0, WCFG_AP = 1, WCFG_OFF = 2 };
 
-// USB persona (S3 only — see BOARD_HAS_USB_HID). Chosen from the touchscreen,
+// USB persona (S3 only - see BOARD_HAS_USB_HID). Chosen from the touchscreen,
 // applied at boot before anything else touches the USB peripheral, because a
 // TinyUSB composite descriptor can't be changed once enumerated.
-//   USB_HID_ONLY   : mouse only. No CDC interface exists — the host sees no
+//   USB_HID_ONLY   : mouse only. No CDC interface exists - the host sees no
 //                    serial port at all. No debug output.
 //   USB_HID_SERIAL : mouse + Serial debug output over the same port.
 //   USB_SERIAL_ONLY: Serial only, no HID interface. Matches pre-feature behaviour.
 enum UsbPersona : uint8_t { USB_HID_ONLY = 0, USB_HID_SERIAL = 1, USB_SERIAL_ONLY = 2 };
 
-// How the KY-023 joystick drives the two paddle games (boards with no IMU —
+// How the KY-023 joystick drives the two paddle games (boards with no IMU -
 // see BOARD_HAS_JOYSTICK). Both schemes reuse the games' existing paddle timer
 // and its configured speed; only what the deflection *means* differs.
 //   JPM_DIRECTION : deflection past the dead zone steps the paddle that way,
 //                   one cell per paddle tick, and letting go stops it. This is
 //                   what the IMU does today, so it is the default.
 //   JPM_POSITION  : deflection maps proportionally onto the paddle's travel and
-//                   the paddle holds there — centre is centre, full deflection
+//                   the paddle holds there - centre is centre, full deflection
 //                   is the wall. The same mapping ToneQuest's ball uses.
 enum JoyPaddleMode : uint8_t { JPM_DIRECTION = 0, JPM_POSITION = 1 };
 
@@ -111,7 +111,7 @@ struct AppConfig {
                                                   // that must be unique on the LAN: two clocks
                                                   // both answering to esp32clock.local collide.
   char ntp_server[64]                = "pool.ntp.org";   // [clock] ntp_server
-  char tz_string[48]                 = "CET-1CEST,M3.5.0,M10.5.0/3"; // [clock] tz (POSIX — set once, handles DST forever)
+  char tz_string[48]                 = "CET-1CEST,M3.5.0,M10.5.0/3"; // [clock] tz (POSIX - set once, handles DST forever)
   uint8_t wifi_mode                  = WCFG_AP;   // [wifi] mode (wifi|ap|off)
                                                   // AP by default: with no config there are no
                                                   // real credentials either, and the web UI is
@@ -127,13 +127,13 @@ struct AppConfig {
   int  anim_duration_sec             = 10;      // [animation] duration
   bool menu_sounds                   = true;    // [menu] sounds
   uint8_t usb_persona                = USB_HID_SERIAL;  // [usb] mode (S3 only, see UsbPersona)
-  // ── [joystick] — KY-023 on boards with no IMU (see BOARD_HAS_JOYSTICK) ────
+  // ── [joystick] - KY-023 on boards with no IMU (see BOARD_HAS_JOYSTICK) ────
   // Ignored, and never written to config.ini, on a board that has an IMU.
-  bool joy_extra_games   = false;          // [joystick] extra_games — master switch
+  bool joy_extra_games   = false;          // [joystick] extra_games - master switch
   int  joy_dead_percent  = 18;             // [joystick] dead_zone_percent (1-49)
   int  joy_edge_percent  = 90;             // [joystick] edge_percent (51-100)
   uint8_t joy_paddle_mode = JPM_DIRECTION; // [joystick] paddle_mode (direction|position)
-  bool joy_invert_x      = false;          // [joystick] invert_x — module mounted rotated
+  bool joy_invert_x      = false;          // [joystick] invert_x - module mounted rotated
   bool joy_invert_y      = false;          // [joystick] invert_y
   int  tennis_high_score             = 0;       // [tennis] high_score
   int  tennis_paddle_size            = 6;       // [tennis] paddle_size  (chars, 1-10)
@@ -162,7 +162,7 @@ struct AppConfig {
   int  sn_distractions             = 3;         // [snake] distractions (letters that kill on touch)
   int  sn_next_level_score         = 10;        // [snake] next_level_score (score at which distractions appear)
   int  sn_words_high_score         = 0;         // [snake] words_high_score (Words mode best, in words)
-  // [snake] words — the Words mode list, lowercase a-z only, played in order
+  // [snake] words - the Words mode list, lowercase a-z only, played in order
   // and looped. Up to SN_WORDS_MAX entries of SN_WORD_LEN-1 letters each.
   char sn_words[SN_WORDS_MAX][SN_WORD_LEN] = {"box","cat","dog","cactus","rainbow"};
   int  sn_word_count               = 5;         // number of parsed words
@@ -171,7 +171,7 @@ struct AppConfig {
   int  tq_flash_ms                 = 420;       // [tonequest] flash_ms (dome lit + tone, per playback step)
   int  tq_gap_ms                   = 220;       // [tonequest] gap_ms (silence between playback steps)
   int  tq_tilt_percent             = 55;        // [tonequest] tilt_percent (% of 1 g that pins the ball to an edge)
-  // [birthdays] dates — up to 8 entries in DD-MM-YYYY format.
+  // [birthdays] dates - up to 8 entries in DD-MM-YYYY format.
   // Only day & month are compared; the year is kept as reference in the file.
   // Default: empty (no birthday greetings).
   char birthday_dates[8][16]  = {"01-01-1970","06-08-2017"};   // [birthdays] dates (comma-separated)
@@ -188,13 +188,13 @@ struct AppConfig {
 
 // ─── USB persona (S3 only) ────────────────────────────────────────────────────
 // Own USBCDC/USBHIDMouse instances rather than the core's auto-wired globals,
-// because those only exist when "USB CDC On Boot" is Enabled at compile time —
+// because those only exist when "USB CDC On Boot" is Enabled at compile time -
 // which bakes CDC into every persona and makes a true HID-only enumeration
 // (no serial interface at all) impossible. This build instead compiles with
 // CDCOnBoot=Disabled and brings up exactly the interfaces cfg.usb_persona asks
 // for, from scratch, in usb_persona_begin() before USB.begin() ever runs.
 // #define Serial below redirects every existing Serial.* call in this sketch
-// to that instance unmodified — see usb_persona_begin() for the boot sequence.
+// to that instance unmodified - see usb_persona_begin() for the boot sequence.
 #if BOARD_HAS_USB_HID
   #include <USB.h>
   #include <USBCDC.h>
@@ -204,7 +204,7 @@ struct AppConfig {
   static USBCDC             ClockUSBSerial;
   static USBHIDRelativeMouse UsbJiggleMouse;
   // Registers on the same shared TinyUSB `hid` object the mouse uses, so the
-  // host still sees ONE composite device on one port — not a second endpoint.
+  // host still sees ONE composite device on one port - not a second endpoint.
   // Note this widens what the HID personas mean: they now enumerate a mouse
   // AND a keyboard, where before PR #39 they were mouse-only.
   static USBHIDKeyboard     UsbMacroKeyboard;
@@ -212,7 +212,7 @@ struct AppConfig {
   #define Serial ClockUSBSerial
 #endif
 
-// ─── GIF paths — SD card root is mapped to LVGL drive letter "S" ──────────────
+// ─── GIF paths - SD card root is mapped to LVGL drive letter "S" ──────────────
 #define GIF_SMILE_PATH    "S:/cruzr_emotions/cruzr_smile.gif"
 #define GIF_SLEEP_PATH    "S:/cruzr_emotions/cruzr_sleep.gif"
 #define GIF_SAD_PATH      "S:/cruzr_emotions/cruzr_sad.gif"
@@ -221,7 +221,7 @@ struct AppConfig {
 #define GIF_TIMER_PATH    "S:/cruzr_emotions/timer_animation.gif"
 #define GIF_BIRTHDAY_PATH "S:/cruzr_emotions/happybirthday.gif"
 
-// Same directory as the paths above, without the LVGL drive letter — filesystem
+// Same directory as the paths above, without the LVGL drive letter - filesystem
 // calls (SD./FFat./STORAGE->) never take one.
 #define GIF_DIR_FS        "/cruzr_emotions"
 // macroPad scripts (S3 only, see BOARD_HAS_USB_HID). Created on demand so the
@@ -279,7 +279,7 @@ uint32_t  screenHeight;
 bool wifiConnected = false;
 
 // ── Extended WiFi / web-server state ─────────────────────────────────────────
-// Runtime mode — what the radio is *actually* doing right now. This is not the
+// Runtime mode - what the radio is *actually* doing right now. This is not the
 // same as cfg.wifi_mode (what the user asked for): a STA request can end up in
 // WM_RETRY (waiting, radio off) or WM_AP (credential rescue) without the user
 // setting changing. Every runtime decision reads wifiMode, never cfg.wifi_mode,
@@ -289,9 +289,9 @@ enum WifiMode : uint8_t {
   WM_CONNECTING,   // association in progress, radio on
   WM_STA,          // joined, IP acquired
   WM_AP,           // own hotspot up
-  WM_RETRY,        // STA failed — radio OFF, waiting out the backoff
-  WM_FAILED,       // STA given up permanently — radio OFF until reboot/mode change
-  WM_OFF           // airplane mode — radio OFF by user request
+  WM_RETRY,        // STA failed - radio OFF, waiting out the backoff
+  WM_FAILED,       // STA given up permanently - radio OFF until reboot/mode change
+  WM_OFF           // airplane mode - radio OFF by user request
 };
 static WifiMode  wifiMode         = WM_IDLE;
 static uint32_t  wifi_sta_start   = 0;       // millis() when STA attempt began
@@ -303,7 +303,7 @@ static bool      webRoutesRegistered = false;// routes registered once, ever
 static WebServer web_server(80);             // HTTP server, port 80
 bool timeSynced    = false;
 
-// Last STA disconnect reason, written from the WiFi event task — read-only
+// Last STA disconnect reason, written from the WiFi event task - read-only
 // elsewhere. Lets us tell "wrong password" from "SSID not in range" and pick
 // the right recovery, instead of hammering the radio forever either way.
 static volatile uint8_t wifi_last_reason = 0;
@@ -321,11 +321,11 @@ static volatile uint8_t wifi_last_reason = 0;
 // stays reachable to fix config.ini. 0 = go to WM_FAILED (radio off) instead.
 #define WIFI_AUTHFAIL_TO_AP       1
 
-// ── AP / web PIN — random 6-digit code generated once at boot ─────────────────
+// ── AP / web PIN - random 6-digit code generated once at boot ─────────────────
 // Shown on the device via the long-press WiFi detail popup.
 // Required by every mutating web route (POST /config, POST /reboot).
 // Authorises the mutating web routes only (/config, /settime, /reboot).
-// NOT a WiFi key — the AP hotspot is deliberately open.
+// NOT a WiFi key - the AP hotspot is deliberately open.
 static char ap_pin[7] = "000000";   // filled in setup() via generate_ap_pin()
 // Actual AP SSID, resolved at AP start from the softAP MAC so several units
 // stay tellable apart. Read back from the radio afterwards so the UI cannot
@@ -369,7 +369,7 @@ bool    ffatMounted       = false;
 // A hostname is a DNS label, not free text: letters, digits and hyphens only,
 // no dots or spaces, and it may not begin or end with a hyphen. A bad value
 // would make mdns_hostname_set() fail and leave the device reachable only by
-// IP — with the UI still cheerfully printing a .local address that resolves to
+// IP - with the UI still cheerfully printing a .local address that resolves to
 // nothing. So the value is normalised on the way in rather than trusted:
 // uppercase is folded, invalid characters become hyphens, runs are collapsed,
 // and anything left empty falls back to the default.
@@ -409,7 +409,7 @@ static inline const char *storage_label()
 // ── Storage capacity ─────────────────────────────────────────────────────────
 // freeBytes() exists only on FFat. SD has no equivalent, so it is derived from
 // totalBytes()/usedBytes(). Both are whole-filesystem figures, and neither is
-// reachable through the fs::FS base class that STORAGE points at — hence the
+// reachable through the fs::FS base class that STORAGE points at - hence the
 // branch on storageIsInternal rather than a virtual call.
 //
 // uint64_t throughout because SD reports 64-bit sizes while FFat is size_t
@@ -444,7 +444,7 @@ static void ensure_dir(fs::FS *fs, const char *path)
   }
 }
 
-// ── Path validation — the file manager's only security boundary ──────────────
+// ── Path validation - the file manager's only security boundary ──────────────
 // Every web-supplied path is checked here before it reaches the filesystem.
 // Rejecting ".." is what stops a crafted request reading or deleting outside
 // the tree; rejecting control characters and quotes keeps the same string safe
@@ -504,21 +504,21 @@ LV_FONT_DECLARE(dejavu_mono_16);
 
 int  brightnessPercent = 50;     // boot brightness
 
-// ─── IMU (QMI8658) — tilt-to-brightness ─────────────────────────────────────
+// ─── IMU (QMI8658) - tilt-to-brightness ─────────────────────────────────────
 QMI8658   imu;
 calData   imuCalib  = {0};
 AccelData accelData;
 bool      imuReady  = false;
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  KY-023 JOYSTICK — input driver for the tilt games on boards with no IMU
+//  KY-023 JOYSTICK - input driver for the tilt games on boards with no IMU
 // ══════════════════════════════════════════════════════════════════════════════
 //  Pins and the provenance of the choice live in board_config.h. This is the
 //  whole driver: one LVGL timer samples the two ADC axes and debounces the
 //  button, and the games read the result through joy_x() / joy_y() / the click
 //  dispatch below. No game touches a raw ADC count.
 //
-//  Axis convention — deliberately the SCREEN's, not the IMU's:
+//  Axis convention - deliberately the SCREEN's, not the IMU's:
 //      joy_x() > 0  →  stick pushed right  →  object moves right
 //      joy_y() > 0  →  stick pushed up     →  object moves up
 //  The IMU's own sign convention is the opposite on both axes (accelY > 0
@@ -542,7 +542,7 @@ bool      imuReady  = false;
 #if BOARD_HAS_JOYSTICK
 
 #define JOY_ADC_MAX        4095   // 12-bit, the ESP32 Arduino default
-#define JOY_POLL_MS          20   // 50 Hz — well above every game's tick rate
+#define JOY_POLL_MS          20   // 50 Hz - well above every game's tick rate
 #define JOY_CAL_SAMPLES      32   // averaged at init to learn the resting centre
 #define JOY_SW_DEBOUNCE_MS   40
 
@@ -570,7 +570,7 @@ static uint32_t joy_sw_since  = 0;
 
 // -1/+1 while a push is being held, 0 when re-armed. JOY_NAV_BLOCKED while the
 // carousel isn't showing, so a stick still held over from a game (steering the
-// paddle into the wall as it ended) cannot page the carousel it returns to —
+// paddle into the wall as it ended) cannot page the carousel it returns to -
 // it has to come back to centre first.
 #define JOY_NAV_BLOCKED 2
 static int      joy_nav_dir   = JOY_NAV_BLOCKED;
@@ -606,7 +606,7 @@ static float joy_norm(int raw, int centre)
   // threshold. load_config() clamps dead to <= 49% and edge to >= 51%, so the
   // two can never meet and this is always positive; the test exists only so a
   // cfg that somehow arrived unparsed cannot divide by zero. Nothing here
-  // second-guesses the configured edge — at edge_percent the stick reads as
+  // second-guesses the configured edge - at edge_percent the stick reads as
   // fully deflected, whatever the pair of values happens to be.
   const float band = (float)cfg.joy_edge_percent / 100.0f - dead;
 
@@ -676,7 +676,7 @@ static void joy_start()
 
   // Learn the resting centre rather than assume mid-scale. A KY-023's
   // potentiometers are ±10% parts and its centre detent is mechanical, so the
-  // idle reading is routinely a couple of hundred counts off 2048 — enough to
+  // idle reading is routinely a couple of hundred counts off 2048 - enough to
   // make one direction permanently live with any sane dead zone.
   long sx = 0, sy = 0;
   for (int i = 0; i < JOY_CAL_SAMPLES; i++) {
@@ -692,7 +692,7 @@ static void joy_start()
   joy_enabled   = true;
 
   joy_timer = lv_timer_create(joy_poll_cb, JOY_POLL_MS, nullptr);
-  Serial.printf("[JOY] KY-023 enabled — VRy=GPIO%d VRx=GPIO%d SW=GPIO%d, "
+  Serial.printf("[JOY] KY-023 enabled - VRy=GPIO%d VRx=GPIO%d SW=GPIO%d, "
                 "centre %d/%d, dead %d%% edge %d%%\n",
                 JOY_VRY, JOY_VRX, JOY_SW, joy_cx_raw, joy_cy_raw,
                 cfg.joy_dead_percent, cfg.joy_edge_percent);
@@ -700,7 +700,7 @@ static void joy_start()
 
 // Single place that turns cfg.joy_extra_games into hardware state. Called once
 // at boot and again whenever the setting is toggled, so the switch takes effect
-// without a reboot — unlike the USB persona, nothing here is latched by an
+// without a reboot - unlike the USB persona, nothing here is latched by an
 // enumerated descriptor.
 static void joy_apply_setting()
 {
@@ -708,7 +708,7 @@ static void joy_apply_setting()
   else                     joy_stop();
 }
 
-#else   // !BOARD_HAS_JOYSTICK — IMU board: the feature does not exist
+#else   // !BOARD_HAS_JOYSTICK - IMU board: the feature does not exist
 
 static inline bool  joy_active() { return false; }
 static inline float joy_x()      { return 0.0f; }
@@ -716,7 +716,7 @@ static inline float joy_y()      { return 0.0f; }
 
 #endif  // BOARD_HAS_JOYSTICK
 
-// ─── Brightness + tilt timer handles — valid only while Status screen is open ─
+// ─── Brightness + tilt timer handles - valid only while Status screen is open ─
 lv_obj_t   *label_brightness = nullptr;
 lv_timer_t *tilt_timer         = nullptr;
 // Set when a left/right swipe has just adjusted the brightness. LVGL still
@@ -830,13 +830,13 @@ static void lvgl_sd_fs_init(void)
 
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  BUZZER  —  passive buzzer on BUZZER_PIN via PWM
+//  BUZZER  -  passive buzzer on BUZZER_PIN via PWM
 //  Plays a repeating "beep-beep-beep … pause" pattern using an LVGL timer.
 //  Stopped by touching the screen (overlay_close_event_cb) or explicitly.
 // ══════════════════════════════════════════════════════════════════════════════
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  BUZZER — unified pattern for alarm and timer
+//  BUZZER - unified pattern for alarm and timer
 //  One sequence = 4 × (200ms ON + 100ms OFF) + 1000ms pause
 //  cfg.alarm_beep_sequences / cfg.timer_beep_sequences controls auto-stop.
 //  0 = repeat until buzzer_stop() is called (touch to dismiss).
@@ -954,7 +954,7 @@ void backlight_init()
 }
 
 // Status-screen brightness row. Both the initial draw and every later update go
-// through here so the two cannot drift apart — they previously did, and the
+// through here so the two cannot drift apart - they previously did, and the
 // "(tilt to adjust)" hint disappeared the moment the value first changed.
 // Tilt is only advertised when an IMU actually answered at boot; swipe works on
 // every board.
@@ -994,7 +994,7 @@ static bool is_birthday_today()
   int today_mon = t.tm_mon + 1; // 1-based
   for (int i = 0; i < cfg.birthday_count; i++) {
     int d = 0, m = 0;
-    // Parse DD-MM-YYYY — ignore the year
+    // Parse DD-MM-YYYY - ignore the year
     if (sscanf(cfg.birthday_dates[i], "%d-%d-%*d", &d, &m) == 2) {
       if (d == today_day && m == today_mon) {
         Serial.printf("[BDAY] Birthday match on entry %d (%s)\n", i, cfg.birthday_dates[i]);
@@ -1005,7 +1005,7 @@ static bool is_birthday_today()
   return false;
 }
 
-// Returns the correct alarm/timer GIF path — birthday GIF takes priority
+// Returns the correct alarm/timer GIF path - birthday GIF takes priority
 static const char *alarm_gif_path() {
   return is_birthday_today() ? GIF_BIRTHDAY_PATH : GIF_ALARM_PATH;
 }
@@ -1042,7 +1042,7 @@ static char *ini_trim(char *s)
 // the parser does not know is harmless but silently ignored.
 static const char DEFAULT_CONFIG_INI[] PROGMEM =
 R"INI(# ============================================================
-#  ESP32 Animated Clock — configuration
+#  ESP32 Animated Clock - configuration
 #  Edit here or through the web UI, then reboot for [wifi] changes.
 #  Lines starting with # are comments and are preserved on save.
 # ============================================================
@@ -1058,7 +1058,7 @@ mode = ap
 ssid = myhomewifi
 password = changeme
 # Reached at http://<hostname>.local in wifi mode. Must be unique on your
-# network — give a second clock its own name, e.g. esp32clock2.
+# network - give a second clock its own name, e.g. esp32clock2.
 hostname = esp32clock
 
 [alarm]
@@ -1083,10 +1083,10 @@ sounds = true
 #if BOARD_HAS_JOYSTICK
 R"INI(
 [joystick]
-# External KY-023 on the expansion header — this board has no IMU, so it is the
+# External KY-023 on the expansion header - this board has no IMU, so it is the
 # only way to steer Tennis Letters, Letters Rain, Snake Letters and ToneQuest.
 # Wiring: SW=GPIO8 (P1.20), VRy=GPIO9 (P1.18), VRx=GPIO10 (P1.16),
-#         power from 3V3 (P1.6) and GND (P1.3) — never from 5V.
+#         power from 3V3 (P1.6) and GND (P1.3) - never from 5V.
 # extra_games: false hides those four games and claims no pins at all.
 extra_games = false
 # Percent of full deflection. Below dead_zone_percent the stick reads as
@@ -1162,7 +1162,7 @@ tilt_percent = 55
 // FAT cannot atomically replace an existing file, so save_config() and the web
 // editor both remove config.ini and then rename config.tmp over it. Lose power
 // between those two calls and the device comes up with no config.ini at all and
-// an orphan config.tmp holding the real settings — which bootstrap_config()
+// an orphan config.tmp holding the real settings - which bootstrap_config()
 // would then paper over with defaults, silently discarding WiFi credentials.
 // On internal flash there is no card to restore from, so recover it here.
 //
@@ -1205,7 +1205,7 @@ static bool bootstrap_config()
                   (unsigned)written, (unsigned)len);
     return false;
   }
-  Serial.printf("[CFG] No config.ini on %s — wrote defaults (%u bytes).\n",
+  Serial.printf("[CFG] No config.ini on %s - wrote defaults (%u bytes).\n",
                 storage_label(), (unsigned)len);
   return true;
 }
@@ -1217,7 +1217,7 @@ static bool bootstrap_config()
 //  so the board keeps working once the card is removed: insert a card once, run
 //  cardless afterwards.
 //
-//  Runs with BOTH filesystems mounted — which is why the mount block begins FFat
+//  Runs with BOTH filesystems mounted - which is why the mount block begins FFat
 //  even when a card wins. STORAGE still points at the card throughout; every
 //  write here goes through FFat explicitly, never through STORAGE, so the copy
 //  direction can never be ambiguous.
@@ -1230,7 +1230,7 @@ static bool bootstrap_config()
 
 // One file, copied in chunks through a temp name that is renamed into place only
 // after a complete write. A power cut mid-copy therefore leaves no truncated GIF
-// behind — which would otherwise render as exactly the blank screen the rest of
+// behind - which would otherwise render as exactly the blank screen the rest of
 // this firmware works to avoid.
 static bool provision_copy_file(const char *path, size_t *done, size_t total,
                                 lv_obj_t *pct_label)
@@ -1265,7 +1265,7 @@ static bool provision_copy_file(const char *path, size_t *done, size_t total,
   src.close();
 
   if (!ok) {
-    Serial.printf("[PROV] write failed for %s — flash full?\n", path);
+    Serial.printf("[PROV] write failed for %s - flash full?\n", path);
     FFat.remove(tmp);
     return false;
   }
@@ -1312,7 +1312,7 @@ static void provision_internal_flash()
     }
     dir.close();
   } else {
-    Serial.printf("[PROV] no %s on card — nothing to mirror\n", GIF_DIR_FS);
+    Serial.printf("[PROV] no %s on card - nothing to mirror\n", GIF_DIR_FS);
   }
 
   // config.ini is always refreshed while a card is present (see header note).
@@ -1329,17 +1329,17 @@ static void provision_internal_flash()
   // ── Refuse rather than half-fill the partition ─────────────────────────────
   size_t freeb = FFat.freeBytes();
   if (total + 32768 > freeb) {          // 32KB margin for FAT metadata
-    Serial.printf("[PROV] need %u bytes, only %u free on flash — skipping.\n",
+    Serial.printf("[PROV] need %u bytes, only %u free on flash - skipping.\n",
                   (unsigned)total, (unsigned)freeb);
     return;
   }
 
   if (!FFat.exists(GIF_DIR_FS) && !FFat.mkdir(GIF_DIR_FS)) {
-    Serial.printf("[PROV] cannot create %s on flash — skipping.\n", GIF_DIR_FS);
+    Serial.printf("[PROV] cannot create %s on flash - skipping.\n", GIF_DIR_FS);
     return;
   }
 
-  Serial.printf("[PROV] mirroring %d GIF(s)%s to internal flash — %u KB\n",
+  Serial.printf("[PROV] mirroring %d GIF(s)%s to internal flash - %u KB\n",
                 todo_n, cfg_size ? " + config.ini" : "", (unsigned)(total / 1024));
 
   // ── Progress screen ───────────────────────────────────────────────────────
@@ -1372,7 +1372,7 @@ static void provision_internal_flash()
   lv_obj_align(pct, LV_ALIGN_CENTER, 0, 28);
 
   lv_obj_t *note = lv_label_create(scr);
-  lv_label_set_text(note, "one-off — do not power off");
+  lv_label_set_text(note, "one-off - do not power off");
   lv_obj_set_style_text_color(note, lv_color_make(110, 110, 130), 0);
   lv_obj_align(note, LV_ALIGN_BOTTOM_MID, 0, -8);
   lv_timer_handler();
@@ -1405,15 +1405,15 @@ static void provision_internal_flash()
   lv_obj_del(scr);
   lv_timer_handler();
 
-  Serial.printf("[PROV] done — %d copied, %d failed. Flash now %u KB free.\n",
+  Serial.printf("[PROV] done - %d copied, %d failed. Flash now %u KB free.\n",
                 okn, failn, (unsigned)(FFat.freeBytes() / 1024));
 }
 #endif  // BOARD_HAS_INTERNAL_FS
 
-// ── [snake] words — Words mode list ──────────────────────────────────────────
+// ── [snake] words - Words mode list ──────────────────────────────────────────
 // Accepts the JSON-style array the template writes, ["box", "cat"], and a bare
 // comma list, box,cat, alike. Each word is folded to lowercase and stripped to
-// a-z — the field only ever shows lowercase letters, so anything else could
+// a-z - the field only ever shows lowercase letters, so anything else could
 // never be caught. Words that end up shorter than two letters are dropped (one
 // letter blanked is just "_"). An entry that leaves the list empty keeps the
 // built-in defaults rather than leaving Words mode with nothing to play.
@@ -1456,10 +1456,10 @@ static void load_config()
 {
   Serial.println("[CFG] Loading /config.ini...");
 
-  if (!STORAGE) { Serial.println("[CFG] no storage mounted — using defaults."); return; }
+  if (!STORAGE) { Serial.println("[CFG] no storage mounted - using defaults."); return; }
   File f = STORAGE->open("/config.ini", FILE_READ);
   if (!f) {
-    Serial.println("[CFG] config.ini not found — using defaults.");
+    Serial.println("[CFG] config.ini not found - using defaults.");
     return;
   }
 
@@ -1535,7 +1535,7 @@ static void load_config()
       }
     }
 
-    // ── [clock] — NTP server + POSIX timezone string ─────────────────────
+    // ── [clock] - NTP server + POSIX timezone string ─────────────────────
     else if (strcmp(section, "clock") == 0) {
       if (strcmp(key, "ntp_server") == 0) {
         strncpy(cfg.ntp_server, val, sizeof(cfg.ntp_server) - 1);
@@ -1616,7 +1616,7 @@ static void load_config()
     }
 
 #if BOARD_HAS_USB_HID
-    // ── [usb] — persona (S3 only) ───────────────────────────────────────────
+    // ── [usb] - persona (S3 only) ───────────────────────────────────────────
     else if (strcmp(section, "usb") == 0) {
       if (strcmp(key, "mode") == 0) {
         if      (strcmp(val, "hid")    == 0) cfg.usb_persona = USB_HID_ONLY;
@@ -1628,7 +1628,7 @@ static void load_config()
 #endif
 
 #if BOARD_HAS_JOYSTICK
-    // ── [joystick] — KY-023 (boards with no IMU only) ───────────────────────
+    // ── [joystick] - KY-023 (boards with no IMU only) ───────────────────────
     else if (strcmp(section, "joystick") == 0) {
       if (strcmp(key, "extra_games") == 0) {
         cfg.joy_extra_games = (strcmp(val,"true")==0 || strcmp(val,"1")==0);
@@ -1941,7 +1941,7 @@ static void log_last_seen() {
            t.tm_hour, t.tm_min, t.tm_sec, voltage);
 
   // 4. Append Mode: Write to last_seen.txt
-  // Card-only by design — the log grows without bound, so it is never routed
+  // Card-only by design - the log grows without bound, so it is never routed
   // through STORAGE onto the internal flash partition.
   if (!sdCardAvailable) return;
   File logFile = SD.open("/last_seen.txt", FILE_APPEND);
@@ -1961,7 +1961,7 @@ static void save_config()
   // any comments. [wifi], [alarm], [timer], [menu], [tennis] are rewritten
   // fresh from cfg on every call.
   //
-  // Blank lines in the preserved block are intentionally dropped — we add
+  // Blank lines in the preserved block are intentionally dropped - we add
   // exactly one blank separator before each managed section, so the file
   // stays tidy no matter how many times it is rewritten.
   const char *path = "/config.ini";
@@ -1977,7 +1977,7 @@ static void save_config()
       while (fr.available() && len < 126) {
         char ch = fr.read();
         if (ch == '\n') break;
-        if (ch == '\r') continue;   // strip CR — web editor saves \r\n
+        if (ch == '\r') continue;   // strip CR - web editor saves \r\n
         lines[lineCount][len++] = ch;
       }
       lines[lineCount][len] = '\0';
@@ -1985,7 +1985,7 @@ static void save_config()
       char *trimmed = lines[lineCount];
       while (*trimmed == ' ' || *trimmed == '\t') trimmed++;
 
-      // Entering a managed section — skip until the next unknown section
+      // Entering a managed section - skip until the next unknown section
       if (strncmp(trimmed,"[wifi]",        6)==0 ||
           strncmp(trimmed,"[alarm]",       7)==0 ||
           strncmp(trimmed,"[timer]",       7)==0 ||
@@ -2023,7 +2023,7 @@ static void save_config()
     fw.print("\n");
   }
 
-  // Managed sections — exactly one blank line before each header
+  // Managed sections - exactly one blank line before each header
   fw.print("\n[wifi]\n");
   fw.printf("mode = %s\n",     wifi_cfg_mode_name());   // wifi | ap | off
   fw.printf("ssid = %s\n",     cfg.wifi_ssid);
@@ -2102,7 +2102,7 @@ static void save_config()
   fw.printf("gap_ms = %d\n",               cfg.tq_gap_ms);
 
   // ── Verify before swapping ────────────────────────────────────────────────
-  // The print()/printf() calls above are unchecked individually — there are
+  // The print()/printf() calls above are unchecked individually - there are
   // around fifty and testing each would drown the function. Instead the final
   // line is written explicitly and verified: a filesystem that filled at any
   // point stays full for the rest of this function, so if anything was lost
@@ -2110,7 +2110,7 @@ static void save_config()
   // flag, so getWriteError() cannot be used for this.
   //
   // Without the check the swap below happily promotes a truncated temp file
-  // over a good config.ini — precisely the failure temp-then-swap exists to
+  // over a good config.ini - precisely the failure temp-then-swap exists to
   // prevent, and unrecoverable on a board running from internal flash.
   char tail[48];
   const int  tail_len = snprintf(tail, sizeof(tail), "tilt_percent = %d\n",
@@ -2129,7 +2129,7 @@ static void save_config()
   // small is a fragment rather than a legitimately terse config.
   if (!tail_ok || actual != claimed || actual < 256) {
     Serial.printf("[CFG] save_config: temp file incomplete (%u on disk, %u written)"
-                  " — keeping the existing config.ini\n",
+                  " - keeping the existing config.ini\n",
                   (unsigned)actual, (unsigned)claimed);
     STORAGE->remove(tmp);
     return;
@@ -2137,7 +2137,7 @@ static void save_config()
 
   STORAGE->remove(path);
   if (!STORAGE->rename(tmp, path)) {
-    Serial.println("[CFG] save_config: rename failed — config.tmp left in place");
+    Serial.println("[CFG] save_config: rename failed - config.tmp left in place");
     return;
   }
 
@@ -2158,7 +2158,7 @@ static void seed_tennis_config()
 
   // Check whether [tennis] is already in the file
   File fr = STORAGE->open("/config.ini", FILE_READ);
-  if (!fr) return;  // no file at all — save_config() will create it later
+  if (!fr) return;  // no file at all - save_config() will create it later
   bool found = false;
   char line[64];
   while (fr.available() && !found) {
@@ -2207,7 +2207,7 @@ static void seed_letter_rain_config()
   if (!storageAvailable || !STORAGE) return;
 
   File fr = STORAGE->open("/config.ini", FILE_READ);
-  if (!fr) return;  // no file at all — save_config() will create it later
+  if (!fr) return;  // no file at all - save_config() will create it later
   bool found = false;
   char line[64];
   while (fr.available() && !found) {
@@ -2257,7 +2257,7 @@ static void seed_snake_config()
   if (!storageAvailable || !STORAGE) return;
 
   File fr = STORAGE->open("/config.ini", FILE_READ);
-  if (!fr) return;  // no file at all — save_config() will create it later
+  if (!fr) return;  // no file at all - save_config() will create it later
   bool found = false;
   char line[64];
   while (fr.available() && !found) {
@@ -2310,7 +2310,7 @@ static void seed_tonequest_config()
   if (!storageAvailable || !STORAGE) return;
 
   File fr = STORAGE->open("/config.ini", FILE_READ);
-  if (!fr) return;  // no file at all — save_config() will create it later
+  if (!fr) return;  // no file at all - save_config() will create it later
   bool found = false;
   char line[64];
   while (fr.available() && !found) {
@@ -2362,7 +2362,7 @@ static void seed_joystick_config()
   if (!storageAvailable || !STORAGE) return;
 
   File fr = STORAGE->open("/config.ini", FILE_READ);
-  if (!fr) return;  // no file at all — save_config() will create it later
+  if (!fr) return;  // no file at all - save_config() will create it later
   bool found = false;
   char line[64];
   while (fr.available() && !found) {
@@ -2402,7 +2402,7 @@ static void seed_joystick_config()
 
 // ── Generate a random 6-digit PIN at boot ─────────────────────────────────────
 // Web UI authorisation only; the AP hotspot is open and needs no key.
-// A new PIN is produced on every power cycle — physical access to the screen
+// A new PIN is produced on every power cycle - physical access to the screen
 // is required to read it, so no fixed credential is ever embedded in firmware.
 static void generate_ap_pin()
 {
@@ -2438,7 +2438,7 @@ static const char *wifi_cfg_mode_label()
 
 // True only while a time sync could realistically still land. AP has no uplink
 // and OFF has no radio, so callers must not sit around waiting for NTP in those
-// modes — see the alarm guard and the deep-sleep wake margin.
+// modes - see the alarm guard and the deep-sleep wake margin.
 static bool wifi_ntp_possible()
 {
   return (wifiMode == WM_STA || wifiMode == WM_CONNECTING);
@@ -2454,7 +2454,7 @@ static void ntp_stop_client()
   timeSynced = false;
 }
 
-// Power the radio all the way down. Used by OFF mode and between STA retries —
+// Power the radio all the way down. Used by OFF mode and between STA retries -
 // an idle-but-associated radio still costs ~20 mA, a scanning one far more.
 static void wifi_radio_down()
 {
@@ -2488,14 +2488,14 @@ static void wifi_sta_begin()
 
 // Classify the last disconnect: true = the AP actively rejected our key, so
 // retrying with the same credentials will fail exactly the same way every time.
-// Deliberately narrow — ASSOC_FAIL / CONNECTION_FAIL are also thrown by flaky
+// Deliberately narrow - ASSOC_FAIL / CONNECTION_FAIL are also thrown by flaky
 // or congested routers, and treating those as "wrong password" would strand a
 // perfectly good configuration in AP rescue. Those go down the normal backoff path.
 static bool wifi_reason_is_auth(uint8_t r)
 {
   switch (r) {
     case WIFI_REASON_AUTH_EXPIRE:              //   2
-    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:   //  15 — classic wrong PSK
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:   //  15 - classic wrong PSK
     case WIFI_REASON_AUTH_FAIL:                // 202
     case WIFI_REASON_HANDSHAKE_TIMEOUT:        // 204
       return true;
@@ -2504,7 +2504,7 @@ static bool wifi_reason_is_auth(uint8_t r)
   }
 }
 
-// Runs in the WiFi event task — must not touch LVGL. Records the reason only.
+// Runs in the WiFi event task - must not touch LVGL. Records the reason only.
 static void wifi_event_cb(WiFiEvent_t event, WiFiEventInfo_t info)
 {
   if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED)
@@ -2516,7 +2516,7 @@ static void wifi_event_cb(WiFiEvent_t event, WiFiEventInfo_t info)
 // rescue path when STA authentication keeps being rejected.
 static void start_ap_mode()
 {
-  ntp_stop_client();              // no uplink here — NTP can never succeed
+  ntp_stop_client();              // no uplink here - NTP can never succeed
   WiFi.persistent(false);
   WiFi.setAutoReconnect(false);
   WiFi.disconnect(true, false);
@@ -2534,7 +2534,7 @@ static void start_ap_mode()
     snprintf(ap_ssid, sizeof(ap_ssid), "ESP32-Clock-%02X%02X%02X",
              apmac[3], apmac[4], apmac[5]);
 
-  // Deliberately OPEN — no WPA2 passphrase. Joining the hotspot is meant to be
+  // Deliberately OPEN - no WPA2 passphrase. Joining the hotspot is meant to be
   // frictionless; ap_pin is not a WiFi key, it authorises the mutating web
   // routes (/config, /settime, /reboot) only.
   //
@@ -2544,7 +2544,7 @@ static void start_ap_mode()
   // broadcasting instead of this one.
   bool ap_ok = WiFi.softAP(ap_ssid);
   if (!ap_ok)
-    Serial.println("[WiFi] *** softAP() refused the config — check the SSID ***");
+    Serial.println("[WiFi] *** softAP() refused the config - check the SSID ***");
 
   // Read the name back from the radio rather than trusting what we asked for.
   String live = WiFi.softAPSSID();
@@ -2553,7 +2553,7 @@ static void start_ap_mode()
 
   wifiMode      = WM_AP;
   wifiConnected = false;
-  Serial.printf("[WiFi] AP started. SSID=%s  IP=%s  (open — PIN guards web writes)\n",
+  Serial.printf("[WiFi] AP started. SSID=%s  IP=%s  (open - PIN guards web writes)\n",
                 ap_ssid, WiFi.softAPIP().toString().c_str());
   start_web_server();
   wifi_timer_sync_to_mode();
@@ -2561,22 +2561,22 @@ static void start_ap_mode()
 
 // ── HTTP web server ───────────────────────────────────────────────────────────
 // Routes:
-//   GET  /        — dark-themed editor; textarea with masked wifi password,
+//   GET  /        - dark-themed editor; textarea with masked wifi password,
 //                   date/time setter, PIN input required for all mutations
-//   POST /config  — validates PIN, saves config.ini, applies settings
-//   POST /settime — validates PIN, applies date+time immediately to RTC
-//   POST /reboot  — validates PIN, reboots the ESP32
-//   GET  /log     — streams last_seen.txt as plain-text download (read-only)
-//   GET  /bingo   — printable bingo ticket sheet, generated in-browser (read-only)
+//   POST /config  - validates PIN, saves config.ini, applies settings
+//   POST /settime - validates PIN, applies date+time immediately to RTC
+//   POST /reboot  - validates PIN, reboots the ESP32
+//   GET  /log     - streams last_seen.txt as plain-text download (read-only)
+//   GET  /bingo   - printable bingo ticket sheet, generated in-browser (read-only)
 //
 // Runs identically in both STA and AP mode.
 // May be started and stopped repeatedly as the radio comes and goes, so the
-// route table is built exactly once — WebServer::on() appends to a linked list
+// route table is built exactly once - WebServer::on() appends to a linked list
 // and would leak a full set of handlers on every restart otherwise.
 // ── /bingo page ───────────────────────────────────────────────────────────────
 // A self-contained printable bingo-ticket sheet. Everything (layout + ticket
 // generation) runs client-side in the browser, so the ESP32 just serves this
-// one static blob straight out of flash via send_P() — no String building, no
+// one static blob straight out of flash via send_P() - no String building, no
 // heap churn, no per-request CPU. Fresh tickets on every load, plus a "New
 // cards" button that re-rolls without touching the device at all.
 //
@@ -2737,7 +2737,7 @@ build();
 // and round-tripped back as ?path=. Depth is capped so a corrupt directory
 // chain cannot recurse forever.
 //
-// Handle budget — this is what sets FILES_MAX_DEPTH. One directory handle stays
+// Handle budget - this is what sets FILES_MAX_DEPTH. One directory handle stays
 // open per level on the stack, plus a transient file handle while iterating, and
 // the LVGL GIF decoder holds another for as long as an animation is playing. SD
 // is mounted with the library default of 5 slots, so the worst case must fit:
@@ -2839,7 +2839,7 @@ static void files_upload_handler()
     if (dir.length() == 0) dir = "/";
     if (dir.length() > 1 && dir.endsWith("/")) dir.remove(dir.length() - 1);
 
-    // Only the basename is honoured — some browsers send a full client path.
+    // Only the basename is honoured - some browsers send a full client path.
     String base = u.filename;
     int s1 = base.lastIndexOf('/'), s2 = base.lastIndexOf('\\');
     int cut = s1 > s2 ? s1 : s2;
@@ -2854,7 +2854,7 @@ static void files_upload_handler()
     }
 
     // Content-Length covers the whole multipart body, so it is an upper bound
-    // on the file rather than its size — good enough to refuse an obviously
+    // on the file rather than its size - good enough to refuse an obviously
     // oversized upload up front. The running check below is the real guard.
     const uint64_t MARGIN = 16 * 1024;   // leave headroom for FAT metadata
     uint64_t freeb = storage_free_bytes();
@@ -2872,7 +2872,7 @@ static void files_upload_handler()
     up_file = STORAGE->open(up_path.c_str(), FILE_WRITE);
     if (!up_file) {
       up_failed = true;
-      up_error  = F("Cannot create file — does that folder exist?");
+      up_error  = F("Cannot create file - does that folder exist?");
     }
   }
 
@@ -2882,14 +2882,14 @@ static void files_upload_handler()
       up_file.close();
       STORAGE->remove(up_path.c_str());
       up_failed = true;
-      up_error  = F("Ran out of space — partial file removed.");
+      up_error  = F("Ran out of space - partial file removed.");
       return;
     }
     if (up_file.write(u.buf, u.currentSize) != u.currentSize) {
       up_file.close();
       STORAGE->remove(up_path.c_str());
       up_failed = true;
-      up_error  = F("Write failed — partial file removed.");
+      up_error  = F("Write failed - partial file removed.");
       return;
     }
     up_written += u.currentSize;
@@ -2910,14 +2910,14 @@ static void files_upload_handler()
 static void start_web_server()
 {
   if (webServerRunning) return;
-  if (webRoutesRegistered) {          // routes already built — just re-listen
+  if (webRoutesRegistered) {          // routes already built - just re-listen
     web_server.begin();
     webServerRunning = true;
     Serial.println("[WEB] HTTP server restarted on port 80");
     return;
   }
 
-  // ── GET / — config editor page ───────────────────────────────────────────
+  // ── GET / - config editor page ───────────────────────────────────────────
   web_server.on("/", HTTP_GET, []() {
 
     // Read config.ini from whichever backend mounted at boot
@@ -3140,7 +3140,7 @@ static void start_web_server()
     web_server.send(200, "text/html", html);
   });
 
-  // ── POST /config — validate PIN, save and reload ─────────────────────────
+  // ── POST /config - validate PIN, save and reload ─────────────────────────
   web_server.on("/config", HTTP_POST, []() {
     // PIN check
     if (!web_server.hasArg("pin") || web_server.arg("pin") != String(ap_pin)) {
@@ -3153,10 +3153,10 @@ static void start_web_server()
 
     // ── Re-inject the real password if the user left the placeholder ────────
     // The textarea shows "password = ••••••••"; if that string is still
-    // present the user did not change the password — keep cfg.wifi_password.
+    // present the user did not change the password - keep cfg.wifi_password.
     // If they replaced it with something else, use their new value.
     if (body.indexOf("password = \xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2") >= 0) {
-      // Placeholder still present — substitute real password back in
+      // Placeholder still present - substitute real password back in
       body.replace(
         String("password = \xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2\xE2\x80\xA2"),
         String("password = ") + String(cfg.wifi_password)
@@ -3181,10 +3181,10 @@ static void start_web_server()
     fw.close();
     if (got != want) {
       STORAGE->remove("/config.tmp");
-      Serial.printf("[WEB] config save: short write (%u/%u bytes) — kept existing config\n",
+      Serial.printf("[WEB] config save: short write (%u/%u bytes) - kept existing config\n",
                     (unsigned)got, (unsigned)want);
       web_server.send(507, "text/plain",
-                      "Not enough space to save — existing config kept.");
+                      "Not enough space to save - existing config kept.");
       return;
     }
     STORAGE->remove("/config.ini");
@@ -3209,7 +3209,7 @@ static void start_web_server()
     web_server.send(200, "text/plain", "OK");
   });
 
-  // ── POST /settime — validate PIN, set RTC immediately ───────────────────
+  // ── POST /settime - validate PIN, set RTC immediately ───────────────────
   // Body field: dt = "YYYY-MM-DDTHH:MM"  (datetime-local format)
   web_server.on("/settime", HTTP_POST, []() {
     if (!web_server.hasArg("pin") || web_server.arg("pin") != String(ap_pin)) {
@@ -3244,7 +3244,7 @@ static void start_web_server()
     web_server.send(200, "text/plain", "OK");
   });
 
-  // ── POST /reboot — validate PIN, schedule reboot ─────────────────────────
+  // ── POST /reboot - validate PIN, schedule reboot ─────────────────────────
   web_server.on("/reboot", HTTP_POST, []() {
     if (!web_server.hasArg("pin") || web_server.arg("pin") != String(ap_pin)) {
       web_server.send(403, "text/plain", "Wrong PIN."); return;
@@ -3256,12 +3256,12 @@ static void start_web_server()
     ESP.restart();
   });
 
-  // ── GET /log — download last_seen.txt (no PIN required — read-only) ──────
+  // ── GET /log - download last_seen.txt (no PIN required - read-only) ──────
   web_server.on("/log", HTTP_GET, []() {
     // Always SD: the log is card-only by design, never on internal flash.
     if (!sdCardAvailable) {
       web_server.send(404, "text/plain",
-                      "No SD card — the run log is only kept on a card.");
+                      "No SD card - the run log is only kept on a card.");
       return;
     }
     File f = SD.open("/last_seen.txt", FILE_READ);
@@ -3271,13 +3271,13 @@ static void start_web_server()
     f.close();
   });
 
-  // ── GET /bingo — printable ticket sheet (no PIN — generates nothing on SD) ──
+  // ── GET /bingo - printable ticket sheet (no PIN - generates nothing on SD) ──
   // Served straight from flash; the browser does all the ticket generation.
   web_server.on("/bingo", HTTP_GET, []() {
     web_server.send_P(200, "text/html", BINGO_PAGE);
   });
 
-  // ── GET /files — flat recursive listing + storage meter ──────────────────
+  // ── GET /files - flat recursive listing + storage meter ──────────────────
   // Unauthenticated, matching GET / : it reveals names and sizes only. Reading
   // or changing anything below needs the PIN.
   web_server.on("/files", HTTP_GET, []() {
@@ -3401,7 +3401,7 @@ static void start_web_server()
         "  if(p.length!==6){msg('Enter the 6-digit PIN first.');return '';}return p;}"
 
         // Download and delete are wired by delegation so the path can live in a
-        // data attribute — safer than interpolating it into an onclick string.
+        // data attribute - safer than interpolating it into an onclick string.
         "document.addEventListener('click',function(e){"
         "  var b=e.target.closest?e.target.closest('button[data-p]'):null;"
         "  if(!b)return;"
@@ -3439,7 +3439,7 @@ static void start_web_server()
     web_server.send(200, "text/html", html);
   });
 
-  // ── GET /files/get — download one file ───────────────────────────────────
+  // ── GET /files/get - download one file ───────────────────────────────────
   // PIN rides in the query string because this is a plain link. Note that puts
   // it in browser history; on an open AP where form posts are already cleartext
   // that changes little, but it is a real difference.
@@ -3546,7 +3546,7 @@ static void stop_web_server()
   MDNS.end();
 }
 
-// ── WiFi detail popup — shown on long-press of WiFi row in status screen ─────
+// ── WiFi detail popup - shown on long-press of WiFi row in status screen ─────
 // Displays SSID / IP / URL so the user knows where to point their browser.
 // Tap anywhere on the popup to dismiss.
 static void wifi_status_longpress_cb(lv_event_t *e)
@@ -3577,7 +3577,7 @@ static void show_wifi_detail_popup()
   }, LV_EVENT_CLICKED, nullptr);
 
   // The web UI only exists while a listener is running, so in OFF / retry /
-  // failed states the PIN and URL rows would be misleading — they are replaced
+  // failed states the PIN and URL rows would be misleading - they are replaced
   // by a plain explanation of what the radio is doing.
   const bool web_reachable = webServerRunning &&
                              ((wifiMode == WM_STA && wifiConnected) || wifiMode == WM_AP);
@@ -3619,11 +3619,11 @@ static void show_wifi_detail_popup()
   else if (wifiMode == WM_FAILED)
     lv_label_set_text(l2, "Password rejected - radio off");
   else
-    lv_label_set_text(l2, "IP  —");
+    lv_label_set_text(l2, "IP  -");
   lv_obj_set_style_text_color(l2, lv_color_make(180, 180, 200), 0);
   lv_obj_align(l2, LV_ALIGN_TOP_MID, 0, 30);
 
-  // Row 3: PIN — only meaningful while the web UI is actually up
+  // Row 3: PIN - only meaningful while the web UI is actually up
   lv_obj_t *l3 = lv_label_create(wifi_detail_popup);
   if (web_reachable) {
     lv_label_set_text_fmt(l3, LV_SYMBOL_EDIT "  Web PIN: %s", ap_pin);
@@ -3671,13 +3671,13 @@ static void wifi_timer_sync_to_mode()
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  Apply cfg.wifi_mode — the single entry point for every mode change.
+//  Apply cfg.wifi_mode - the single entry point for every mode change.
 //  Always tears the previous mode down first so no listener, SNTP client or
 //  netif survives into the new mode.
 // ══════════════════════════════════════════════════════════════════════════════
 static void apply_wifi_state()
 {
-  // Apply POSIX TZ immediately — makes localtime_r correct even offline
+  // Apply POSIX TZ immediately - makes localtime_r correct even offline
   setenv("TZ", cfg.tz_string, 1);
   tzset();
   Serial.printf("[TZ] Applied: %s\n", cfg.tz_string);
@@ -3695,23 +3695,23 @@ static void apply_wifi_state()
       // Airplane mode: radio down, SNTP stopped, web server stopped, poll timer
       // paused. Nothing WiFi-related runs again until the mode is changed.
       wifiMode = WM_OFF;
-      Serial.println("[WiFi] Mode OFF — airplane mode, radio and NTP stopped");
+      Serial.println("[WiFi] Mode OFF - airplane mode, radio and NTP stopped");
       break;
 
     case WCFG_AP:
-      Serial.println("[WiFi] Mode AP — hotspot only, NTP not started");
+      Serial.println("[WiFi] Mode AP - hotspot only, NTP not started");
       start_ap_mode();
       break;
 
     case WCFG_WIFI:
     default:
-      // An empty SSID can never associate — don't burn 15 s finding that out.
+      // An empty SSID can never associate - don't burn 15 s finding that out.
       if (cfg.wifi_ssid[0] == '\0') {
-        Serial.println("[WiFi] Mode WiFi but SSID is empty — starting AP to allow setup");
+        Serial.println("[WiFi] Mode WiFi but SSID is empty - starting AP to allow setup");
         start_ap_mode();
         break;
       }
-      Serial.println("[WiFi] Mode WiFi — joining configured network");
+      Serial.println("[WiFi] Mode WiFi - joining configured network");
       wifi_sta_begin();
       break;
   }
@@ -3735,7 +3735,7 @@ static void countdown_tick_cb(lv_timer_t * /*t*/)
     timer_running = false;
     if (countdown_timer) { lv_timer_del(countdown_timer); countdown_timer=nullptr; }
     Serial.println("[TIMER] Done.");
-    // Hide the 00:00 label immediately — GIF animation takes over
+    // Hide the 00:00 label immediately - GIF animation takes over
     if (home_timer_lbl) lv_obj_set_hidden(home_timer_lbl, true);
     close_scheduled_gif();  // evict any running scheduled animation
     show_gif_fullscreen(timer_gif_path());
@@ -3916,7 +3916,7 @@ static void shutdown_cancel_cb(lv_event_t *e)
 static void shutdown_execute()
 {
   // ── Wake strategy ────────────────────────────────────────────────────────
-  // RESET button (EN pin) always causes a hard reboot — use it any time.
+  // RESET button (EN pin) always causes a hard reboot - use it any time.
   // Timer wakeup: if an alarm is configured, the device wakes automatically
   // 30 s before alarm time so the boot sequence completes before it fires.
   // If no alarm is set, the device sleeps indefinitely until RESET is pressed.
@@ -3932,12 +3932,12 @@ static void shutdown_execute()
     if (diff_sec <= 0) diff_sec += 86400;   // alarm is tomorrow
     // If alarm is more than 5 min away: wake 5 min early so WiFi+NTP
     // have time to sync before the alarm fires.
-    // If alarm is 5 min or less away: wake 30s early — no time for NTP,
+    // If alarm is 5 min or less away: wake 30s early - no time for NTP,
     // the fallback warning alarm will cover any drift.
     // In AP / OFF mode there is nothing to sync with, so waking 5 min early
     // would just burn 4.5 min of battery on an idle screen every single day.
     const int EARLY_NTP  = 5 * 60;   // 300s = 5 min
-    const int EARLY_BOOT =      30;  // 30s  — just enough to boot
+    const int EARLY_BOOT =      30;  // 30s  - just enough to boot
     int early = (cfg.wifi_mode == WCFG_WIFI && diff_sec > EARLY_NTP)
                 ? EARLY_NTP : EARLY_BOOT;
     diff_sec = max(diff_sec - early, 10);
@@ -4032,7 +4032,7 @@ static void battery_timer_callback(lv_timer_t * /*timer*/)
   // ── Home screen clock colour by battery level ────────────────────────────
   //   > 25%  : white  (normal)
   //   11-25% : orange (low warning)
-  //   ≤ 10%  : red    (critical — triggers auto-poweroff after 60 s)
+  //   ≤ 10%  : red    (critical - triggers auto-poweroff after 60 s)
   if (home_time_lbl) {
     lv_color_t clr = lv_color_white();
     if      (pct <= 10) clr = lv_color_make(220, 50,  50);   // red
@@ -4045,7 +4045,7 @@ static void battery_timer_callback(lv_timer_t * /*timer*/)
   static bool low_bat_triggered = false;
   if (pct <= 10 && !low_bat_triggered && !overlay_cont && !alarm_cont) {
     low_bat_triggered = true;
-    Serial.printf("[BAT] Critical: %d%% — auto-poweroff in 60s\n", pct);
+    Serial.printf("[BAT] Critical: %d%% - auto-poweroff in 60s\n", pct);
     // Open battery screen so the user sees the warning
     show_battery_screen();
     // Start shutdown countdown at 60 seconds instead of the normal 5
@@ -4061,7 +4061,7 @@ static void battery_timer_callback(lv_timer_t * /*timer*/)
 // ══════════════════════════════════════════════════════════════════════════════
 //  WIFI + NTP BACKGROUND POLL TIMER
 //  Runs entirely from the LVGL timer so it never blocks the display, and only
-//  while a STA attempt is alive — it is paused outright in AP and OFF mode.
+//  while a STA attempt is alive - it is paused outright in AP and OFF mode.
 //
 //  Failure handling, by scenario:
 //    wrong password   → the AP rejects us within a second or two; after
@@ -4076,7 +4076,7 @@ static void battery_timer_callback(lv_timer_t * /*timer*/)
 // ══════════════════════════════════════════════════════════════════════════════
 static void wifi_poll_cb(lv_timer_t *t)
 {
-  // Steady states — nothing to poll. Belt and braces: the timer is normally
+  // Steady states - nothing to poll. Belt and braces: the timer is normally
   // paused in these modes, so this only catches a mode change mid-tick.
   if (wifiMode == WM_AP || wifiMode == WM_OFF || wifiMode == WM_IDLE) {
     lv_timer_pause(t);
@@ -4113,9 +4113,9 @@ static void wifi_poll_cb(lv_timer_t *t)
       start_web_server();
       Serial.printf("[WiFi] Connected: SSID=%s  IP=%s  URL=%s\n",
                     WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(),
-                    mdns_ok ? mdns_url() : "(mDNS failed — use the IP)");
+                    mdns_ok ? mdns_url() : "(mDNS failed - use the IP)");
       if (!mdns_ok)
-        Serial.printf("[WiFi] mDNS could not claim '%s' — is another device "
+        Serial.printf("[WiFi] mDNS could not claim '%s' - is another device "
                       "already using it? Change [wifi] hostname.\n",
                       cfg.wifi_hostname);
     }
@@ -4132,7 +4132,7 @@ static void wifi_poll_cb(lv_timer_t *t)
     wifiMode       = WM_CONNECTING;
     wifi_sta_start = millis();       // let auto-reconnect have one full window
     stop_web_server();               // listener is dead with the netif anyway
-    Serial.printf("[WiFi] Link lost (reason %u) — reconnecting\n",
+    Serial.printf("[WiFi] Link lost (reason %u) - reconnecting\n",
                   (unsigned)wifi_last_reason);
   }
 
@@ -4142,7 +4142,7 @@ static void wifi_poll_cb(lv_timer_t *t)
     return;
   }
 
-  // ── Window expired — this attempt failed ──────────────────────────────────
+  // ── Window expired - this attempt failed ──────────────────────────────────
   uint8_t reason = wifi_last_reason;
   if (wifi_fail_count < 250) wifi_fail_count++;
 
@@ -4155,15 +4155,15 @@ static void wifi_poll_cb(lv_timer_t *t)
                   (unsigned)reason);
   }
 
-  // Credentials are wrong — retrying cannot help. Stop and open the hotspot so
+  // Credentials are wrong - retrying cannot help. Stop and open the hotspot so
   // the web UI is reachable to correct them.
   if (wifi_auth_fails >= WIFI_AUTHFAIL_LIMIT) {
 #if WIFI_AUTHFAIL_TO_AP
-    Serial.println("[WiFi] Password rejected repeatedly — switching to AP for setup");
+    Serial.println("[WiFi] Password rejected repeatedly - switching to AP for setup");
     ntp_stop_client();
     start_ap_mode();
 #else
-    Serial.println("[WiFi] Password rejected repeatedly — radio off until reboot");
+    Serial.println("[WiFi] Password rejected repeatedly - radio off until reboot");
     ntp_stop_client();
     wifi_radio_down();
     wifiMode = WM_FAILED;
@@ -4173,7 +4173,7 @@ static void wifi_poll_cb(lv_timer_t *t)
   }
 
   // Otherwise: power the radio down and wait. 30 s, 60 s, 2 min, 4 min, 8 min,
-  // then a 10 min ceiling — the CPU is idle and the radio is off throughout.
+  // then a 10 min ceiling - the CPU is idle and the radio is off throughout.
   uint32_t backoff = WIFI_RETRY_BASE_MS;
   if (wifi_fail_count > 1) {
     uint8_t shift = (wifi_fail_count - 1 > 5) ? 5 : (wifi_fail_count - 1);
@@ -4184,13 +4184,13 @@ static void wifi_poll_cb(lv_timer_t *t)
   wifi_radio_down();
   wifiMode      = WM_RETRY;
   wifi_retry_at = millis() + backoff;
-  Serial.printf("[WiFi] Radio off — next attempt in %lus\n",
+  Serial.printf("[WiFi] Radio off - next attempt in %lus\n",
                 (unsigned long)(backoff / 1000));
   lv_timer_set_period(t, backoff);   // one wakeup, when the attempt is due
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  SCHEDULED ANIMATION  —  every 2 min, configurable duration, 800 ms fade
+//  SCHEDULED ANIMATION  -  every 2 min, configurable duration, 800 ms fade
 //  Day (07:00–19:59): smile GIF.  Night (20:00–06:59): sleep GIF.
 //  Only fires when the clock face is visible and no overlay is open.
 //  Touch the screen at any time to dismiss immediately.
@@ -4237,7 +4237,7 @@ static void close_scheduled_gif()
   if (overlay_cont) {
     lv_obj_del(overlay_cont);
     overlay_cont = nullptr;
-    Serial.println("[SCHED] Scheduled GIF closed — alarm/timer taking priority");
+    Serial.println("[SCHED] Scheduled GIF closed - alarm/timer taking priority");
   }
 }
 
@@ -4264,13 +4264,13 @@ static void run_scheduled_animation(int hour)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  DAILY AUTOMATION  —  brightness schedule + sleep GIF
+//  DAILY AUTOMATION  -  brightness schedule + sleep GIF
 //  Called once per minute from clock_tick_cb (only when minute changes).
 // ══════════════════════════════════════════════════════════════════════════════
 // ── Alarm warning overlay ────────────────────────────────────────────────────
 // Fires the alarm without a GIF, replacing it with a plain text warning that
 // the displayed time cannot be trusted. Used for both "NTP is switched off" and
-// "NTP was expected but never arrived" — the buzzer still sounds either way, so
+// "NTP was expected but never arrived" - the buzzer still sounds either way, so
 // the alarm is never silently skipped just because the clock might be adrift.
 //
 // Rationale: the RTC crystal drifts measurably across a full 8 h deep sleep. In
@@ -4312,7 +4312,7 @@ static void run_daily_automation(int hour, int minute)
   Serial.printf("[SCHED] %02d:%02d\n", hour, minute);
 
   // ── Scheduled animation every 2 minutes ──────────────────────────────────
-  // Skip if alarm fires this same minute — alarm takes priority
+  // Skip if alarm fires this same minute - alarm takes priority
   bool alarm_fires_now = cfg.alarm_enabled
                          && hour   == cfg.alarm_hour
                          && minute == cfg.alarm_minute;
@@ -4333,7 +4333,7 @@ static void run_daily_automation(int hour, int minute)
   if (hour == 21 && minute ==  0) {
     if (overlay_cont) {
       Serial.println("[SCHED] Auto-closing sleep animation at 21:00");
-      // Simulate a close — reuse the same logic as tapping to return
+      // Simulate a close - reuse the same logic as tapping to return
       if (tilt_timer) { lv_timer_del(tilt_timer); tilt_timer = nullptr; }
       label_brightness = nullptr;
       lv_obj_del(overlay_cont);
@@ -4374,34 +4374,34 @@ static void run_daily_automation(int hour, int minute)
   bool           at_alarm_time   = cfg.alarm_enabled
                                    && hour   == cfg.alarm_hour
                                    && minute == cfg.alarm_minute;
-  // NTP is switched off at the source — the user chose AP or OFF. Distinct from
+  // NTP is switched off at the source - the user chose AP or OFF. Distinct from
   // "WiFi mode but the sync has not landed yet", which may still resolve.
   bool           ntp_disabled    = (cfg.wifi_mode != WCFG_WIFI);
 
   // ── Pending alarm: check each minute whether NTP has synced ──────────
   if (alarm_ntp_pending) {
     if (timeSynced) {
-      // NTP finally synced — fire alarm now at the correct time
+      // NTP finally synced - fire alarm now at the correct time
       alarm_ntp_pending = false;
-      Serial.println("[ALARM] NTP synced — firing pending alarm");
+      Serial.println("[ALARM] NTP synced - firing pending alarm");
       close_scheduled_gif();
       set_brightness(50);
       show_gif_fullscreen(alarm_gif_path());
       buzzer_start_alarm();
     } else if (!wifi_ntp_possible()) {
-      // The radio gave up or the mode changed — no sync is coming. Fire now
+      // The radio gave up or the mode changed - no sync is coming. Fire now
       // with the warning rather than sitting on the alarm for 15 minutes.
       alarm_ntp_pending = false;
-      Serial.println("[ALARM] NTP no longer possible — firing with drift warning");
+      Serial.println("[ALARM] NTP no longer possible - firing with drift warning");
       show_alarm_warning(ntp_disabled ? ALARM_WARN_NTP_DISABLED
                                       : ALARM_WARN_NTP_FAILED);
     } else if (UPTIME_MS > NTP_GIVE_UP_MS) {
-      // 15 min elapsed, NTP never synced — show warning alarm
+      // 15 min elapsed, NTP never synced - show warning alarm
       alarm_ntp_pending = false;
-      Serial.println("[ALARM] NTP timeout — showing warning alarm");
+      Serial.println("[ALARM] NTP timeout - showing warning alarm");
       show_alarm_warning(ALARM_WARN_NTP_FAILED);
     } else {
-      Serial.printf("[ALARM] Pending — waiting for NTP (uptime %lus)\n",
+      Serial.printf("[ALARM] Pending - waiting for NTP (uptime %lus)\n",
                     UPTIME_MS / 1000);
     }
     return;  // pending state consumed this minute
@@ -4413,14 +4413,14 @@ static void run_daily_automation(int hour, int minute)
 
     if (ntp_disabled && !timeSynced && !long_uptime) {
       // Case D: AP / OFF mode. The RTC has no correction source at all, so the
-      // drift is unbounded — it accrues across every deep sleep and keeps
+      // drift is unbounded - it accrues across every deep sleep and keeps
       // accruing while awake.
       // `&& !long_uptime` adds a 5 min uptime check, removing that will always warn, however long the device has been up.
       Serial.printf("[ALARM] Firing at %02d:%02d with drift warning (mode=%s)\n",
                     hour, minute, wifi_cfg_mode_label());
       show_alarm_warning(ALARM_WARN_NTP_DISABLED);
     } else if (long_uptime || timeSynced) {
-      // Case A or B1: reliable time — fire immediately
+      // Case A or B1: reliable time - fire immediately
       Serial.printf("[ALARM] Firing at %02d:%02d (uptime=%lus, NTP=%s)\n",
                     hour, minute, UPTIME_MS / 1000, timeSynced ? "yes" : "no");
       close_scheduled_gif();
@@ -4428,16 +4428,16 @@ static void run_daily_automation(int hour, int minute)
       show_gif_fullscreen(alarm_gif_path());
       buzzer_start_alarm();
     } else {
-      // Case B2: fresh boot, NTP still possible but not synced — hold
+      // Case B2: fresh boot, NTP still possible but not synced - hold
       alarm_ntp_pending = true;
-      Serial.printf("[ALARM] Holding at %02d:%02d — waiting for NTP sync\n",
+      Serial.printf("[ALARM] Holding at %02d:%02d - waiting for NTP sync\n",
                     hour, minute);
     }
   }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  CLOCK TICK  (every 1 s — updates HH:mm on home screen)
+//  CLOCK TICK  (every 1 s - updates HH:mm on home screen)
 // ══════════════════════════════════════════════════════════════════════════════
 static void clock_tick_cb(lv_timer_t * /*t*/)
 {
@@ -4446,7 +4446,7 @@ static void clock_tick_cb(lv_timer_t * /*t*/)
   struct tm tm_info;
   localtime_r(&now, &tm_info);
 
-  // Only redraw when the minute changes — avoids label churn every second
+  // Only redraw when the minute changes - avoids label churn every second
   // which was causing touch-event latency during the LVGL render cycle.
   static int last_min = -1;
   if (tm_info.tm_min == last_min) return;
@@ -4560,7 +4560,7 @@ static void show_gif_fullscreen(const char *path)
     uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     Serial.printf("[GIF] heap free=%u  largest=%u\n", free_b, largest);
 
-    // ── RAM requirement — MEASURED on hardware, not estimated ─────────────────
+    // ── RAM requirement - MEASURED on hardware, not estimated ─────────────────
     // The LVGL v9 GIF decoder allocates an ARGB8888 canvas of width × height × 4
     // plus decoder state. A 160×86 decode costs 84 056 bytes end to end
     // (canvas 55 040 + ~29 KB of state), measured identically on both boards via
@@ -4569,14 +4569,14 @@ static void show_gif_fullscreen(const char *path)
     // ESP32-C6 largest free block at this point, measured:
     //   wifi.mode = ap   (web server up)   238 944 free / 221 172 largest
     //   wifi.mode = off                    277 296 free / 229 364 largest
-    // So a 160×86 GIF has ~137 KB of headroom on the C6 — not the ~2 KB that an
+    // So a 160×86 GIF has ~137 KB of headroom on the C6 - not the ~2 KB that an
     // earlier version of this comment implied by claiming "max ~77 KB free".
     // That figure was simply wrong; do not reintroduce it.
     //
     // !! YOU MUST STILL RESIZE BOTH GIF FILES ON THE SD CARD TO 160×86 PIXELS !!
     // Full panel resolution genuinely does not fit on the C6, for the real
     // reason: a 320×172 canvas is 220 160 bytes, and with decoder state that is
-    // ~249 KB against the 221 KB largest block — short by roughly 28 KB.
+    // ~249 KB against the 221 KB largest block - short by roughly 28 KB.
     //    Tool: https://ezgif.com/resize
     //    Steps: Upload GIF → Width=160, Height=86, Resize → Download
     //    Save back to SD card overwriting the original filename.
@@ -4609,11 +4609,11 @@ static void show_gif_fullscreen(const char *path)
       // when PSRAM is up and the block is still short.
       const bool psram_missing = (BOARD_EXPECTS_PSRAM != 0) && !psramFound();
       if (psram_missing) {
-        Serial.printf("[GIF] only %u available — PSRAM is not enabled\n", (unsigned)largest);
+        Serial.printf("[GIF] only %u available - PSRAM is not enabled\n", (unsigned)largest);
         Serial.println("[GIF]   Fix: Arduino IDE -> Tools -> PSRAM -> \"OPI PSRAM\", re-upload.");
         Serial.println("[GIF]   The boot log must read \"PSRAM yes\". Do not resize the GIF.");
       } else {
-        Serial.printf("[GIF] need ~84KB, only %u available — resize the GIF to 160x86\n",
+        Serial.printf("[GIF] need ~84KB, only %u available - resize the GIF to 160x86\n",
                       (unsigned)largest);
       }
       lv_obj_t *err = lv_label_create(overlay_cont);
@@ -4716,7 +4716,7 @@ static void tilt_poll_cb(lv_timer_t * /*t*/)
 // brightness control on the S3, which has no IMU to tilt.
 //
 // LVGL sends at most one LV_EVENT_GESTURE per press (indev sets gesture_sent),
-// so one swipe is one 10% step — swipe again for the next.
+// so one swipe is one 10% step - swipe again for the next.
 static void brightness_swipe_cb(lv_event_t * /*e*/)
 {
   switch (lv_indev_get_gesture_dir(lv_indev_get_act())) {
@@ -4741,7 +4741,7 @@ static void show_status_screen(void)
     time_t    now = time(nullptr);
     struct tm t;
     localtime_r(&now, &t);
-    if (now > 1735689600UL) {  // RTC sane (> 2026) — show date
+    if (now > 1735689600UL) {  // RTC sane (> 2026) - show date
       static const char *wday[]  = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
       static const char *month[] = {"Jan","Feb","Mar","Apr","May","Jun",
                                      "Jul","Aug","Sep","Oct","Nov","Dec"};
@@ -4812,13 +4812,13 @@ static void show_status_screen(void)
   lv_obj_set_ignore_layout(wifi_val, true);
 
   // Long-press anywhere on the status overlay shows the WiFi detail popup
-  // (SSID / IP / URL) — mirrors how the battery screen shows the shutdown popup.
+  // (SSID / IP / URL) - mirrors how the battery screen shows the shutdown popup.
   lv_obj_add_event_cb(overlay_cont, wifi_status_longpress_cb,
                       LV_EVENT_LONG_PRESSED, nullptr);
 
   // ── Row 2: NTP  (y = 0 from mid = 86px from top) ─────────────────────────
   // In AP and OFF mode there is no uplink, so "not synced" would read as a
-  // fault when it is simply not applicable — say so explicitly instead.
+  // fault when it is simply not applicable - say so explicitly instead.
   const char *ntp_txt;
   lv_color_t  ntp_col;
   if (timeSynced) {
@@ -4850,11 +4850,11 @@ static void show_status_screen(void)
   lv_obj_align(label_brightness, LV_ALIGN_LEFT_MID, 20, 28);
   lv_obj_set_ignore_layout(label_brightness, true);
 
-  // Swipe left/right to adjust brightness — available on both boards.
+  // Swipe left/right to adjust brightness - available on both boards.
   //
   // GESTURE_BUBBLE must be cleared here or this callback never runs. LVGL sets
   // that flag on every object created with a parent (lv_obj.c), and
-  // indev_gesture() walks *up* from the pressed object for as long as it is set —
+  // indev_gesture() walks *up* from the pressed object for as long as it is set -
   // so with it left on, the walk passes straight over this overlay and delivers
   // the event to the screen, whose parent is NULL. Clearing it makes the overlay
   // the end of the walk, which also means a gesture starting on a child (the
@@ -4862,7 +4862,7 @@ static void show_status_screen(void)
   lv_obj_set_gesture_bubble(overlay_cont, false);
   lv_obj_add_event_cb(overlay_cont, brightness_swipe_cb, LV_EVENT_GESTURE, nullptr);
 
-  // Start tilt poll timer — 400 ms, runs while this screen is open. Skipped
+  // Start tilt poll timer - 400 ms, runs while this screen is open. Skipped
   // without an IMU, matching the guarded path at the emotion overlay;
   // tilt_poll_cb() would early-return anyway.
   if (imuReady && !tilt_timer)
@@ -5007,7 +5007,7 @@ static lv_obj_t *se_wifi_lbl     = nullptr;   // big mode name
 static lv_obj_t *se_wifi_desc    = nullptr;   // one-line explanation
 static lv_obj_t *se_wifi_dot[3]  = {nullptr, nullptr, nullptr};
 
-// Every path that deletes editor_cont must drop these pointers with it —
+// Every path that deletes editor_cont must drop these pointers with it -
 // the labels are children of editor_cont and are freed along with it.
 static void se_wifi_labels_reset()
 {
@@ -5077,7 +5077,7 @@ static void se_m_dn(lv_event_t*e){if(lv_event_get_code(e)==LV_EVENT_PRESSED){edi
 static void se_tog(lv_event_t*e) {if(lv_event_get_code(e)==LV_EVENT_PRESSED){edit_enabled=!edit_enabled;se_refresh();}}
 
 // ── WiFi mode editor: refresh + left/right selection ──────────────────────────
-// Mirrors se_refresh() for the HH:MM editors — repaints the labels in place and
+// Mirrors se_refresh() for the HH:MM editors - repaints the labels in place and
 // flashes them so a tap is always visibly acknowledged.
 static void wifi_editor_refresh()
 {
@@ -5158,16 +5158,16 @@ static void open_clock_editor()
   const int TY=24, TH=48, TA=16;  // top-row y, height, arrow height
   // Date row  (montserrat_16): centred at y=96, height=20
   const int DY=112, DH=20, DA=16;  // date-row y, height, arrow height
-  // Time columns — row spans 76..244, centred on x=160 (76px margin each side)
+  // Time columns - row spans 76..244, centred on x=160 (76px margin each side)
   const int HX=76,HW=60, MX=184,MW=60;
-  // Date columns — row spans 66..254, centred on x=160 (66px margin each side)
+  // Date columns - row spans 66..254, centred on x=160 (66px margin each side)
   const int DDX=66,DDW=36, MOX=126,MOW=44, YX=196,YW=58;
   // Touch-zone columns: each field owns the territory out to the midpoint of the
   // gap with its neighbour, so no dead strips remain between the fields.
   const int ZL=40, ZR=280;                // outer margins (match the divider)
-  const int ZTM=(HX+HW+MX)/2;             // 160 — HH | mm boundary
-  const int ZD1=(DDX+DDW+MOX)/2;          // 114 — DD | MON boundary
-  const int ZD2=(MOX+MOW+YX)/2;           // 183 — MON | YYYY boundary
+  const int ZTM=(HX+HW+MX)/2;             // 160 - HH | mm boundary
+  const int ZD1=(DDX+DDW+MOX)/2;          // 114 - DD | MON boundary
+  const int ZD2=(MOX+MOW+YX)/2;           // 183 - MON | YYYY boundary
 
   auto mkcont=[&](int x,int w,int y,int h)->lv_obj_t*{
     lv_obj_t*cont=lv_obj_create(editor_cont);
@@ -5175,7 +5175,7 @@ static void open_clock_editor()
     lv_obj_set_style_bg_opa(cont,LV_OPA_TRANSP,0);
     lv_obj_set_style_border_width(cont,0,0); lv_obj_set_style_pad_all(cont,0,0);
     lv_obj_set_style_radius(cont,0,0); lv_obj_set_scrollable(cont, false);
-    lv_obj_set_clickable(cont, false);   // decorative only — never eat a touch
+    lv_obj_set_clickable(cont, false);   // decorative only - never eat a touch
     return cont;
   };
   auto mkarr=[&](int x,int w,int y,const char*s,bool small){
@@ -5215,8 +5215,8 @@ static void open_clock_editor()
   //   t_top = top edge of the ▲ arrows,  t_mid = split point,
   //   t_bot = top edge of the date ▲ arrows (hand-off to the date row).
   int t_mid = TY+TH/2;   //  48
-  int t_top = TY-TA;     //   8  — same y as mkarr(...,TY-TA,...)
-  int t_bot = DY-DA;     //  96  — same y as mkarr(...,DY-DA,...)
+  int t_top = TY-TA;     //   8  - same y as mkarr(...,TY-TA,...)
+  int t_bot = DY-DA;     //  96  - same y as mkarr(...,DY-DA,...)
   se_zone(editor_cont,ZL, t_top,ZTM-ZL,t_mid-t_top,se_h_up);
   se_zone(editor_cont,ZL, t_mid,ZTM-ZL,t_bot-t_mid,se_h_dn);
   se_zone(editor_cont,ZTM,t_top,ZR-ZTM,t_mid-t_top,se_m_up);
@@ -5406,7 +5406,7 @@ static void open_wifi_editor()
   lv_obj_set_style_text_color(title,lv_color_make(180,180,220),0);
   lv_obj_align(title,LV_ALIGN_TOP_MID,0,8);
 
-  // Left / right arrows — same styling as the carousel arrows
+  // Left / right arrows - same styling as the carousel arrows
   lv_obj_t*larr=lv_label_create(editor_cont);
   lv_label_set_text(larr,LV_SYMBOL_LEFT);
   lv_obj_set_style_text_font(larr,&lv_font_montserrat_48,0);
@@ -5419,7 +5419,7 @@ static void open_wifi_editor()
   lv_obj_set_style_text_color(rarr,lv_color_make(80,100,180),0);
   lv_obj_align(rarr,LV_ALIGN_RIGHT_MID,-6,0);
 
-  // Selected mode — big, colour-coded
+  // Selected mode - big, colour-coded
   se_wifi_lbl=lv_label_create(editor_cont);
   lv_obj_set_style_text_font(se_wifi_lbl,&lv_font_montserrat_48,0);
   lv_obj_align(se_wifi_lbl,LV_ALIGN_CENTER,0,-16);
@@ -5430,7 +5430,7 @@ static void open_wifi_editor()
   lv_obj_set_style_text_color(se_wifi_desc,lv_color_make(160,160,180),0);
   lv_obj_align(se_wifi_desc,LV_ALIGN_CENTER,0,22);
 
-  // Three position dots — same glyphs and font as the carousel row
+  // Three position dots - same glyphs and font as the carousel row
   for (int i=0;i<3;i++) {
     se_wifi_dot[i]=lv_label_create(editor_cont);
     lv_obj_set_style_text_font(se_wifi_dot[i],&dejavu_mono_14,0);
@@ -5440,7 +5440,7 @@ static void open_wifi_editor()
   // Touch zones, derived from the drawn geometry so they cannot drift:
   //   WZ_TOP/WZ_BOT clear the title and the bottom hint,
   //   WZ_L..WZ_R is a neutral centre strip carrying only editor_cont's
-  //   long-press. That gap is deliberate — if the two arrow zones met in the
+  //   long-press. That gap is deliberate - if the two arrow zones met in the
   //   middle, se_zone's LV_EVENT_PRESSED would fire before LV_EVENT_LONG_PRESSED
   //   and every "hold to save" would nudge the selection one step first.
   const int WZ_TOP=30, WZ_BOT=150;   // vertical span of both zones
@@ -5481,9 +5481,9 @@ static void close_timer_editor()
   cfg.timer_hours=edit_hour; cfg.timer_minutes=edit_min;
   save_config();
   if (edit_enabled) {
-    timer_start_countdown();  // Ready! — start the countdown
+    timer_start_countdown();  // Ready! - start the countdown
   } else {
-    timer_stop();             // Not yet — cancel any running timer
+    timer_stop();             // Not yet - cancel any running timer
   }
 }
 static void close_alarm_editor()
@@ -5506,7 +5506,7 @@ static void close_wifi_editor()
 {
   const uint8_t sel = (wifi_editor_sel > WCFG_OFF) ? WCFG_WIFI : wifi_editor_sel;
   if (sel == cfg.wifi_mode) {
-    // Nothing chosen — skip the radio teardown and the SD write entirely, so
+    // Nothing chosen - skip the radio teardown and the SD write entirely, so
     // entering the editor just to look costs nothing.
     Serial.printf("[SETTINGS] WiFi mode unchanged (%s)\n", wifi_cfg_mode_label());
     return;
@@ -5529,7 +5529,7 @@ static void modal_close()
 
 // ── Long-press: save and exit all the way to the clock view ──────────────────
 // Whether the long-press lands on an item editor or on the carousel itself,
-// it now closes the whole modal in one step — no intermediate stop back at
+// it now closes the whole modal in one step - no intermediate stop back at
 // the carousel. (Apps carousel and USB carousel are unaffected: they own
 // their own long-press handlers.)
 static void modal_longpress_cb(lv_event_t *e)
@@ -5553,11 +5553,11 @@ static void carousel_tap_cb(lv_event_t *e)
   if (lv_event_get_code(e)!=LV_EVENT_CLICKED) return;
   switch (carousel_idx) {
     case 0: open_clock_editor(); break;
-    case 1: // Timer — always open with Not yet
+    case 1: // Timer - always open with Not yet
       open_editor(cfg.timer_hours,cfg.timer_minutes,false,true); break;
     case 2: // Alarm
       open_editor(cfg.alarm_hour,cfg.alarm_minute,cfg.alarm_enabled,true); break;
-    case 3: // WiFi — sub-screen: arrows select, long-press applies
+    case 3: // WiFi - sub-screen: arrows select, long-press applies
       open_wifi_editor(); break;
   }
 }
@@ -5637,11 +5637,11 @@ static void carousel_build()
     carousel_idx==3?wifi_mode_col:lv_color_make(160,160,180),0);
   lv_obj_align(desc_lbl,LV_ALIGN_CENTER,0,40);
 
-  // // Fade the centre content in on every ◀/▶ navigation — same se_flash() the
+  // // Fade the centre content in on every ◀/▶ navigation - same se_flash() the
   // // WiFi mode editor uses on selection change. Arrows and dots stay static.
   // se_flash(icon); se_flash(name_lbl); se_flash(desc_lbl);
 
-  // Centre tap zone — uses CLICKED so long-press and tap are mutually
+  // Centre tap zone - uses CLICKED so long-press and tap are mutually
   // exclusive: CLICKED only fires when the finger lifts without triggering
   // LONG_PRESSED, so the editor never opens immediately before closing.
   {
@@ -5655,7 +5655,7 @@ static void carousel_build()
     lv_obj_add_event_cb(z,modal_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr);
   }
 
-  // Hint — shown above the position dots
+  // Hint - shown above the position dots
   lv_obj_t*hint=lv_label_create(modal_cont);
   lv_label_set_text(hint,"tap in or hold to exit");
   lv_obj_set_style_text_color(hint,lv_color_make(80,80,100),0);
@@ -5663,7 +5663,7 @@ static void carousel_build()
   lv_obj_set_style_text_font(hint,&dejavu_mono_14,0);
   lv_obj_align(hint,LV_ALIGN_BOTTOM_MID,0,-18);  // above the dots
 
-  // Position dots — bottom row
+  // Position dots - bottom row
   for (int i=0;i<4;i++) {
     lv_obj_t*dot=lv_label_create(modal_cont);
     lv_obj_set_style_text_font(dot, &dejavu_mono_14, 0);
@@ -5710,7 +5710,7 @@ static void update_home_bell()
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  HOME SCREEN  —  "Hello!" splash → big clock face + 4-zone invisible touch
+//  HOME SCREEN  -  "Hello!" splash → big clock face + 4-zone invisible touch
 // ══════════════════════════════════════════════════════════════════════════════
 
 // One-shot callback: fired 2.5 s after boot to switch Hello → clock
@@ -5723,14 +5723,14 @@ static void clock_face_show(lv_timer_t *t)
     home_hello_lbl = nullptr;
   }
 
-  // Large HH:mm label — populate from RTC immediately when waking from sleep
+  // Large HH:mm label - populate from RTC immediately when waking from sleep
   home_time_lbl = lv_label_create(lv_scr_act());
   if (boot_from_sleep) {
     time_t rtc_now = time(nullptr);
     struct tm rtc_tm; localtime_r(&rtc_now, &rtc_tm);
     char tbuf[6];
     snprintf(tbuf, sizeof(tbuf), "%02d:%02d", rtc_tm.tm_hour, rtc_tm.tm_min);
-    lv_label_set_text(home_time_lbl, tbuf);  // real time — no "--:--" flash
+    lv_label_set_text(home_time_lbl, tbuf);  // real time - no "--:--" flash
   } else {
     lv_label_set_text(home_time_lbl, "--:--");  // cold boot: wait for NTP
   }
@@ -5756,7 +5756,7 @@ static void clock_face_show(lv_timer_t *t)
 
   // The touch zones are live during the splash, so a screen (e.g. the smile
   // GIF from an upper-left tap) may already be open. Labels created now would
-  // otherwise draw on top of it — send them to the back of the z-order.
+  // otherwise draw on top of it - send them to the back of the z-order.
   lv_obj_move_background(home_bell_lbl);
   lv_obj_move_background(home_timer_lbl);
   lv_obj_move_background(home_time_lbl);
@@ -5767,7 +5767,7 @@ static void clock_face_show(lv_timer_t *t)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  APPS MENU — long-press the smile GIF (upper-left tap) → math gate → 3 games
+//  APPS MENU - long-press the smile GIF (upper-left tap) → math gate → 3 games
 //
 //  Flow:  UL tap → smile GIF opens → long-press GIF → math challenge
 //         Correct answer → apps carousel (RPS / Dice / Coin)
@@ -5776,7 +5776,7 @@ static void clock_face_show(lv_timer_t *t)
 // ══════════════════════════════════════════════════════════════════════════════
 
 // ── Note frequencies and menu tone helpers ────────────────────────────────────
-// menu_tone() is a short blocking call — safe in LVGL timer callbacks because
+// menu_tone() is a short blocking call - safe in LVGL timer callbacks because
 // the longest note (500ms) is still shorter than any LVGL watchdog threshold.
 #define NOTE_C4  262
 #define NOTE_D4  294
@@ -5832,7 +5832,7 @@ static void hb_tick_cb(lv_timer_t *t)
 
     bool all_done = (hb_seq_total > 0 && hb_seq_done >= hb_seq_total);
     if (all_done) {
-      // All requested repetitions finished — same teardown path as buzzer_stop()
+      // All requested repetitions finished - same teardown path as buzzer_stop()
       lv_timer_del(t);
       buzzer_timer  = nullptr;
       ledcWrite(BUZZER_PIN, 0);
@@ -5846,7 +5846,7 @@ static void hb_tick_cb(lv_timer_t *t)
         overlay_fade_and_close();
       }
     } else {
-      // More repeats to go — silence the buzzer and wait 1500 ms before the
+      // More repeats to go - silence the buzzer and wait 1500 ms before the
       // next pass (mirrors the 1000 ms end-pause of the normal beep pattern,
       // slightly longer here to give the tune a natural breath between verses).
       ledcWrite(BUZZER_PIN, 0);
@@ -5928,7 +5928,7 @@ static const Note FAILURE_TUNE[] = {
 // Maps the stick's horizontal deflection onto a paddle's travel: centre is
 // centre, half deflection is halfway to the wall, full deflection is the wall.
 // The same proportional mapping ToneQuest's ball uses, quantised to the
-// character grid, and it needs no speed constant of its own — the caller is the
+// character grid, and it needs no speed constant of its own - the caller is the
 // game's existing paddle timer, running at the speed config.ini already sets.
 //
 // `lo`/`hi` are the leftmost and rightmost legal columns, which each game
@@ -6043,9 +6043,9 @@ static int         apps_idx       = 0;   // 0=RPS 1=Dice 2=Coin 3=Metro 4=Tennis
 // rather than shipped as dead entries.
 //
 // Deliberately NOT hidden:
-//   RPS (0) / Dice (1) — tap-driven; the gyro is only a shake-to-reroll extra.
-//   Bingo (7)          — bn_tap_cb calls numbers on tap; tilt is the alternate.
-//   ToneQuest (8)      — the only app that swaps input method rather than
+//   RPS (0) / Dice (1) - tap-driven; the gyro is only a shake-to-reroll extra.
+//   Bingo (7)          - bn_tap_cb calls numbers on tap; tilt is the alternate.
+//   ToneQuest (8)      - the only app that swaps input method rather than
 //                        hiding. With an IMU the ball is a bubble level; with
 //                        none it takes four-way swipes instead, which answer a
 //                        prompt just as precisely. See tq_swipe_mode.
@@ -6061,7 +6061,7 @@ static int         apps_idx       = 0;   // 0=RPS 1=Dice 2=Coin 3=Metro 4=Tennis
 static inline bool app_needs_imu(int idx)
 { return idx == 4 || idx == 5 || idx == 6; }
 
-// Something can steer a tilt game right now — an IMU, or a joystick standing
+// Something can steer a tilt game right now - an IMU, or a joystick standing
 // in for one. The games read the two apart; the menu does not need to.
 static inline bool game_steering_ready()
 { return imuReady || joy_active(); }
@@ -6189,7 +6189,7 @@ static void math_btn_cb(lv_event_t *e)
 static void show_math_challenge()
 {
   if (math_cont) return;
-  // Kill the GIF decoder immediately — it keeps running behind math_cont
+  // Kill the GIF decoder immediately - it keeps running behind math_cont
   // and causes 200-300ms lag on every button tap.
   if (tilt_timer) { lv_timer_del(tilt_timer); tilt_timer = nullptr; }
   emotion_tilt_active = false; emotion_current_gif = nullptr;
@@ -6564,7 +6564,7 @@ static void rps_anim_tick_cb(lv_timer_t * /*t*/)
     }
     app_anim_step++;
   } else {
-    // Animation done — reveal cpu art + GO!
+    // Animation done - reveal cpu art + GO!
     menu_tone_hi();  // high tone on GO!
     app_anim_stop();
     lv_obj_clean(apps_cont);
@@ -6600,7 +6600,7 @@ static void dice_anim_tick_cb(lv_timer_t * /*t*/)
     menu_tone_beep();
     app_anim_step++;
   } else {
-    // Animation done — show final dice face
+    // Animation done - show final dice face
     menu_tone_hi();  // hi-tone on result
     app_anim_stop();
     app_screen_result(app_anim_result);  // app_anim_result = 1-6
@@ -6637,12 +6637,12 @@ static void app_gyro_poll_cb(lv_timer_t * /*t*/)
   }
 }
 
-// Start gyro watcher. Safe to call when already running — reuses the timer.
+// Start gyro watcher. Safe to call when already running - reuses the timer.
 static void app_gyro_start()
 {
   if (!imuReady) return;
   if (app_gyro_timer) {
-    // Timer already running (e.g. game restarted) — just reset the Z baseline
+    // Timer already running (e.g. game restarted) - just reset the Z baseline
     app_gyro_z0 = 0.0f;
     return;
   }
@@ -6718,14 +6718,14 @@ static void app_screen_dice_start()
 //    Row3 y76: beat dot indicators (lit RED=downbeat, GREEN=other)
 //    Row4 y113: time-sig tabs [2/4] [3/4] [4/4]
 //
-//  Timer is pure lv_timer — never blocked by WiFi or other LVGL tasks.
+//  Timer is pure lv_timer - never blocked by WiFi or other LVGL tasks.
 //  Buzzer fires direct ledcChangeFrequency, independent of cfg.menu_sounds.
 // ══════════════════════════════════════════════════════════════════════════════
 
 #define METRO_BPM_MIN  60
 #define METRO_BPM_MAX  240
-#define METRO_TONE_HI  1800   // Hz — downbeat accent
-#define METRO_TONE_LO  900    // Hz — weak beats
+#define METRO_TONE_HI  1800   // Hz - downbeat accent
+#define METRO_TONE_LO  900    // Hz - weak beats
 #define METRO_BEEP_MS  25     // ms each beep lasts
 
 static int         metro_bpm       = 90;
@@ -6744,7 +6744,7 @@ static lv_obj_t   *metro_start_lbl = nullptr;
 
 static void metro_build_ui();  // fwd
 
-// HW timer callback — safe to call ledcWrite from timer task context
+// HW timer callback - safe to call ledcWrite from timer task context
 static void metro_hw_off_cb(void *)
 {
   ledcWrite(BUZZER_PIN, 0);
@@ -6757,7 +6757,7 @@ static void metro_hw_beat_cb(void *)
 {
   int  beat = metro_beat_idx;
   bool down = (beat == 0);
-  // Fire buzzer — register write, safe from any task context
+  // Fire buzzer - register write, safe from any task context
   ledcChangeFrequency(BUZZER_PIN, down ? METRO_TONE_HI : METRO_TONE_LO, 8);
   ledcWrite(BUZZER_PIN, 110);
   // Schedule buzzer off via second hw timer
@@ -6769,7 +6769,7 @@ static void metro_hw_beat_cb(void *)
   metro_beat_idx = (beat + 1) % metro_beats;
 }
 
-// ── LVGL poll timer (20 ms) — updates dot colours from HW beat signal ────────
+// ── LVGL poll timer (20 ms) - updates dot colours from HW beat signal ────────
 static void metro_dot_poll_cb(lv_timer_t *)
 {
   if (!apps_cont) return;
@@ -6785,7 +6785,7 @@ static void metro_dot_poll_cb(lv_timer_t *)
   }
 }
 
-// Stop audio+timer and reset visual state — UI pointers stay valid.
+// Stop audio+timer and reset visual state - UI pointers stay valid.
 static void metro_stop_audio()
 {
   // Stop hw timers (safe to stop an already-stopped timer)
@@ -6801,13 +6801,13 @@ static void metro_stop_audio()
   for (int i = 0; i < 4; i++)
     if (metro_dots[i]) lv_obj_set_style_bg_color(metro_dots[i], lv_color_make(35,35,45), 0);
   if (metro_start_lbl) lv_label_set_text(metro_start_lbl, "START");
-  // UI pointers intentionally NOT nulled — screen is still alive.
+  // UI pointers intentionally NOT nulled - screen is still alive.
 }
 
 // Null all UI refs and delete hw timers. Call ONLY when screen is destroyed.
 static void metro_clear_ui()
 {
-  // Delete hw timers — they must be destroyed and re-created on next open
+  // Delete hw timers - they must be destroyed and re-created on next open
   if (metro_hw_timer)   { esp_timer_stop(metro_hw_timer);   esp_timer_delete(metro_hw_timer);   metro_hw_timer   = nullptr; }
   if (metro_hw_off_tmr) { esp_timer_stop(metro_hw_off_tmr); esp_timer_delete(metro_hw_off_tmr); metro_hw_off_tmr = nullptr; }
   if (metro_dot_timer)  { lv_timer_del(metro_dot_timer);    metro_dot_timer  = nullptr; }
@@ -6848,7 +6848,7 @@ static void metro_start()
   uint64_t period_us = (uint64_t)(60000000.0f / (float)metro_bpm + 0.5f);
   esp_timer_start_periodic(metro_hw_timer, period_us);
 
-  // LVGL poll at 20 ms — updates dot colours from hw beat signal
+  // LVGL poll at 20 ms - updates dot colours from hw beat signal
   if (!metro_dot_timer)
     metro_dot_timer = lv_timer_create(metro_dot_poll_cb, 20, nullptr);
 
@@ -6885,7 +6885,7 @@ static void metro_start_cb(lv_event_t *e)
 static void metro_slider_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
-  // Use event target — global metro_slider may be nullptr after metro_stop()
+  // Use event target - global metro_slider may be nullptr after metro_stop()
   lv_obj_t *sl = (lv_obj_t *)lv_event_get_target(e);
   if (!sl) return;
   int val = (int)lv_slider_get_value(sl);
@@ -6963,14 +6963,14 @@ static void metro_build_ui()
   // ── Row 1: Slider + BPM number ─────────────────────────────────────────────
   // Slider track: x=20, y=12, w=174, h=12 (thin)
   //
-  // SL_X is LM+12, NOT LM — the knob is drawn centred on the value position and
+  // SL_X is LM+12, NOT LM - the knob is drawn centred on the value position and
   // overhangs the track by (knob_size>>1) + pad_left = (SL_H/2=6) + 6 = 12 px.
   // At BPM_MIN the knob therefore reaches back to x=8, flush with the buttons
   // below. Moving the track to LM would clip the knob off the left edge.
   //
   // Touch: lv_slider's constructor sets ext_click_area = LV_DPX(8) = 7 px at the
   // default 130 DPI, and LV_OBJ_FLAG_ADV_HITTEST is not set, so the whole track
-  // is grabbable over roughly x 13..201, y 5..31 — not just the knob.
+  // is grabbable over roughly x 13..201, y 5..31 - not just the knob.
   //
   // BPM number: right-aligned so its right edge stays put as 60->100 adds a
   //             third digit; only the left edge moves, next to the slider.
@@ -6999,11 +6999,11 @@ static void metro_build_ui()
   lv_obj_set_style_bg_opa(metro_slider, LV_OPA_COVER, LV_PART_KNOB);
   lv_obj_set_style_radius(metro_slider, 5, LV_PART_KNOB);
   lv_obj_set_style_pad_all(metro_slider, 6, LV_PART_KNOB);
-  // Events — add longpress so slider area can exit too
+  // Events - add longpress so slider area can exit too
   lv_obj_add_event_cb(metro_slider, metro_slider_cb, LV_EVENT_VALUE_CHANGED, nullptr);
   // lv_obj_add_event_cb(metro_slider, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
 
-  // BPM value — montserrat_24, right-aligned in a fixed BPM_W box so the digits
+  // BPM value - montserrat_24, right-aligned in a fixed BPM_W box so the digits
   // grow leftwards. Left-aligned, "240" sits ~13px closer to the unit than "60"
   // does, so the gap visibly tightens as the tempo is scrubbed up.
   metro_bpm_lbl = lv_label_create(apps_cont);
@@ -7133,8 +7133,8 @@ static bool  tl_beat_high   = false; // did we beat high score this game?
 static lv_timer_t *tl_ball_timer  = nullptr;
 static lv_timer_t *tl_gyro_timer  = nullptr;
 static lv_obj_t   *tl_field_lbl   = nullptr;   // main ASCII art label
-static lv_obj_t   *tl_score_lbl   = nullptr;   // score bar — left
-static lv_obj_t   *tl_hi_lbl      = nullptr;   // score bar — right
+static lv_obj_t   *tl_score_lbl   = nullptr;   // score bar - left
+static lv_obj_t   *tl_hi_lbl      = nullptr;   // score bar - right
 static lv_obj_t   *tl_pause_pop   = nullptr;
 
 // ── Render the game field into a char buffer and update the label ─────────────
@@ -7149,7 +7149,7 @@ static void tl_render()
   int pos = 0;
 
   // Top border
-  // (We draw the border using the field label — left/right walls are
+  // (We draw the border using the field label - left/right walls are
   //  represented by '|' at col 0 and col TL_COLS-1; top is row 0.)
   // Actually we draw the border as part of the rows:
   //   row 0     : top wall  "----------------------------------------"
@@ -7164,7 +7164,7 @@ static void tl_render()
         // Top wall
         ch = '-';
       } else if (row == TL_ROWS - 1) {
-        // Paddle row — ball takes priority over paddle so it's visible on miss
+        // Paddle row - ball takes priority over paddle so it's visible on miss
         if (col == tl_ball_x && tl_ball_y == TL_ROWS - 1) {
           ch = (char)('a' + tl_letter_idx);
         } else {
@@ -7186,7 +7186,7 @@ static void tl_render()
   grid[pos] = '\0';
   lv_label_set_text(tl_field_lbl, grid);
 
-  // Status bar — two independent labels so digits never shift alignment
+  // Status bar - two independent labels so digits never shift alignment
   lv_label_set_text_fmt(tl_score_lbl, "Score: %d", tl_score);
   lv_label_set_text_fmt(tl_hi_lbl,    "High Score: %d", cfg.tennis_high_score);
 }
@@ -7472,7 +7472,7 @@ static void tl_ball_tick_cb(lv_timer_t * /*t*/)
       if (tl_score_lbl)
         lv_label_set_text_fmt(tl_score_lbl, "Score: %d", tl_score);
     } else {
-      // Missed — move ball to paddle row and render it there so the player
+      // Missed - move ball to paddle row and render it there so the player
       // can see exactly where it landed, then wait one short moment before
       // playing the tune and showing the popup (giving LVGL time to paint).
       tl_ball_x = nx;
@@ -7582,7 +7582,7 @@ static void tl_game_start()
   lv_obj_clean(apps_cont);
   app_subphase = 1;
 
-  // Field label — uses dejavu_mono_14 (8px wide × 16px tall char cell)
+  // Field label - uses dejavu_mono_14 (8px wide × 16px tall char cell)
   // 40 cols × 8px = 320px width  (exactly fills screen)
   // 9 rows × 16px = 144px height
   tl_field_lbl = lv_label_create(apps_cont);
@@ -7593,7 +7593,7 @@ static void tl_game_start()
   lv_obj_set_pos(tl_field_lbl, FIELD_X, FIELD_Y);
   lv_obj_set_size(tl_field_lbl, 320, TL_ROWS * 16 + 4);
 
-  // Status bar — two labels, left and right anchored, one line below the field
+  // Status bar - two labels, left and right anchored, one line below the field
   int status_y = FIELD_Y + TL_ROWS * 16 + 4;
 
   tl_score_lbl = lv_label_create(apps_cont);
@@ -7612,7 +7612,7 @@ static void tl_game_start()
 
   tl_render();
 
-  // Transparent full-screen tap zone — tap pauses the game; long-press exits
+  // Transparent full-screen tap zone - tap pauses the game; long-press exits
   // (added last so it sits on top, above the field/status labels)
   app_tapzone(apps_cont, tl_field_tap_cb);
 
@@ -7693,7 +7693,7 @@ static int   lr_score             = 0;   // letters caught (0–26)
 static int   lr_target_idx        = 0;   // 0='a'..25='z'
 static bool  lr_running           = false;
 static bool  lr_paused            = false;
-static bool  lr_won               = false; // true after catching Z — lr_render shows ✓
+static bool  lr_won               = false; // true after catching Z - lr_render shows ✓
 static bool  lr_target_on_screen  = false; // target letter currently active
 
 // Wave model:
@@ -7895,7 +7895,7 @@ static void lr_spawn_letter_wave()
 }
 
 // Spawn the modifier wave at row 1:
-//   +, -, and optionally * — each on its own column, same row as each other.
+//   +, -, and optionally * - each on its own column, same row as each other.
 // Called when lr_mod_delay_ticks reaches 0.
 static void lr_spawn_modifier_wave()
 {
@@ -8070,7 +8070,7 @@ static void lr_fall_tick_cb(lv_timer_t * /*t*/)
         lv_timer_set_repeat_count(end_t, 1);
         return;
       }
-      // Non-target exited silently — no respawn needed (wave model handles it)
+      // Non-target exited silently - no respawn needed (wave model handles it)
       if (is_letter) lr_target_on_screen = lr_target_on_screen;  // no-op, keep state
     }
   }
@@ -8078,14 +8078,14 @@ static void lr_fall_tick_cb(lv_timer_t * /*t*/)
   // ── Check if all letters have exited without the target being caught ──────
   // If target was on screen but is no longer active and lr_target_on_screen
   // is still true, it means it just fell through in this same tick (handled
-  // above). If letters wave is gone and target never appeared — shouldn't
+  // above). If letters wave is gone and target never appeared - shouldn't
   // happen because lr_spawn_letter_wave() always places target. No action needed.
 
   lr_render();
 }
 
 // ── Paddle timer ──────────────────────────────────────────────────────────────
-// Tilt, or the joystick standing in for it — see tl_gyro_tick_cb() for the two
+// Tilt, or the joystick standing in for it - see tl_gyro_tick_cb() for the two
 // control schemes. The paddle here changes width as the game runs, so the legal
 // travel is recomputed every tick rather than cached.
 static void lr_gyro_tick_cb(lv_timer_t * /*t*/)
@@ -8302,7 +8302,7 @@ static void lr_game_start()
   lv_obj_clean(apps_cont);
   app_subphase = 1;
 
-  // Field label — same font/metrics as Tennis Letters
+  // Field label - same font/metrics as Tennis Letters
   lr_field_lbl = lv_label_create(apps_cont);
   lv_obj_set_style_text_font(lr_field_lbl, &dejavu_mono_14, 0);
   lv_obj_set_style_text_color(lr_field_lbl, lv_color_white(), 0);
@@ -8311,7 +8311,7 @@ static void lr_game_start()
   lv_obj_set_pos(lr_field_lbl, FIELD_X, FIELD_Y);
   lv_obj_set_size(lr_field_lbl, 320, LR_ROWS * 16 + 4);
 
-  // Status bar: three labels — Score (left), Target letter (centre), Last (right)
+  // Status bar: three labels - Score (left), Target letter (centre), Last (right)
   int status_y = FIELD_Y + LR_ROWS * 16 + 4;
 
   lr_score_lbl = lv_label_create(apps_cont);
@@ -8341,7 +8341,7 @@ static void lr_game_start()
 
   lr_render();
 
-  // Transparent full-screen tap zone — tap pauses the game; long-press exits
+  // Transparent full-screen tap zone - tap pauses the game; long-press exits
   // (added last so it sits on top, above the field/status labels)
   app_tapzone(apps_cont, lr_field_tap_cb);
 
@@ -8381,8 +8381,8 @@ static void lr_stop()
 //  steered by tilting the device (gyro, 150 ms poll).
 //
 //  Entering the game first shows a mode carousel (app_subphase == 2):
-//    Alphabet — "Catch the Alphabet!"  the original game, described below
-//    Words    — "Fix the words!"       fill in the blank, see below
+//    Alphabet - "Catch the Alphabet!"  the original game, described below
+//    Words    - "Fix the words!"       fill in the blank, see below
 //  Left/right (arrows, swipe or joystick) pages it, tap or the joystick button
 //  starts the highlighted mode, and a long press or joystick up backs out to
 //  the apps carousel. Play-again restarts the same mode.
@@ -8415,9 +8415,9 @@ static void lr_stop()
 //    walls=false           → snake wraps to the opposite edge
 //
 //  Win conditions (async tune plays, game continues):
-//    · Alphabet only: ate 'z' (sn_seq_idx % 26 == 0 after increment — every cycle)
+//    · Alphabet only: ate 'z' (sn_seq_idx % 26 == 0 after increment - every cycle)
 //    · score exceeds the mode's stored high score (once per game, sn_beat_high)
-//      — cfg.sn_high_score for Alphabet, cfg.sn_words_high_score for Words
+//      - cfg.sn_high_score for Alphabet, cfg.sn_words_high_score for Words
 //  End-game popup honours the win flag for win/lose styling.
 //
 //  Screen layout identical to Tennis Letters / Letters Rain:
@@ -8437,7 +8437,7 @@ static void lr_stop()
 #define SN_LEFT  2
 #define SN_RIGHT 3
 
-// Phase-3 (uppercase + symbols) removed — sequence now cycles a→z forever
+// Phase-3 (uppercase + symbols) removed - sequence now cycles a→z forever
 #define SN_MAX_DISTRACTS 10   // hard cap on simultaneous distraction letters
 
 #define SN_MODE_ALPHA  0
@@ -8580,13 +8580,13 @@ static void sn_spawn_all_letters()
   sn_distract_n = 0;
 
   if (n_want > 0) {
-    // Pool: all lowercase letters except the current target — 25 candidates
+    // Pool: all lowercase letters except the current target - 25 candidates
     char pool[25];
     int  pool_sz = 0;
     for (char c = 'a'; c <= 'z'; c++)
       if (c != sn_target_ch) pool[pool_sz++] = c;
 
-    // Fisher-Yates shuffle — pick the first n_want entries at random
+    // Fisher-Yates shuffle - pick the first n_want entries at random
     for (int i = pool_sz - 1; i > 0; i--) {
       int j = random(i + 1);
       char tmp = pool[i]; pool[i] = pool[j]; pool[j] = tmp;
@@ -8664,7 +8664,7 @@ static void sn_render()
       } else if (left_wall || rght_wall) {
         ch = '|';
       } else {
-        // Snake body — head is index 0
+        // Snake body - head is index 0
         bool on_snake = false;
         for (int i = 0; i < sn_len; i++) {
           if (sn_body_col[i] == col && sn_body_row[i] == row) {
@@ -8931,7 +8931,7 @@ static void sn_resume_game()
   if (game_steering_ready())
     sn_gyro_timer = lv_timer_create(sn_gyro_tick_cb, 150, nullptr);
 
-  // Modifier timers were cleared on pause — pick up on a fresh random window
+  // Modifier timers were cleared on pause - pick up on a fresh random window
   // rather than tracking exact remaining time (matches spawn-scheduling style
   // used elsewhere in this game).
   uint32_t ms = (uint32_t)(10 + random(21)) * 1000;
@@ -8978,7 +8978,7 @@ static void sn_game_start()
   lv_obj_clean(apps_cont);
   app_subphase = 1;
 
-  // Field label — same font/metrics as Tennis Letters / Letters Rain
+  // Field label - same font/metrics as Tennis Letters / Letters Rain
   sn_field_lbl = lv_label_create(apps_cont);
   lv_obj_set_style_text_font(sn_field_lbl, &dejavu_mono_14, 0);
   lv_obj_set_style_text_color(sn_field_lbl, lv_color_white(), 0);
@@ -9011,11 +9011,11 @@ static void sn_game_start()
   lv_obj_set_pos(sn_hi_lbl, 232, status_y);
   lv_obj_set_size(sn_hi_lbl, 86, 16);
 
-  // Transparent full-screen tap zone — tap pauses the game; long-press exits
+  // Transparent full-screen tap zone - tap pauses the game; long-press exits
   // (added last so it sits on top, above the field/status labels)
   app_tapzone(apps_cont, sn_field_tap_cb);
 
-  // Spawn first target (Alphabet: no distractions yet — score starts at 0)
+  // Spawn first target (Alphabet: no distractions yet - score starts at 0)
   sn_spawn_all_letters();
   sn_render();
 
@@ -9033,11 +9033,11 @@ static void sn_game_start()
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  SNAKE LETTERS — Step 3: Timer callbacks and game logic
+//  SNAKE LETTERS - Step 3: Timer callbacks and game logic
 // ══════════════════════════════════════════════════════════════════════════════
 
 // ── Gyro direction poll (150 ms) ──────────────────────────────────────────────
-// Dominant-axis mapping — adjust sign if device orientation feels inverted:
+// Dominant-axis mapping - adjust sign if device orientation feels inverted:
 //   accelY >  thresh  (tilt right)    → RIGHT
 //   accelY < -thresh  (tilt left)     → LEFT
 //   accelX >  thresh  (tilt back)     → UP
@@ -9050,7 +9050,7 @@ static void sn_gyro_tick_cb(lv_timer_t * /*t*/)
 #if BOARD_HAS_JOYSTICK
   if (joy_active()) {
     // Direction control in all four directions. joy_x()/joy_y() are already
-    // zero inside the dead zone, so "past the dead zone" is just "non-zero" —
+    // zero inside the dead zone, so "past the dead zone" is just "non-zero" -
     // there is no separate threshold to keep in step with SN_GYRO_THRESH. The
     // dominant-axis rule and the 180°-reversal block are the tilt path's,
     // unchanged; only the sign convention differs (the stick points where the
@@ -9117,7 +9117,7 @@ static void sn_end_game()
   sn_stop_timers();
   ledcWrite(BUZZER_PIN, 0);
 
-  // Final high-score check — handles scoring that continued after the
+  // Final high-score check - handles scoring that continued after the
   // initial win trigger; also ensures sn_won is set so the popup is correct
   if (sn_score > sn_best()) {
     sn_beat_high = true;
@@ -9173,7 +9173,7 @@ static void sn_move_tick_cb(lv_timer_t * /*t*/)
 
   // ── 2. Wall collision or edge wrap ────────────────────────────────────────
   if (cfg.sn_horizontal_walls) {
-    // sn_row_min()/max() return 1/7 with walls on — hitting 0 or 8 = dead
+    // sn_row_min()/max() return 1/7 with walls on - hitting 0 or 8 = dead
     if (ny < sn_row_min() || ny > sn_row_max()) { sn_end_game(); return; }
   } else {
     ny = (ny + SN_ROWS) % SN_ROWS;
@@ -9194,7 +9194,7 @@ static void sn_move_tick_cb(lv_timer_t * /*t*/)
 
   // ── 3b. Distraction letter collision → instant game over ──────────────────
   // Checked here, before body moves, so the head cell (nx,ny) is still the
-  // incoming position — consistent with the wall and self-collision checks.
+  // incoming position - consistent with the wall and self-collision checks.
   for (int d = 0; d < sn_distract_n; d++) {
     if (sn_distract_col[d] == nx && sn_distract_row[d] == ny) {
       sn_end_game(); return;
@@ -9250,11 +9250,11 @@ static void sn_move_tick_cb(lv_timer_t * /*t*/)
     }
 
     // Win tune fires on two independent conditions:
-    //   · completed_cycle — Alphabet only, every time 'z' is eaten
+    //   · completed_cycle - Alphabet only, every time 'z' is eaten
     //     (sn_seq_idx % 26 == 0 after incrementing, i.e. seq just crossed a
     //     multiple of 26). Words has no "finished the list" win: the list is
     //     config-driven and simply loops.
-    //   · new_high — first time this game the mode's stored high score is
+    //   · new_high - first time this game the mode's stored high score is
     //     surpassed (!sn_beat_high guard prevents re-firing on every
     //     subsequent catch after the record is broken)
     bool completed_cycle = (sn_mode == SN_MODE_ALPHA && sn_seq_idx % 26 == 0);
@@ -9266,7 +9266,7 @@ static void sn_move_tick_cb(lv_timer_t * /*t*/)
         sn_best()    = sn_score;
         save_config();
       }
-      tune_play_success();     // async win tune — no separate beep
+      tune_play_success();     // async win tune - no separate beep
     } else {
       sn_beep();             // normal catch beep
     }
@@ -9280,11 +9280,11 @@ static void sn_move_tick_cb(lv_timer_t * /*t*/)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  SNAKE LETTERS — Mode carousel (app_subphase == 2)
+//  SNAKE LETTERS - Mode carousel (app_subphase == 2)
 //
 //  One full-screen card per mode, built like an apps carousel card: arrow
 //  zones page it, the centre zone starts the highlighted mode, and a long
-//  press goes back. The centre zone also takes swipes — it clears
+//  press goes back. The centre zone also takes swipes - it clears
 //  GESTURE_BUBBLE so the gesture stops there rather than reaching the screen's
 //  brightness swipe, and it ignores the CLICKED / LONG_PRESSED that a swipe
 //  can still produce (see the ToneQuest notes on the same indev quirks).
@@ -9434,16 +9434,16 @@ static void sn_mode_select_build()
 //    Long-press anywhere ELSE      → exit to carousel
 //
 //  All three build stages are complete:
-//    Stage 1 — data model, carousel wiring, static screen
-//    Stage 2 — cycle-and-reveal animation (3 amber frames from the remaining
+//    Stage 1 - data model, carousel wiring, static screen
+//    Stage 2 - cycle-and-reveal animation (3 amber frames from the remaining
 //              pool, then the real number in white), the Bip-Bip-Bip-Bop
-//              buzzer (menu_tone_beep ×3 + menu_tone_hi — same tones RPS/Dice
+//              buzzer (menu_tone_beep ×3 + menu_tone_hi - same tones RPS/Dice
 //              use for their own shake-then-reveal), and tilt-left/right
 //              input via Bingo's own gyro timer
-//    Stage 3 — history popup: long-press inside the circle shows every
+//    Stage 3 - history popup: long-press inside the circle shows every
 //              number called so far in call order. Tap dismisses back to
 //              the game exactly where it was (no reveal is triggered);
-//              long-press on the popup exits to the carousel — the same
+//              long-press on the popup exits to the carousel - the same
 //              tap/long-press convention every other popup here already uses.
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -9451,7 +9451,7 @@ static void sn_mode_select_build()
 #define BN_CIRCLE_SIZE  140    // px, diameter
 #define BN_CIRCLE_Y       4    // px, top offset within apps_cont
 #define BN_STATUS_Y     148    // px, matches the status-bar row used by Tennis/Rain/Snake
-#define BN_ANIM_STEP_MS 250    // ms per cycling/reveal frame — matches RPS's shake-then-reveal tempo
+#define BN_ANIM_STEP_MS 250    // ms per cycling/reveal frame - matches RPS's shake-then-reveal tempo
 #define BN_GYRO_HI      1.0f   // |accelY| to trigger a tilt reveal
 #define BN_GYRO_LO      0.4f   // must fall back under this to re-arm (avoids spam while held)
 
@@ -9464,8 +9464,8 @@ static bool bn_gyro_armed = true;   // hysteresis latch for tilt-to-reveal
 
 static lv_obj_t   *bn_circle     = nullptr;   // circular number display
 static lv_obj_t   *bn_num_lbl    = nullptr;   // number label inside the circle
-static lv_obj_t   *bn_prev_lbl   = nullptr;   // status bar — left  ("Previous: X")
-static lv_obj_t   *bn_left_lbl   = nullptr;   // status bar — right ("Numbers left: Y")
+static lv_obj_t   *bn_prev_lbl   = nullptr;   // status bar - left  ("Previous: X")
+static lv_obj_t   *bn_left_lbl   = nullptr;   // status bar - right ("Numbers left: Y")
 static lv_obj_t   *bn_pop        = nullptr;   // history popup (long-press inside the circle)
 static lv_timer_t *bn_anim_timer = nullptr;
 static lv_timer_t *bn_gyro_timer = nullptr;
@@ -9493,14 +9493,14 @@ static void bn_status_refresh()
 
 // ── Reveal animation tick: 3 cycling frames (amber) → final number (white) ───
 // Mirrors RPS's shake-then-reveal timer: menu_tone_beep() on each cycling
-// frame, menu_tone_hi() on the final reveal — the same "Bip-Bip-Bip-Bop"
+// frame, menu_tone_hi() on the final reveal - the same "Bip-Bip-Bip-Bop"
 // pattern and 250ms/step tempo RPS uses for its own countdown-then-reveal.
 static void bn_anim_tick_cb(lv_timer_t *t)
 {
   if (!bn_num_lbl) { lv_timer_del(t); bn_anim_timer = nullptr; bn_animating = false; return; }
 
   if (bn_anim_step < 3) {
-    // Peek a random number from the still-remaining pool (cosmetic only —
+    // Peek a random number from the still-remaining pool (cosmetic only -
     // doesn't consume it; the real draw is fixed by bn_shuffle() up front).
     int remaining = BN_TOTAL - bn_count;               // always >= 1 while animating
     int peek = bn_order[bn_count + random(remaining)];
@@ -9521,7 +9521,7 @@ static void bn_anim_tick_cb(lv_timer_t *t)
   }
 }
 
-// ── Trigger a reveal — tap, circle tap, and tilt all funnel through here ─────
+// ── Trigger a reveal - tap, circle tap, and tilt all funnel through here ─────
 static void bn_start_reveal()
 {
   if (!bn_running || bn_animating || bn_pop || bn_count >= BN_TOTAL) return;
@@ -9540,7 +9540,7 @@ static void bn_tap_cb(lv_event_t *e)
 // ── History popup: shows every number called so far, in call order ──────────
 // Same visual chrome as the other games' pause popups, just sized bigger to
 // fit a grid of up to 90 numbers at a comfortably readable size. Tap dismisses and returns
-// to the game exactly where it was — no reveal is triggered. Long-press
+// to the game exactly where it was - no reveal is triggered. Long-press
 // exits to the carousel (mirrors sn_pause_longpress_cb / tl_pause_longpress_cb).
 static void bn_pop_tap_cb(lv_event_t *e)
 {
@@ -9584,7 +9584,7 @@ static void bn_show_history_popup()
 
   // Grid of called numbers, in the order they were drawn. dejavu_mono_14 is
   // an 8×16px cell (same font Tennis/Rain/Snake use for their game fields),
-  // so at "NN " per number (24px) it packs 12 per row — 8 rows covers the
+  // so at "NN " per number (24px) it packs 12 per row - 8 rows covers the
   // full 90-number worst case with room to spare in the enlarged popup.
   lv_obj_t *grid = lv_label_create(pop);
   lv_obj_set_style_text_font(grid, &dejavu_mono_14, 0);
@@ -9597,7 +9597,7 @@ static void bn_show_history_popup()
   if (bn_count == 0) {
     lv_label_set_text(grid, "(none yet)");
   } else {
-    // "NN " per number, zero-padded for a clean grid — worst case 90 * 3 + 1
+    // "NN " per number, zero-padded for a clean grid - worst case 90 * 3 + 1
     static char buf[BN_TOTAL * 3 + 1];
     int pos = 0;
     for (int i = 0; i < bn_count; i++)
@@ -9606,7 +9606,7 @@ static void bn_show_history_popup()
     lv_label_set_text(grid, buf);
   }
 
-  // Hint — kept small (dejavu_mono_8) so it doesn't eat into the grid's
+  // Hint - kept small (dejavu_mono_8) so it doesn't eat into the grid's
   // vertical budget now that the numbers themselves are the larger font.
   lv_obj_t *hint = lv_label_create(pop);
   lv_label_set_text(hint, "tap: back . hold: exit");
@@ -9678,12 +9678,12 @@ static void bn_game_start()
   app_subphase = 1;
 
   // Full-screen tap zone FIRST (bottom of the z-order) so the circle, added
-  // right after it, sits on top and can intercept its own tap/long-press —
+  // right after it, sits on top and can intercept its own tap/long-press -
   // same "layer a smaller zone on top of app_tapzone" trick, just inverted
   // from how the pause popups sit on top of the field in the other games.
   app_tapzone(apps_cont, bn_tap_cb);
 
-  // Circle — very large font, centred above the status bar
+  // Circle - very large font, centred above the status bar
   bn_circle = lv_obj_create(apps_cont);
   lv_obj_set_size(bn_circle, BN_CIRCLE_SIZE, BN_CIRCLE_SIZE);
   lv_obj_align(bn_circle, LV_ALIGN_TOP_MID, 0, BN_CIRCLE_Y);
@@ -9700,7 +9700,7 @@ static void bn_game_start()
   bn_num_lbl = lv_label_create(bn_circle);
   lv_obj_set_style_text_font(bn_num_lbl, &montserrat_96, 0);
   lv_obj_set_style_text_color(bn_num_lbl, lv_color_white(), 0);
-  lv_label_set_text(bn_num_lbl, "0");   // neutral placeholder — not a real ball
+  lv_label_set_text(bn_num_lbl, "0");   // neutral placeholder - not a real ball
   lv_obj_align(bn_num_lbl, LV_ALIGN_CENTER, 0, 0);
 
   // Status bar: Previous (left)  /  Numbers left (right)
@@ -9734,7 +9734,7 @@ static void bn_game_start()
 //  A Simon-says tone-memory game, ported from the Arduino original
 //  (github.com/andreimagic/ToneQuest_Game) where a joystick picked the four
 //  directions and four LEDs echoed them. Here the joystick is the IMU and the
-//  LEDs are four "sunset" domes that rise from the screen edges — but the
+//  LEDs are four "sunset" domes that rise from the screen edges - but the
 //  direction→tone table is the original one, note for note:
 //
 //      UP = D4 (294 Hz)   DOWN = C4 (262 Hz)
@@ -9751,43 +9751,43 @@ static void bn_game_start()
 //    └────────────────────────────────┘
 //
 //  Two input modes, picked at game start from imuReady:
-//    TILT  — the ball is a bubble level. Roll it into a wall to answer.
-//    SWIPE — no accelerometer (every S3, and a C6 whose QMI8658 went missing).
+//    TILT  - the ball is a bubble level. Roll it into a wall to answer.
+//    SWIPE - no accelerometer (every S3, and a C6 whose QMI8658 went missing).
 //            Four-way swipes answer instead, and the ball flies to the wall it
 //            was sent to so the screen still reads the same. LVGL delivers at
 //            most one gesture per press, so a swipe is inherently one move and
 //            the whole spring-return dance below is simply not needed.
 //
 //  Phases:
-//    LEVEL — a bubble-level gate. The ball tracks tilt; hold it inside the
+//    LEVEL - a bubble-level gate. The ball tracks tilt; hold it inside the
 //            ring for TQ_LEVEL_HOLD_MS and the round begins. This is also
 //            what re-centres the player's wrist before every new game.
 //            In swipe mode there is nothing to level, so it is a tap gate.
-//    DEMO  — the sequence plays back: each step lights its dome (fading out
+//    DEMO  - the sequence plays back: each step lights its dome (fading out
 //            like a sunset) and sounds its tone. Input is ignored throughout.
-//    INPUT — roll the ball into each edge in the order just shown. A correct
+//    INPUT - roll the ball into each edge in the order just shown. A correct
 //            full sequence advances the level and adds one move; a wrong edge
 //            ends the game.
 //
 //  The pattern is generated once per game and only ever revealed a prefix at a
-//  time (level + start_moves - 1 steps), exactly as the Arduino original did —
+//  time (level + start_moves - 1 steps), exactly as the Arduino original did -
 //  so every level is the previous one plus one new move, never a reshuffle.
 //
 //  There is no win state: the game runs until a mistake. The score is the
 //  level reached, and the best is persisted to config.ini under [tonequest].
 // ══════════════════════════════════════════════════════════════════════════════
 
-#define TQ_FIELD_W       320   // px — full screen width
-#define TQ_FIELD_H       146   // px — playfield height; the status bar owns the rest
-#define TQ_STATUS_Y      148   // px — matches Tennis/Rain/Snake/Bingo
+#define TQ_FIELD_W       320   // px - full screen width
+#define TQ_FIELD_H       146   // px - playfield height; the status bar owns the rest
+#define TQ_STATUS_Y      148   // px - matches Tennis/Rain/Snake/Bingo
 #define TQ_CX            (TQ_FIELD_W / 2)   // 160
 #define TQ_CY            (TQ_FIELD_H / 2)   // 73
 #define TQ_BALL_D         14   // px, diameter
-#define TQ_RING_D         44   // px, diameter — 15 px of slack around the ball
-#define TQ_DOME_R         50   // px — radius of the edge domes (half is clipped away)
+#define TQ_RING_D         44   // px, diameter - 15 px of slack around the ball
+#define TQ_DOME_R         50   // px - radius of the edge domes (half is clipped away)
 #define TQ_EDGE_TOL        6   // px from the wall that still counts as touching it
 #define TQ_HOME_F      0.45f  // fraction of full tilt to fall back inside to re-arm
-#define TQ_POLL_MS        40   // ms — IMU/ball tick, ~25 fps
+#define TQ_POLL_MS        40   // ms - IMU/ball tick, ~25 fps
 #define TQ_SMOOTH       0.35f  // ball follow factor per tick (1.0 = no smoothing)
 #define TQ_LEVEL_HOLD_MS 700   // ms the ball must sit in the ring to start a round
 #define TQ_LEAD_IN_MS    600   // ms of quiet before a sequence plays back
@@ -9809,10 +9809,10 @@ static const uint16_t TQ_TONE[4] = { NOTE_D4, NOTE_C4, NOTE_E4, NOTE_F4 };
 // Direction → dome hue. The gradient always runs white-hot at the wall to this
 // colour at the dome's crown, which is what gives the sunset read.
 static const uint8_t TQ_HUE[4][3] = {
-  {255, 150,  20},   // UP    — amber
-  {235,  60, 140},   // DOWN  — rose
-  { 50, 200, 110},   // LEFT  — green
-  { 50, 140, 255},   // RIGHT — blue
+  {255, 150,  20},   // UP    - amber
+  {235,  60, 140},   // DOWN  - rose
+  { 50, 200, 110},   // LEFT  - green
+  { 50, 140, 255},   // RIGHT - blue
 };
 
 static int  tq_pattern[TQ_MAX_MOVES];   // the full sequence, drawn once per game
@@ -9837,8 +9837,8 @@ static lv_obj_t   *tq_dome[4]   = { nullptr, nullptr, nullptr, nullptr };
 static lv_obj_t   *tq_ring      = nullptr;
 static lv_obj_t   *tq_ball      = nullptr;
 static lv_obj_t   *tq_note      = nullptr;   // "Level the device" sub-note
-static lv_obj_t   *tq_lvl_lbl   = nullptr;   // status bar — left
-static lv_obj_t   *tq_hi_lbl    = nullptr;   // status bar — right
+static lv_obj_t   *tq_lvl_lbl   = nullptr;   // status bar - left
+static lv_obj_t   *tq_hi_lbl    = nullptr;   // status bar - right
 static lv_obj_t   *tq_pop       = nullptr;   // game-over popup
 static lv_timer_t *tq_poll_timer = nullptr;  // IMU + ball
 static lv_timer_t *tq_demo_timer = nullptr;  // sequence playback
@@ -9949,7 +9949,7 @@ static void tq_stop()
   tq_stop_timers();
   // tune_stop(), not tq_buzz_off(): a level-clear or game-over melody runs on
   // the shared tune_timer, which outlives this game. Muting the pin alone
-  // leaves that timer sounding the next note — over the carousel, and at the
+  // leaves that timer sounding the next note - over the carousel, and at the
   // 2000 Hz tq_buzz_off() restores. Same call tl_stop/lr_stop/sn_stop make.
   if (was_running) tune_stop();
   tq_ring    = nullptr;
@@ -9969,11 +9969,11 @@ static void tq_demo_tick_cb(lv_timer_t *t)
   if (!tq_running || !apps_cont) { lv_timer_del(t); tq_demo_timer = nullptr; return; }
 
   if (tq_demo_lit) {
-    // Flash just ended — silence it and open the gap before the next step.
+    // Flash just ended - silence it and open the gap before the next step.
     tq_buzz_off();
     tq_demo_lit = false;
     tq_demo_i++;
-    if (tq_demo_i >= tq_moves) {          // whole sequence shown — hand over
+    if (tq_demo_i >= tq_moves) {          // whole sequence shown - hand over
       lv_timer_del(t);
       tq_demo_timer = nullptr;
       tq_phase      = TQ_P_INPUT;
@@ -10067,7 +10067,7 @@ static void tq_input(int dir)
   const bool correct = (dir == tq_pattern[tq_step]);
   if (correct && tq_step + 1 < tq_moves) { tq_step++; return; }
 
-  // Either the sequence is complete or the run is over — in both cases input
+  // Either the sequence is complete or the run is over - in both cases input
   // stops here and a deferred beat decides what happens, so the move the player
   // just made still gets its own tone and fade first.
   tq_phase = TQ_P_OVER;
@@ -10078,7 +10078,7 @@ static void tq_input(int dir)
   lv_timer_set_repeat_count(tq_step_timer, 1);
 }
 
-// ── Ball tint helpers — only touch the style when the state actually changes,
+// ── Ball tint helpers - only touch the style when the state actually changes,
 //    since every setter invalidates and this runs 25 times a second ──────────
 static void tq_set_ball_tint(int tint)
 {
@@ -10114,9 +10114,9 @@ static void tq_poll_cb(lv_timer_t * /*t*/)
     // deflection substitutes for the tilt angle, and joy_x()/joy_y() already
     // saturate at ±1 on reaching the configured edge threshold, so that
     // threshold does for the stick exactly what tq_tilt_percent does for the
-    // IMU — the ball meets a wall only at (near) full deflection. Everything
-    // past this point — TQ_SMOOTH, the clamp, the levelling gate, the edge
-    // tolerance and the re-arm — is the shared code path, untouched.
+    // IMU - the ball meets a wall only at (near) full deflection. Everything
+    // past this point - TQ_SMOOTH, the clamp, the levelling gate, the edge
+    // tolerance and the re-arm - is the shared code path, untouched.
     tx = (float)TQ_CX + joy_x() * (float)TQ_SPAN_X;
     ty = (float)TQ_CY - joy_y() * (float)TQ_SPAN_Y;
   } else
@@ -10209,7 +10209,7 @@ static void tq_poll_cb(lv_timer_t * /*t*/)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  SWIPE INPUT  —  the no-IMU path
+//  SWIPE INPUT  -  the no-IMU path
 //
 //  Three LVGL behaviours have to be handled here, none of them optional:
 //
@@ -10220,8 +10220,8 @@ static void tq_poll_cb(lv_timer_t * /*t*/)
 //     walk there. (Same lesson as brightness_swipe_cb, one screen up.)
 //
 //  2. LONG_PRESSED still fires on a slow swipe. pr_timestamp is stamped on
-//     press and cleared only on release or press-lost — movement never resets
-//     it — so a swipe that takes longer than long_press_time would otherwise
+//     press and cleared only on release or press-lost - movement never resets
+//     it - so a swipe that takes longer than long_press_time would otherwise
 //     quit the game mid-move. gesture_dir is the tell: it is cleared on every
 //     new press and set the moment a gesture is recognised.
 //
@@ -10244,7 +10244,7 @@ static void tq_gesture_cb(lv_event_t * /*e*/)
   tq_input(dir);
 }
 
-// Swipe mode's start gate — there is no device to level, so a tap opens the
+// Swipe mode's start gate - there is no device to level, so a tap opens the
 // round instead. Ignored in tilt mode, where tq_poll_cb owns the gate.
 static void tq_tap_cb(lv_event_t *e)
 {
@@ -10309,7 +10309,7 @@ static void tq_show_popup()
   lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
   lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
 
-  // Score line — the level they fell on, and how far they got through it
+  // Score line - the level they fell on, and how far they got through it
   lv_obj_t *score_lbl = lv_label_create(pop);
   lv_label_set_text_fmt(score_lbl, "Level %d  (%d/%d)", tq_level, tq_step, tq_moves);
   lv_obj_set_style_text_font(score_lbl, &lv_font_montserrat_16, 0);
@@ -10336,8 +10336,8 @@ static void tq_show_popup()
 // clips children to their parent, so the half hanging outside simply never
 // draws and what is left is a semicircle sitting flat on the wall.
 //
-// The gradient runs the length of the whole circle, so the wall — which is the
-// circle's own centre line — lands on the 50% mix of white and the direction's
+// The gradient runs the length of the whole circle, so the wall - which is the
+// circle's own centre line - lands on the 50% mix of white and the direction's
 // hue, and the crown lands on the pure hue. White is therefore placed at
 // whichever end of the gradient the wall is nearer: the start for UP and LEFT,
 // the end for DOWN and RIGHT.
@@ -10383,7 +10383,7 @@ static void tq_game_start()
   // first playback tone.
   tune_stop();
 
-  // Whole pattern up front, revealed a prefix at a time — so level N is always
+  // Whole pattern up front, revealed a prefix at a time - so level N is always
   // level N-1 plus one new move, never a reshuffle.
   for (int i = 0; i < TQ_MAX_MOVES; i++) tq_pattern[i] = random(4);
   tq_level     = 1;
@@ -10468,7 +10468,7 @@ static void tq_game_start()
   lv_obj_set_clickable(tq_ball, false);
   tq_ball_tint = 0;
 
-  // Sub-note — only up while the player is at the start gate
+  // Sub-note - only up while the player is at the start gate
   tq_note = lv_label_create(apps_cont);
   lv_label_set_text(tq_note, tq_swipe_mode ? "tap to begin  .  then swipe"
                              : joy_active() ? "centre the joystick"
@@ -10604,14 +10604,14 @@ static void apps_tap_enter_cb(lv_event_t *e)
 //   paused    → resume, exactly as tapping the "Paused" popup does
 //   game over → play again, exactly as tapping the popup does
 //
-// ToneQuest has no pause — it is turn-based, and between turns it is already
-// waiting on the player — so only the last case applies to it. Its start gate
+// ToneQuest has no pause - it is turn-based, and between turns it is already
+// waiting on the player - so only the last case applies to it. Its start gate
 // is the levelling ring, which the stick already satisfies by sitting centred,
 // so a button press there would skip the re-centring the gate exists to
 // enforce. Once it is showing its game-over popup, it restarts like the rest.
 static void joy_click_dispatch()
 {
-  if (!apps_cont) return;          // apps menu isn't open — nothing to start
+  if (!apps_cont) return;          // apps menu isn't open - nothing to start
 
   if (app_subphase == 0) {         // carousel
     apps_enter_selected();
@@ -10641,7 +10641,7 @@ static void joy_click_dispatch()
 }
 
 // ── Joystick left/right → page the apps carousel ─────────────────────────────
-// Called on every poll. Only acts while a carousel is showing — the apps one,
+// Called on every poll. Only acts while a carousel is showing - the apps one,
 // or Snake Letters' mode carousel, where a push up also backs out. Inside a
 // game the stick steers, and nothing here runs.
 static void joy_nav_update(uint32_t now)
@@ -10686,7 +10686,7 @@ static void joy_nav_update(uint32_t now)
     joy_nav_dir  = want;
     joy_nav_next = now + JOY_NAV_REPEAT_DELAY_MS;
   } else if ((int32_t)(now - joy_nav_next) >= 0) {
-    joy_nav_next = now + JOY_NAV_REPEAT_MS;     // held — auto-repeat
+    joy_nav_next = now + JOY_NAV_REPEAT_MS;     // held - auto-repeat
   } else {
     return;
   }
@@ -10916,7 +10916,7 @@ static void apps_carousel_build()
     // se_flash(name_lbl); se_flash(desc_lbl);
   }
 
-  // Centre tap zone — CLICKED enters, LONG_PRESSED exits
+  // Centre tap zone - CLICKED enters, LONG_PRESSED exits
   { lv_obj_t *z = lv_obj_create(apps_cont);
     lv_obj_set_size(z,200,172); lv_obj_set_pos(z,60,0);
     lv_obj_set_style_bg_opa(z,LV_OPA_TRANSP,0); lv_obj_set_style_border_width(z,0,0);
@@ -10934,7 +10934,7 @@ static void apps_carousel_build()
   lv_obj_set_style_text_opa(hint, LV_OPA_60, 0);
   lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -18);
 
-  // Position dots — one per app that is actually reachable on this hardware.
+  // Position dots - one per app that is actually reachable on this hardware.
   // apps_step() skips anything app_is_available() rejects, so drawing a dot per
   // raw index would leave unreachable dots that can never light up (4 of them
   // with no IMU). Count the row first, then centre it on its own width at the
@@ -10967,7 +10967,7 @@ static void show_apps()
   lv_obj_set_style_pad_all(apps_cont, 0, 0);
   lv_obj_set_style_radius(apps_cont, 0, 0);
   lv_obj_set_scrollable(apps_cont, false);
-  // Register longpress ONCE at creation — lv_obj_clean() keeps this alive
+  // Register longpress ONCE at creation - lv_obj_clean() keeps this alive
   // through all rebuilds, so we must NOT add it again in any rebuild path.
   lv_obj_add_event_cb(apps_cont, apps_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
   apps_carousel_build();
@@ -10994,7 +10994,7 @@ static void zone_ul_cb(lv_event_t *e)
       lv_obj_add_event_cb(gif_w, apps_gif_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
   }
 #if BOARD_HAS_USB_HID
-  // Arm the jiggle timer only once the GIF overlay actually opened — a failed
+  // Arm the jiggle timer only once the GIF overlay actually opened - a failed
   // open (e.g. no storage) leaves overlay_cont null and nothing should arm.
   if (overlay_cont) hid_jiggle_arm();
 #endif
@@ -11002,12 +11002,12 @@ static void zone_ul_cb(lv_event_t *e)
 
 #if BOARD_HAS_USB_HID
 // ══════════════════════════════════════════════════════════════════════════════
-//  USB PERSONA — carousel/editor + mouse jiggler (S3 only)
+//  USB PERSONA - carousel/editor + mouse jiggler (S3 only)
 // ══════════════════════════════════════════════════════════════════════════════
 //  Entry: long-press the analog clock (top-right corner, then hold).
 //  A single-item carousel shell, styled like show_carousel(), wrapping a
 //  3-way editor cloned from open_wifi_editor(): HID / HID+CDC / Serial.
-//  Committing a change persists it and reboots — TinyUSB fixes its composite
+//  Committing a change persists it and reboots - TinyUSB fixes its composite
 //  descriptor at the first USB.begin() and can't swap it live afterward.
 //
 //  The mouse jiggler itself only runs while the top-left smile GIF (zone_ul_cb)
@@ -11018,7 +11018,7 @@ static void zone_ul_cb(lv_event_t *e)
 
 // Mirrors cfg.usb_persona into NVS on every commit. Read back at the very top
 // of setup(), before SPI/SD/display/load_config() run, because the USB
-// persona has to be decided before the peripheral is touched at all — reading
+// persona has to be decided before the peripheral is touched at all - reading
 // it from the SD-backed config.ini isn't an option that early since storage
 // isn't mounted yet.
 static void usb_persona_nvs_save(uint8_t persona)
@@ -11032,7 +11032,7 @@ static void usb_persona_nvs_save(uint8_t persona)
 // ── Carousel/editor state ───────────────────────────────────────────────────
 static lv_obj_t *usb_modal_cont  = nullptr;   // this carousel's own full-screen modal
 static lv_obj_t *usb_editor_cont = nullptr;
-static uint8_t   usb_editor_sel  = USB_HID_SERIAL;  // pending choice — not applied until commit
+static uint8_t   usb_editor_sel  = USB_HID_SERIAL;  // pending choice - not applied until commit
 static lv_obj_t *se_usb_lbl      = nullptr;
 static lv_obj_t *se_usb_desc     = nullptr;
 static lv_obj_t *se_usb_dot[3]   = {nullptr, nullptr, nullptr};
@@ -11040,7 +11040,7 @@ static lv_obj_t *se_usb_dot[3]   = {nullptr, nullptr, nullptr};
 // The carousel pages between its items. USB Mode stays index 0 so the
 // long-press lands on the same screen it always did; macroPad sits next to it.
 //
-// Extra Games only exists where a joystick can be fitted — i.e. where there is
+// Extra Games only exists where a joystick can be fitted - i.e. where there is
 // no IMU. On an IMU board BOARD_HAS_JOYSTICK is 0, the enumerator is not
 // declared, UCI_COUNT falls back to 2 and the setting is not merely hidden but
 // absent: no dot, no page, nothing to arrow onto.
@@ -11054,14 +11054,14 @@ enum UsbCarouselItem : int {
 };
 static int usb_carousel_idx = UCI_USB_MODE;
 
-// ── macroPad — script list ──────────────────────────────────────────────────
+// ── macroPad - script list ──────────────────────────────────────────────────
 // Scaffold: lists SCRIPTS_DIR_FS and navigates it. Selecting a script does not
-// type anything yet — the keyboard interface is deliberately not brought up in
+// type anything yet - the keyboard interface is deliberately not brought up in
 // this step, so flashing it cannot change what the host sees on the USB bus.
 //
 // The cap is a fixed array rather than a dynamic list because this runs on the
 // same heap the GIF canvas needs; 24 entries is 1.5KB and cannot fragment it.
-// Files beyond the cap are counted, not silently dropped — see scripts_scan().
+// Files beyond the cap are counted, not silently dropped - see scripts_scan().
 #define SCRIPTS_MAX      24
 #define SCRIPT_NAME_MAX  40
 #define SCRIPTS_PATH_MAX (sizeof(SCRIPTS_DIR_FS) + SCRIPT_NAME_MAX + 1)
@@ -11108,7 +11108,7 @@ static void se_usb_prev(lv_event_t*e)
 static void se_usb_next(lv_event_t*e)
 { if(lv_event_get_code(e)==LV_EVENT_PRESSED){usb_editor_sel=(uint8_t)((usb_editor_sel+1)%3);usb_editor_refresh();} }
 
-// Transparent zone helper local to this modal — se_zone() elsewhere hardwires
+// Transparent zone helper local to this modal - se_zone() elsewhere hardwires
 // modal_longpress_cb, which belongs to the CLOCK/TIMER/ALARM/WiFi carousel.
 static lv_obj_t *usb_zone(lv_obj_t *p,int x,int y,int w,int h,lv_event_cb_t cb)
 {
@@ -11158,7 +11158,7 @@ static void open_usb_editor()
   lv_obj_set_style_text_color(rarr,lv_color_make(80,100,180),0);
   lv_obj_align(rarr,LV_ALIGN_RIGHT_MID,-6,0);
 
-  // 16pt, not the 48pt the WiFi editor uses — "HID+CDC" clips at 48pt.
+  // 16pt, not the 48pt the WiFi editor uses - "HID+CDC" clips at 48pt.
   se_usb_lbl=lv_label_create(usb_editor_cont);
   lv_obj_set_style_text_font(se_usb_lbl,&lv_font_montserrat_16,0);
   lv_obj_align(se_usb_lbl,LV_ALIGN_CENTER,0,-16);
@@ -11190,7 +11190,7 @@ static void open_usb_editor()
 static void close_usb_editor()
 {
   if (usb_editor_sel == cfg.usb_persona) {
-    // Nothing chosen — skip the SD write and reboot entirely, so entering
+    // Nothing chosen - skip the SD write and reboot entirely, so entering
     // the editor just to look costs nothing (mirrors close_wifi_editor()).
     Serial.println("[USB] persona unchanged");
     return;
@@ -11210,7 +11210,7 @@ static void usb_carousel_tap_cb(lv_event_t *e)
   if (usb_carousel_idx==UCI_USB_MODE) { open_usb_editor(); return; }
 #if BOARD_HAS_JOYSTICK
   if (usb_carousel_idx==UCI_EXTRA_GAMES) {
-    // An in-place toggle, like the Sounds item in the apps carousel — there is
+    // An in-place toggle, like the Sounds item in the apps carousel - there is
     // nothing to choose between, so a sub-editor would only add a screen.
     cfg.joy_extra_games = !cfg.joy_extra_games;
     save_config();
@@ -11231,7 +11231,7 @@ static void usb_carousel_right_cb(lv_event_t*e)
 static void usb_carousel_build()
 {
   if (usb_editor_cont) { lv_obj_del(usb_editor_cont); usb_editor_cont=nullptr; }
-  macro_countdown_cancel();   // child of macro_list_cont — must go first
+  macro_countdown_cancel();   // child of macro_list_cont - must go first
   if (macro_list_cont) { lv_obj_del(macro_list_cont); macro_list_cont=nullptr; }
   se_usb_lbl = se_usb_desc = nullptr;
   for (int i=0;i<3;i++) se_usb_dot[i]=nullptr;
@@ -11303,7 +11303,7 @@ static void usb_carousel_build()
   lv_obj_set_style_text_color(desc_lbl,accent,0);
   lv_obj_align(desc_lbl,LV_ALIGN_CENTER,0,40);
 
-  // Centre tap zone, inset so it cannot swallow the paging arrows — same split
+  // Centre tap zone, inset so it cannot swallow the paging arrows - same split
   // the main carousel uses (60 / 200 / 60).
   {
     lv_obj_t *z = lv_obj_create(usb_modal_cont);
@@ -11339,7 +11339,7 @@ static void usb_carousel_build()
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  macroPad — script listing (S3 only)
+//  macroPad - script listing (S3 only)
 // ══════════════════════════════════════════════════════════════════════════════
 //  Reached from the USB carousel's second item. Lists SCRIPTS_DIR_FS and pages
 //  through it; selecting a script does not type anything yet.
@@ -11351,7 +11351,7 @@ static void usb_carousel_build()
 
 // Deliberately no extension filter: script files are whatever the user uploaded
 // (.txt, .art, no extension at all), so filtering would hide valid content.
-// Directories are skipped — the listing is one level deep by design.
+// Directories are skipped - the listing is one level deep by design.
 static void scripts_scan()
 {
   scripts_n = 0; scripts_truncated = false;
@@ -11390,7 +11390,7 @@ static void scripts_scan()
 
 // ══ Playback ════════════════════════════════════════════════════════════════
 //  Typing is driven from loop(), never from an LVGL event callback. The typing
-//  loop has to pump lv_timer_handler() itself — otherwise the progress bar
+//  loop has to pump lv_timer_handler() itself - otherwise the progress bar
 //  never repaints and a cancel tap is never seen, because the whole run blocks.
 //  Calling lv_timer_handler() re-entrantly from inside a callback is not safe,
 //  so the countdown only raises a flag and loop() does the work at top level.
@@ -11437,7 +11437,7 @@ static void macro_countdown_tick_cb(lv_timer_t * /*t*/)
   }
 }
 
-// Same 240x90 card as the shutdown popup, with its own state and its own tick —
+// Same 240x90 card as the shutdown popup, with its own state and its own tick -
 // nothing here can reach shutdown_execute(). The card sits on a full-screen
 // scrim so a tap anywhere cancels, and so the list's paging zones underneath
 // cannot be hit while the countdown is running.
@@ -11584,7 +11584,7 @@ static void macro_play_ui_close()
   macro_play_bar = macro_play_sub = nullptr;
 }
 
-// Runs at loop() top level — see the note at the top of this block.
+// Runs at loop() top level - see the note at the top of this block.
 static void macro_play_run()
 {
   if (!storageAvailable || !STORAGE || !usb_modal_cont) return;
@@ -11605,7 +11605,7 @@ static void macro_play_run()
     String line = f.readStringUntil('\n');
 
     // Strip the line ending ONLY. String::trim() also eats leading whitespace,
-    // which for ASCII art is the picture — every line would flush to column 0.
+    // which for ASCII art is the picture - every line would flush to column 0.
     while (line.length() &&
            (line[line.length()-1] == '\r' || line[line.length()-1] == '\n'))
       line.remove(line.length()-1);
@@ -11785,7 +11785,7 @@ static void usb_modal_longpress_cb(lv_event_t *e)
   // macroPad list is one level deeper than the carousel, so a hold there steps
   // back to the carousel rather than closing the modal outright.
   if (macro_list_cont) {
-    macro_countdown_cancel();   // child of macro_list_cont — must go first
+    macro_countdown_cancel();   // child of macro_list_cont - must go first
     lv_obj_del(macro_list_cont); macro_list_cont=nullptr;
     usb_carousel_build();
     return;
@@ -11836,7 +11836,7 @@ static bool          hid_armed        = false;
 // The mirroring is the point. Hosts apply pointer acceleration as a non-linear
 // function of per-report magnitude, so the same raw total delivered in a
 // different number of reports covers a different distance on screen. Drawing a
-// fresh step count for each leg — which an earlier version did — left the return
+// fresh step count for each leg - which an earlier version did - left the return
 // trip free to overshoot the outbound one and walk the cursor a little further
 // on every jiggle. Replaying the same magnitudes backwards makes whatever curve
 // the host applies apply equally to both legs.
@@ -11880,7 +11880,7 @@ static void hid_jiggle_move_cb(lv_timer_t *t)
   hid_send_nudge_round_trip(dx, dy);   // out and back along a mirrored path
 
   // Randomised interval, and an occasional extra-long gap, so the cadence
-  // doesn't read as a perfect metronome — sized only for "don't let the OS
+  // doesn't read as a perfect metronome - sized only for "don't let the OS
   // go idle", not tuned against any particular monitoring product.
   uint32_t interval = (uint32_t)random(15000, 45000);
   if (random(0, 4) == 0) interval += (uint32_t)random(20000, 40000);
@@ -11903,10 +11903,10 @@ static void hid_jiggle_stop()
   hid_armed = false;
 }
 
-// ── USB bring-up — called once, at the very top of setup() ───────────────────
+// ── USB bring-up - called once, at the very top of setup() ───────────────────
 // Brings up exactly the interfaces cfg's persisted persona asks for, before
 // USB.begin() ever runs, so a "HID only" choice really does mean zero CDC
-// interface in the descriptor the host sees on first enumeration — not CDC
+// interface in the descriptor the host sees on first enumeration - not CDC
 // present-but-silent. Reads the persona from the NVS mirror rather than cfg
 // (see usb_persona_nvs_save()) because load_config() hasn't run yet this early.
 static void usb_persona_begin()
@@ -11945,18 +11945,18 @@ static void usb_persona_begin()
 // ══════════════════════════════════════════════════════════════════════════════
 //  ANALOG CLOCK  (upper-right zone)
 //
-//  Drawn via LVGL v9 LV_EVENT_DRAW_MAIN callbacks — zero extra RAM, no canvas.
+//  Drawn via LVGL v9 LV_EVENT_DRAW_MAIN callbacks - zero extra RAM, no canvas.
 //  Layout: screen 320×172, clock centred at (160, 86), radius R=76 px.
 //
 //  Visual layers (back to front):
-//    1. Pie sector  — triangle fan, one 6° slice per elapsed minute, blue gradient
-//    2. Sector edge — thin arc from 12 o'clock to current minute
-//    3. Clock ring  — white circle outline
+//    1. Pie sector  - triangle fan, one 6° slice per elapsed minute, blue gradient
+//    2. Sector edge - thin arc from 12 o'clock to current minute
+//    3. Clock ring  - white circle outline
 //    4. 60 minute ticks (minor every 6°, medium every 30° between numbers)
 //    5. 12 hour numbers drawn at R-22
-//    6. Hour hand   — thick, 55% R
-//    7. Minute hand — thin,  80% R
-//    8. Centre dot  — filled blue circle
+//    6. Hour hand   - thick, 55% R
+//    7. Minute hand - thin,  80% R
+//    8. Centre dot  - filled blue circle
 // ══════════════════════════════════════════════════════════════════════════════
 
 // Clockwise-from-12 degrees → screen (x, y)
@@ -11983,7 +11983,7 @@ static void aclock_draw_cb(lv_event_t *e)
   float hr_angle  = hr * 30.0f + mn * 0.5f;          // fractional hour
   float sec_angle = sec * 6.0f;                       // thin seconds arc
 
-  // ── 1. Pie sector — gradient: early slices dim, late slices bright ────────
+  // ── 1. Pie sector - gradient: early slices dim, late slices bright ────────
   if (mn > 0) {
     lv_draw_triangle_dsc_t tri;
     lv_draw_triangle_dsc_init(&tri);
@@ -11999,7 +11999,7 @@ static void aclock_draw_cb(lv_event_t *e)
       lv_draw_triangle(layer, &tri);
     }
 
-    // ── 2. Sector edge — subtle arc from 12 to current minute ────────────
+    // ── 2. Sector edge - subtle arc from 12 to current minute ────────────
     lv_draw_arc_dsc_t edge;
     lv_draw_arc_dsc_init(&edge);
     edge.center.x   = (lv_value_precise_t)cx;
@@ -12012,7 +12012,7 @@ static void aclock_draw_cb(lv_event_t *e)
     edge.opa         = LV_OPA_80;
     if (mn > 0) lv_draw_arc(layer, &edge);
 
-    // ── Thin seconds arc — from 12 to current second (faint) ─────────────
+    // ── Thin seconds arc - from 12 to current second (faint) ─────────────
     lv_draw_arc_dsc_t sarc;
     lv_draw_arc_dsc_init(&sarc);
     sarc.center.x   = (lv_value_precise_t)cx;
@@ -12187,7 +12187,7 @@ static void home_screen_init(void)
     {   0,  86, zone_ll_cb },   // lower-left  → WiFi/NTP/date status
     { 160,  86, zone_lr_cb },   // lower-right → battery
   };
-  // Long-press callback for all zones — opens alarm editor
+  // Long-press callback for all zones - opens alarm editor
   auto home_longpress = [](lv_event_t *e) {
     if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
     // Swallow the CLICKED that would fire on finger-lift after long press.
@@ -12214,7 +12214,7 @@ static void home_screen_init(void)
   // ── Background timers ─────────────────────────────────────────────────────
   battery_timer = lv_timer_create(battery_timer_callback, 1000, nullptr);
   wifi_timer    = lv_timer_create(wifi_poll_cb, 1000, nullptr);
-  // apply_wifi_state() ran in setup() before this timer existed — pause it now
+  // apply_wifi_state() ran in setup() before this timer existed - pause it now
   // if the radio is in a steady state (AP / OFF) so it never ticks needlessly.
   wifi_timer_sync_to_mode();
 }
@@ -12224,7 +12224,7 @@ static void home_screen_init(void)
 // ══════════════════════════════════════════════════════════════════════════════
 void setup()
 {
-  // ── Wake cause — must be read before any peripheral init ───────────────────
+  // ── Wake cause - must be read before any peripheral init ───────────────────
   esp_sleep_wakeup_cause_t wakeup_cause = esp_sleep_get_wakeup_cause();
   boot_millis = millis();
   // Timer wakeup = alarm auto-wake (only wakeup source configured)
@@ -12238,7 +12238,7 @@ void setup()
   }
 
 #if BOARD_HAS_USB_HID
-  usb_persona_begin();   // decides HID/CDC before USB.begin() — see definition
+  usb_persona_begin();   // decides HID/CDC before USB.begin() - see definition
 #else
   Serial.begin(115200);
   delay(500);  // give serial monitor time to connect
@@ -12249,10 +12249,10 @@ void setup()
                 psramFound() ? "yes" : "no",
                 BOARD_HAS_INTERNAL_FS ? "yes (FFat)" : "no");
   Serial.printf("[BOOT] Wake cause: %s\n",
-    wakeup_cause == ESP_SLEEP_WAKEUP_TIMER     ? "TIMER — alarm auto-wake" :
+    wakeup_cause == ESP_SLEEP_WAKEUP_TIMER     ? "TIMER - alarm auto-wake" :
     wakeup_cause == ESP_SLEEP_WAKEUP_UNDEFINED ? "cold boot / RESET button" : "other");
 
-  // ── Generate AP/web PIN — must happen before any WiFi or web-server call ──
+  // ── Generate AP/web PIN - must happen before any WiFi or web-server call ──
   generate_ap_pin();
 
   // ── Step 1: Pull ALL SPI CS lines HIGH before the bus starts ──────────────
@@ -12285,9 +12285,9 @@ void setup()
   lcd_reg_init();
   gfx->setRotation(ROTATION);
   gfx->fillScreen(RGB565_BLACK);
-  // PWM backlight at 50% — replaces raw digitalWrite(HIGH)
+  // PWM backlight at 50% - replaces raw digitalWrite(HIGH)
   backlight_init();
-  // Buzzer pin — attach PWM channel now so first beep has no latency
+  // Buzzer pin - attach PWM channel now so first beep has no latency
   ledcAttach(BUZZER_PIN, 2000, 8);
   ledcWrite(BUZZER_PIN, 0);  // ensure silence at boot
   Serial.println("    Display ready.");
@@ -12299,7 +12299,7 @@ void setup()
                  gfx->getRotation(), gfx->width(), gfx->height());
   Serial.println("    Touch ready.");
 
-  // ── IMU (QMI8658) — shares the I2C bus already started for touch ─────────
+  // ── IMU (QMI8658) - shares the I2C bus already started for touch ─────────
   // Boards with no IMU (ESP32-S3-Touch-LCD-1.47) compile this out entirely.
   // Every tilt call site is already gated on imuReady, so leaving it false
   // cleanly disables tilt-to-brightness, tilt-to-call and gyro game controls.
@@ -12307,21 +12307,21 @@ void setup()
   Serial.println("[4b] Initialising IMU...");
   int imuErr = imu.init(imuCalib, IMU_ADDRESS);
   if (imuErr != 0) {
-    Serial.printf("    IMU init failed (err=%d) — tilt control disabled\n", imuErr);
+    Serial.printf("    IMU init failed (err=%d) - tilt control disabled\n", imuErr);
     imuReady = false;
   } else {
     Serial.println("    IMU ready.");
     imuReady = true;
   }
 #else
-  Serial.println("[4b] No IMU on this board — tilt control disabled.");
+  Serial.println("[4b] No IMU on this board - tilt control disabled.");
   imuReady = false;
 #endif
 
   // ── Step 5: Storage ───────────────────────────────────────────────────────
   // Precedence is SD first, internal flash second. A card always wins, so
   // inserting one can never leave you silently reading a stale internal copy.
-  // Exactly one backend ends up live in STORAGE — never both.
+  // Exactly one backend ends up live in STORAGE - never both.
   Serial.println("[5] Mounting storage...");
   Serial.printf("    SD: CS=%d  SCK=%d  MISO=%d  MOSI=%d  speed=4MHz\n",
                 SD_CS, SD_SCK, SD_MISO, SD_MOSI);
@@ -12329,7 +12329,7 @@ void setup()
   // max_files deliberately left at the library default of 5. Raising it is
   // tempting for the file manager's recursive walk, but each slot carries its
   // own FF_MAX_SS (4096-byte) sector cache because CONFIG_FATFS_PER_FILE_CACHE
-  // is on, and the C6 has no PSRAM to put them in — 5 extra slots would cost
+  // is on, and the C6 has no PSRAM to put them in - 5 extra slots would cost
   // ~20KB of the internal heap the GIF decoder needs. FILES_MAX_DEPTH is capped
   // to fit inside this budget instead.
   bool mounted = SD.begin(SD_CS, SPI, 4000000);
@@ -12347,7 +12347,7 @@ void setup()
   if (mounted) {
     uint8_t  cardType = SD.cardType();
     uint64_t cardSize = SD.cardSize() / (1024 * 1024);
-    Serial.printf("    SD mounted OK — type: %s  size: %llu MB\n",
+    Serial.printf("    SD mounted OK - type: %s  size: %llu MB\n",
                   cardType == CARD_MMC  ? "MMC"  :
                   cardType == CARD_SD   ? "SD"   :
                   cardType == CARD_SDHC ? "SDHC" : "UNKNOWN",
@@ -12360,13 +12360,13 @@ void setup()
 #if BOARD_HAS_INTERNAL_FS
     // Mount the internal partition *alongside* the card rather than instead of
     // it, so provision_internal_flash() can mirror one onto the other later in
-    // setup(). STORAGE deliberately stays on the card — a card always wins.
+    // setup(). STORAGE deliberately stays on the card - a card always wins.
     if (FFat.begin(true)) {
       ffatMounted = true;
-      Serial.printf("    FFat also mounted for mirroring — %u KB free\n",
+      Serial.printf("    FFat also mounted for mirroring - %u KB free\n",
                     (unsigned)(FFat.freeBytes() / 1024));
     } else {
-      Serial.println("    FFat mount failed — cannot mirror to internal flash.");
+      Serial.println("    FFat mount failed - cannot mirror to internal flash.");
     }
 #endif
   } else {
@@ -12383,7 +12383,7 @@ void setup()
       storageIsInternal = true;
       storageAvailable  = true;
       ffatMounted       = true;
-      Serial.printf("    FFat mounted OK — %u KB total, %u KB free\n",
+      Serial.printf("    FFat mounted OK - %u KB total, %u KB free\n",
                     (unsigned)(FFat.totalBytes() / 1024),
                     (unsigned)(FFat.freeBytes()  / 1024));
     } else {
@@ -12391,7 +12391,7 @@ void setup()
     }
 #else
     Serial.println("    This board has no internal FAT partition "
-                   "(BOARD_HAS_INTERNAL_FS=0) — an SD card is required.");
+                   "(BOARD_HAS_INTERNAL_FS=0) - an SD card is required.");
 #endif
   }
 
@@ -12404,7 +12404,7 @@ void setup()
     ensure_dir(STORAGE, GIF_DIR_FS);
 
     // ── Load config.ini ──────────────────────────────────────────────────
-    // Salvage an interrupted save first — otherwise bootstrap_config() sees no
+    // Salvage an interrupted save first - otherwise bootstrap_config() sees no
     // config.ini and overwrites the user's settings with defaults.
     recover_interrupted_config();
     // Create it first if the backend is empty, so load_config() always has a
@@ -12419,7 +12419,7 @@ void setup()
     seed_joystick_config();     // append [joystick] section if not yet present
 #endif
 
-    // RTC recovery reads /last_seen.txt, which is card-only — so this is a
+    // RTC recovery reads /last_seen.txt, which is card-only - so this is a
     // no-op when running from internal flash. Skip it on an alarm wake so a
     // stale file cannot drag a freshly-synced RTC backwards.
     if (!boot_from_sleep) {
@@ -12432,7 +12432,7 @@ void setup()
     Serial.printf("    Checking for GIF at: %s\n", "/cruzr_emotions/cruzr_smile.gif");
     File chk = STORAGE->open("/cruzr_emotions/cruzr_smile.gif", FILE_READ);
     if (chk) {
-      Serial.printf("    GIF found — %u bytes\n", (unsigned)chk.size());
+      Serial.printf("    GIF found - %u bytes\n", (unsigned)chk.size());
       chk.close();
     } else {
       Serial.printf("    WARNING: GIF not found on %s.\n", storage_label());
@@ -12450,7 +12450,7 @@ void setup()
       }
     }
   } else {
-    Serial.println("    ERROR: no storage mounted — GIFs and config.ini unavailable.");
+    Serial.println("    ERROR: no storage mounted - GIFs and config.ini unavailable.");
   }
 
   // ── Step 6: LVGL ──────────────────────────────────────────────────────────
@@ -12512,7 +12512,7 @@ void setup()
   // VRx/VRy are on ADC1 precisely so a later WiFi start cannot disturb them.
   Serial.println("[7a3] Joystick...");
   joy_apply_setting();
-  if (!joy_active()) Serial.println("     Extra Games off — no pins claimed.");
+  if (!joy_active()) Serial.println("     Extra Games off - no pins claimed.");
 #endif
 
   // ── Step 7b: WiFi + NTP ───────────────────────────────────────────────────
@@ -12520,7 +12520,7 @@ void setup()
   // wifi_poll_cb() (an LVGL timer) so setup() is never blocked.
   // configTime() starts the SNTP client; it syncs automatically once online.
   // The event handler must be registered first so the very first disconnect
-  // reason is captured — that is what tells a wrong password from a missing AP.
+  // reason is captured - that is what tells a wrong password from a missing AP.
   Serial.println("[7b] Applying WiFi state from config...");
   WiFi.onEvent(wifi_event_cb, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   apply_wifi_state();
@@ -12537,7 +12537,7 @@ void setup()
     Serial.printf("[BAT] Boot check: %.2fV = %d%%\n", v, pct);
 
     if (pct <= 10) {
-      Serial.println("[BAT] Low battery — showing icon then sleeping.");
+      Serial.println("[BAT] Low battery - showing icon then sleeping.");
       lv_obj_t *scr = lv_scr_act();
       lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
       lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
@@ -12548,13 +12548,13 @@ void setup()
       lv_obj_set_style_text_color(ico, lv_color_white(), 0);
       lv_obj_align(ico, LV_ALIGN_CENTER, 0, 0);
 
-      // Pump LVGL for 5 s so the icon actually renders — then sleep forever.
+      // Pump LVGL for 5 s so the icon actually renders - then sleep forever.
       uint32_t t0 = millis();
       while (millis() - t0 < 5000) { lv_timer_handler(); delay(5); }
 
       ledcWrite(GFX_BL, 0);   // blank backlight
       delay(100);
-      // No wakeup source — device sleeps until RESET is pressed
+      // No wakeup source - device sleeps until RESET is pressed
       esp_deep_sleep_start();
       return;  // never reached
     }
@@ -12567,7 +12567,7 @@ void setup()
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  LOOP — intentionally minimal
+//  LOOP - intentionally minimal
 //  All logic (clock ticks, WiFi polling, brightness schedule, buzzer pattern,
 //  alarm) runs as LVGL timer callbacks. loop() never blocks.
 // ══════════════════════════════════════════════════════════════════════════════
@@ -12578,7 +12578,7 @@ void loop()
 #if BOARD_HAS_USB_HID
   // macroPad playback blocks for the length of the script and pumps LVGL
   // itself, so it must run here rather than from the countdown's timer
-  // callback — lv_timer_handler() is not re-entrant.
+  // callback - lv_timer_handler() is not re-entrant.
   if (macro_play_pending) { macro_play_pending = false; macro_play_run(); }
 #endif
 

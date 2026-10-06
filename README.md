@@ -1,3 +1,11 @@
+## ⚡ Flash Instantly — No Toolchain Needed
+
+### 👉 **[Flash your clock from the browser](https://andreimagic.github.io/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/flash.html)**
+
+Plug in over USB, pick **Stable** or **Edge**, click **Install** — it detects whether you've got the **ESP32-C6** or the **ESP32-S3** and flashes the matching image automatically. Works in **Chrome, Edge, or Firefox 151+** on desktop — Safari still doesn't support WebSerial. No download, no toolchain, no manual flash offsets.
+
+---
+
 ## 🌐 View Demo
 
 👉 https://andreimagic.github.io/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/
@@ -9,6 +17,7 @@
 [![GitHub](https://img.shields.io/badge/github-andreimagic%2FESP32__C6__Touch__LCD__1__47__LVGL__Animated__Clock-blue?logo=github)](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock)
 [![Build](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock)](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/releases/latest)
+[![Flash in browser](https://img.shields.io/badge/⚡_flash-in%20your%20browser-ffa552)](https://andreimagic.github.io/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/flash.html)
 
 A smart animated clock for kids that runs on **two Waveshare 1.47" touch boards — the ESP32-C6 and the ESP32-S3** — driven by **LVGL v9**. Displays the time in a large custom font, plays animated GIF emotions on a schedule, sounds configurable buzzer alarms, runs a countdown timer, adjusts brightness by swipe (or tilt, where an IMU is fitted), hosts a full apps menu with ASCII mini-games, and supports deep-sleep power-off — all configured from a plain `config.ini`, no recompile needed.
 
@@ -1337,10 +1346,24 @@ There are three routes. Flashing a prebuilt release takes a couple of minutes an
 needs no toolchain; building from source — in the Arduino IDE or with `make` — is
 only necessary if you want to change the firmware.
 
-### Option A — Flash a prebuilt release (no toolchain)
+### Option A — Flash in your browser (recommended, no toolchain)
 
-Every release ships a complete image per board — bootloader, partition table and
-application in one file:
+### 👉 **[Open the browser flasher](https://andreimagic.github.io/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/flash.html)**
+
+Connect the board over USB, pick **Stable** or **Edge**, and click **Install**.
+It detects whether you've got the ESP32-C6 or the ESP32-S3 and flashes the
+matching image automatically — no file to download, no address to set by hand.
+Works in **Chrome, Edge, or Firefox 151+** on desktop; Safari still doesn't support WebSerial.
+
+You do not need to erase the flash first — it replaces the bootloader,
+partition table and app in a single write, and only prompts to erase (unticked
+by default) if you explicitly ask for a clean slate.
+
+#### Prefer a generic tool or the command line?
+
+Every release still publishes the same complete image per board — bootloader,
+partition table and application in one file — if you'd rather flash it with
+something else:
 
 | Board | Full image |
 |---|---|
@@ -1354,8 +1377,8 @@ application in one file:
 1. Download the `-full.bin` **for your board** from
    [Releases](https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/releases).
 2. Open **[Espressif's ESP Launchpad](https://espressif.github.io/esp-launchpad/)**
-   in **Chrome or Edge**. It flashes over WebSerial, which Firefox and Safari do
-   not support.
+   in **Chrome, Edge, or Firefox 151+**. It flashes over WebSerial, which Safari
+   still does not support.
 3. Open the **DIY** tab, connect the board over USB, click **Connect** and pick
    its serial port.
 4. Select the `.bin` file and set the flash address to **`0x0`**.

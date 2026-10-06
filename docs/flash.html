@@ -82,7 +82,6 @@
   }
   .screen.playing .screen-time{ opacity:0; }
   .screen.playing .screen-anim{ opacity:1; }
-  .screen.installing{ box-shadow: inset 0 0 20px rgba(0,0,0,0.7), 0 0 0 2px var(--mint); }
   .date{
     font-size:14px;
     color:var(--muted);
@@ -102,36 +101,23 @@
     font-size:16px;
   }
 
-  .boards{
-    display:grid;
-    grid-template-columns:1fr 1fr;
-    gap:14px;
-    margin-bottom:28px;
-  }
-  @media (max-width:480px){ .boards{ grid-template-columns:1fr; } }
-
-  .board{
+  .flash-panel{
     background:var(--panel);
     border:1px solid var(--line);
     border-radius:18px;
     padding:22px 18px;
     text-align:center;
+    margin-bottom:28px;
   }
-  .board h2{
-    font-family:'Fredoka', sans-serif;
-    font-size:18px;
-    font-weight:600;
-    margin:0 0 4px;
-  }
-  .board .sub{
-    color:var(--muted);
-    font-size:13px;
-    margin:0 0 18px;
-  }
-  .board .status{
+  .flash-panel .status{
     color:var(--muted);
     font-size:13px;
     margin:0;
+  }
+  .flash-panel .note{
+    color:var(--muted);
+    font-size:12px;
+    margin:14px 0 0;
   }
 
   .channel-toggle{
@@ -159,38 +145,31 @@
     color:#1a1200;
   }
 
-  .erase-row{
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    gap:6px;
-    font-size:12px;
-    color:var(--muted);
-    margin-bottom:14px;
-    cursor:pointer;
-  }
-  .erase-row input{ accent-color: var(--sun); }
-  .erase-hint{
-    display:block;
-    font-size:11px;
-    color:var(--muted);
-    opacity:0.75;
-    margin-top:2px;
+  .action-buttons {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-top: 2rem;
   }
 
-  .edge-check-btn{
-    width:100%;
-    font-family:'Work Sans', sans-serif;
-    font-weight:600;
-    font-size:14px;
-    border:1px solid var(--line);
-    background:transparent;
-    color:var(--cream);
-    border-radius:999px;
-    padding:11px 20px;
-    cursor:pointer;
+  .btn {
+      padding: 0.75rem 1.5rem;
+      border-radius: 6px;
+      font-weight: 600;
+      transition: all 0.2s;
   }
-  .edge-check-btn:disabled{ opacity:0.6; cursor:default; }
+
+  .btn:hover { text-decoration: none; }
+
+  .btn.primary {
+      background-color: var(--primary-color);
+      color: #fff;
+  }
+
+  .btn.primary:hover {
+      background-color: var(--primary-hover);
+  }
 
   esp-web-install-button{
     --esp-tools-button-color: var(--sun);
@@ -243,67 +222,6 @@
     font-size:13px;
   }
 
-  .monitor{
-    background:var(--panel);
-    border:1px solid var(--line);
-    border-radius:18px;
-    padding:24px 24px 20px;
-    margin-bottom:28px;
-  }
-  .monitor-head{
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    margin-bottom:12px;
-  }
-  .monitor-head h2{
-    font-family:'Fredoka', sans-serif;
-    font-size:16px;
-    font-weight:600;
-    margin:0;
-  }
-  .monitor-actions{ display:flex; gap:8px; }
-  .monitor-btn{
-    font-family:'Work Sans', sans-serif;
-    font-weight:600;
-    font-size:12px;
-    border:1px solid var(--line);
-    background:transparent;
-    color:var(--cream);
-    border-radius:999px;
-    padding:6px 14px;
-    cursor:pointer;
-  }
-  .monitor-btn.primary{ background:var(--sun); color:#1a1200; border-color:var(--sun); }
-  .monitor-btn:disabled{ opacity:0.4; cursor:default; }
-  .monitor-log{
-    background:#0a1020;
-    border:1px solid var(--line);
-    border-radius:12px;
-    padding:12px 14px;
-    height:200px;
-    overflow-y:auto;
-    font-family:ui-monospace, Menlo, Consolas, monospace;
-    font-size:12px;
-    line-height:1.5;
-    color:var(--mint);
-    white-space:pre-wrap;
-    word-break:break-all;
-  }
-  .monitor-hint{
-    font-size:12px;
-    color:var(--muted);
-    margin:10px 0 0;
-  }
-  .reconnect-hint{
-    display:none;
-    font-size:12px;
-    color:var(--muted);
-    margin:10px 0 0;
-    text-align:center;
-  }
-  .reconnect-hint a{ color:var(--mint); }
-
   footer{
     text-align:center;
     color:var(--muted);
@@ -325,64 +243,32 @@
   </div>
 
   <h1>Flash your clock</h1>
-  <p class="lede">Pick your board, plug the clock into your computer with a USB&nbsp;cable, and install straight from the browser — no Arduino IDE needed.</p>
+  <p class="lede">Plug the clock into your computer with a USB&nbsp;cable and install straight from the browser — no Arduino IDE needed. Works with both the ESP32-C6 and ESP32-S3 boards; it detects which one's connected and flashes the right build automatically.</p>
 
-  <div class="boards">
-    <div class="board" id="board-c6" data-chip-family="ESP32-C6" data-chip-token="esp32c6">
-      <h2>ESP32-C6</h2>
-      <p class="sub">Touch LCD 1.47&Prime;</p>
-      <div class="channel-toggle">
-        <button type="button" class="channel-btn active" data-channel="stable">Stable</button>
-        <button type="button" class="channel-btn" data-channel="edge">Edge</button>
-      </div>
-      <label class="erase-row">
-        <input type="checkbox" class="erase-check">
-        Erase flash first
-      </label>
-      <div class="install-slot" data-role="install-slot">
-        <p class="status" data-role="status">Checking latest release&hellip;</p>
-      </div>
-      <p class="reconnect-hint" data-role="reconnect-hint">Flashed &mdash; <a href="#" data-role="open-monitor">watch it boot in the serial monitor&nbsp;&darr;</a></p>
+  <div class="flash-panel">
+    <div class="channel-toggle">
+      <button type="button" class="channel-btn active" data-channel="stable">Stable</button>
+      <button type="button" class="channel-btn" data-channel="edge">Edge</button>
     </div>
-    <div class="board" id="board-s3" data-chip-family="ESP32-S3" data-chip-token="esp32s3">
-      <h2>ESP32-S3</h2>
-      <p class="sub">Touch LCD 1.47&Prime;</p>
-      <div class="channel-toggle">
-        <button type="button" class="channel-btn active" data-channel="stable">Stable</button>
-        <button type="button" class="channel-btn" data-channel="edge">Edge</button>
-      </div>
-      <label class="erase-row">
-        <input type="checkbox" class="erase-check">
-        Erase flash first
-      </label>
-      <div class="install-slot" data-role="install-slot">
-        <p class="status" data-role="status">Checking latest release&hellip;</p>
-      </div>
-      <p class="reconnect-hint" data-role="reconnect-hint">Flashed &mdash; <a href="#" data-role="open-monitor">watch it boot in the serial monitor&nbsp;&darr;</a></p>
+    <div class="install-slot" data-role="install-slot">
+      <p class="status" data-role="status">Checking latest version&hellip;</p>
     </div>
+    <p class="note">Touch LCD 1.47&Prime; &mdash; ESP32-C6 or ESP32-S3</p>
   </div>
-  <p class="erase-hint" style="text-align:center;margin:-18px 0 28px;">Erasing wipes the whole chip, including saved settings/GIFs on an SD-less S3.</p>
 
   <div class="steps">
     <h2>Before you click Install</h2>
     <ol>
-      <li>Use Chrome or Edge on a laptop or desktop — Web Serial isn't supported on mobile browsers.</li>
+      <li>Use Chrome, Edge, or Firefox 151+ on a laptop or desktop — Safari doesn't support Web Serial, and no mobile browser does.</li>
       <li>Connect the board's USB-C port directly to your computer (skip hubs if the port isn't recognized).</li>
       <li>If your OS asks which driver to use, pick the one matching your board's USB-to-serial chip (usually CP210x or CH9102).</li>
-      <li>Click Install, choose the matching serial port from the browser prompt, and keep the tab open until it finishes. The full image writes bootloader, partition table and app in one go, so your FFat settings/GIFs on an SD-less S3 are left alone.</li>
+      <li>Click Install, choose the matching serial port from the browser prompt, and keep the tab open until it finishes.</li>
+      <li>If it asks whether to erase first, only tick that if you want a clean slate — it wipes the whole chip, including saved settings/GIFs on an SD-less S3.</li>
     </ol>
   </div>
 
-  <div class="monitor">
-    <div class="monitor-head">
-      <h2>Serial Monitor</h2>
-      <div class="monitor-actions">
-        <button type="button" class="monitor-btn" id="monitor-restart" disabled>Restart</button>
-        <button type="button" class="monitor-btn primary" id="monitor-toggle">Connect</button>
-      </div>
-    </div>
-    <div class="monitor-log" id="monitor-log" aria-live="polite">Not connected.</div>
-    <p class="monitor-hint">Opens its own port picker &mdash; pick the same board you just flashed. Disconnect here before clicking Install (a port can't be open in two places at once); flashing will also disconnect it for you automatically.</p>
+  <div class="action-buttons">
+      <a href="index.html" class="btn primary">← Back to Home</a>
   </div>
 
   <footer>
@@ -402,7 +288,13 @@
 // into docs/firmware/{stable,edge}/ on every publish, which Pages serves
 // same-origin — zero CORS involved.
 const FIRMWARE_BASE = { stable: "firmware/stable", edge: "firmware/edge" };
-const CHIP_FILES = { esp32c6: "esp32c6-full.bin", esp32s3: "esp32s3-full.bin" };
+// One manifest build per chip family — ESP Web Tools detects which chip is
+// actually connected and picks the matching entry itself, so one button
+// covers both boards instead of needing one per board.
+const CHIP_BUILDS = [
+  { chipFamily: "ESP32-C6", file: "esp32c6-full.bin" },
+  { chipFamily: "ESP32-S3", file: "esp32s3-full.bin" },
+];
 
 function absoluteUrl(path) {
   // Must be absolute: the manifest itself is served as a blob: URL, and a
@@ -417,237 +309,98 @@ async function fetchVersion(channel) {
   return (await res.text()).trim();
 }
 
-function manifestUrlFor(board, channel, version) {
-  const binPath = `${FIRMWARE_BASE[channel]}/${CHIP_FILES[board.chipToken]}`;
+function manifestUrlFor(channel, version) {
   const manifest = {
-    name: `${board.chipFamily} — ${version}`,
+    name: "ESP32 Clock",
     version,
-    new_install_prompt_erase: false,
-    builds: [{ chipFamily: board.chipFamily, parts: [{ path: absoluteUrl(binPath), offset: 0 }] }],
+    // true = ESP Web Tools asks before erasing (its own checkbox, defaults
+    // UNticked) instead of this page offering a separate erase toggle.
+    // false = erase silently, no prompt at all — the opposite of what the
+    // name suggests. ESP Web Tools treats every install as "new" (vs. an
+    // "update") unless Improv Serial reports a firmware name matching this
+    // manifest's `name`; this sketch doesn't implement Improv, so every
+    // single flash is classified as new, which is why false is dangerous
+    // here specifically (it silently erased on every install).
+    new_install_prompt_erase: true,
+    builds: CHIP_BUILDS.map(({ chipFamily, file }) => ({
+      chipFamily,
+      parts: [{ path: absoluteUrl(`${FIRMWARE_BASE[channel]}/${file}`), offset: 0 }],
+    })),
   };
   return URL.createObjectURL(new Blob([JSON.stringify(manifest)], { type: "application/json" }));
 }
 
-const INSTALL_ACTIVE_STATES = new Set(["initializing", "preparing", "erasing", "writing"]);
-
-function makeInstallButton(board, channel, version) {
+function makeInstallButton(channel, version) {
   const btn = document.createElement("esp-web-install-button");
-  btn.setAttribute("manifest", manifestUrlFor(board, channel, version));
+  btn.setAttribute("manifest", manifestUrlFor(channel, version));
   btn.setAttribute("log-console", ""); // live log instead of a bare progress bar
-  if (board.erase) btn.setAttribute("erase-first", "");
   btn.innerHTML = `
     <button slot="activate">Install ${version}</button>
-    <span slot="unsupported">Open this page in Chrome or Edge on a computer.</span>
+    <span slot="unsupported">Open this page in Chrome, Edge, or Firefox 151+ on a computer.</span>
     <span slot="not-allowed">This page needs to be served over HTTPS.</span>
   `;
-
-  const reconnectHint = board.el.querySelector('[data-role="reconnect-hint"]');
-  reconnectHint.style.display = "none";
-  btn.addEventListener("state-changed", (ev) => {
-    const s = ev.detail;
-    if (INSTALL_ACTIVE_STATES.has(s.state)) {
-      if (s.state === "initializing") monitorDisconnect(); // free the port if our monitor holds it
-      installStart(btn); // -> JOY animation, defined in the device-screen section below
-    } else if (s.state === "finished" || s.state === "error") {
-      installEnd(btn); // -> back to normal clock/ambient-animation behaviour
-      if (s.state === "finished") reconnectHint.style.display = "block";
-    }
-  });
-
   return btn;
 }
 
-function render(board) {
-  const slot = board.el.querySelector('[data-role="install-slot"]');
+const state = { channel: "stable", releases: { stable: null, edge: null } };
+
+function render() {
+  const slot = document.querySelector('[data-role="install-slot"]');
   slot.innerHTML = "";
 
-  const status = board.releases[board.channel];
+  const status = state.releases[state.channel];
 
   if (status === "error") {
     const p = document.createElement("p");
     p.className = "status";
-    p.textContent = `Couldn't find the ${board.channel} firmware — try again.`;
+    p.textContent = `Couldn't find the ${state.channel} firmware — try again.`;
     slot.appendChild(p);
     return;
   }
 
   if (status) {
-    slot.appendChild(makeInstallButton(board, board.channel, status.version));
+    slot.appendChild(makeInstallButton(state.channel, status.version));
     return;
   }
 
-  if (board.channel === "stable") {
-    const p = document.createElement("p");
-    p.className = "status";
-    p.textContent = "Checking latest release\u2026";
-    slot.appendChild(p);
-    return;
-  }
-
-  // Edge, not fetched yet: show a plain button. The lookup only happens when
-  // this is clicked, not when the toggle above is.
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "edge-check-btn";
-  btn.textContent = "Check for edge build";
-  btn.addEventListener("click", async () => {
-    btn.disabled = true;
-    btn.textContent = "Checking\u2026";
-    try {
-      const version = await fetchVersion("edge");
-      board.releases.edge = { version };
-    } catch (err) {
-      board.releases.edge = "error";
-      console.error(err);
-    }
-    if (board.channel === "edge") render(board);
-  });
-  slot.appendChild(btn);
+  // Not fetched yet (both channels are fetched eagerly in init() — this just
+  // covers the brief window before that first fetch resolves).
+  const p = document.createElement("p");
+  p.className = "status";
+  p.textContent = `Checking ${state.channel} version\u2026`;
+  slot.appendChild(p);
 }
 
-function initBoard(el) {
-  const board = {
-    el,
-    chipFamily: el.dataset.chipFamily,
-    chipToken: el.dataset.chipToken,
-    channel: "stable",
-    erase: false,
-    releases: { stable: null, edge: null },
-  };
-
-  el.querySelectorAll(".channel-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      if (btn.dataset.channel === board.channel) return;
-      board.channel = btn.dataset.channel;
-      el.querySelectorAll(".channel-btn").forEach(b => b.classList.toggle("active", b === btn));
-      render(board); // switching channels never calls the API by itself
-    });
+document.querySelectorAll(".channel-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    if (btn.dataset.channel === state.channel) return;
+    state.channel = btn.dataset.channel;
+    document.querySelectorAll(".channel-btn").forEach(b => b.classList.toggle("active", b === btn));
+    render(); // switching channels never calls the API by itself
   });
+});
 
-  el.querySelector(".erase-check").addEventListener("change", (e) => {
-    board.erase = e.target.checked;
-    const existing = el.querySelector("esp-web-install-button");
-    if (existing) {
-      if (board.erase) existing.setAttribute("erase-first", "");
-      else existing.removeAttribute("erase-first");
-    }
-  });
-
-  return board;
+async function loadChannel(channel) {
+  try {
+    const version = await fetchVersion(channel);
+    state.releases[channel] = { version };
+  } catch (err) {
+    state.releases[channel] = "error";
+    console.error(err);
+  }
+  render();
 }
 
 async function init() {
-  const boards = Array.from(document.querySelectorAll(".board")).map(initBoard);
-
-  try {
-    const version = await fetchVersion("stable");
-    boards.forEach(b => { b.releases.stable = { version }; render(b); });
-  } catch (err) {
-    boards.forEach(b => { b.releases.stable = "error"; render(b); });
-    console.error(err);
-  }
-
-  document.querySelectorAll('[data-role="open-monitor"]').forEach(a => {
-    a.addEventListener("click", (e) => { e.preventDefault(); monitorConnect(); });
-  });
+  await Promise.all([loadChannel("stable"), loadChannel("edge")]);
 }
 init();
 
-// ---- Serial monitor (plain Web Serial, independent of the install flow) ----
-const MONITOR_BAUD = 115200; // standard Arduino default; change if your sketch uses another rate
-let monitorPort = null;
-let monitorReader = null;
-let monitorKeepReading = false;
-
-const monitorLogEl = document.getElementById("monitor-log");
-const monitorToggleBtn = document.getElementById("monitor-toggle");
-const monitorRestartBtn = document.getElementById("monitor-restart");
-
-function monitorLog(text) {
-  if (monitorLogEl.textContent === "Not connected.") monitorLogEl.textContent = "";
-  monitorLogEl.textContent += text;
-  monitorLogEl.scrollTop = monitorLogEl.scrollHeight;
-}
-
-async function monitorConnect() {
-  if (monitorPort) return;
-  try {
-    monitorPort = await navigator.serial.requestPort();
-    await monitorPort.open({ baudRate: MONITOR_BAUD });
-  } catch (err) {
-    monitorLog(`\n[connect failed: ${err.message}]\n`);
-    monitorPort = null;
-    return;
-  }
-  monitorToggleBtn.textContent = "Disconnect";
-  monitorRestartBtn.disabled = false;
-  monitorLogEl.textContent = "";
-  monitorKeepReading = true;
-  monitorReadLoop();
-}
-
-async function monitorReadLoop() {
-  const decoder = new TextDecoderStream();
-  const closed = monitorPort.readable.pipeTo(decoder.writable).catch(() => {});
-  const reader = decoder.readable.getReader();
-  monitorReader = reader;
-  try {
-    while (monitorKeepReading) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      if (value) monitorLog(value);
-    }
-  } catch (err) {
-    monitorLog(`\n[monitor error: ${err.message}]\n`);
-  } finally {
-    reader.releaseLock();
-    await closed;
-  }
-}
-
-async function monitorDisconnect() {
-  if (!monitorPort) return;
-  monitorKeepReading = false;
-  if (monitorReader) { try { await monitorReader.cancel(); } catch (e) {} }
-  try { await monitorPort.close(); } catch (e) {}
-  monitorPort = null;
-  monitorReader = null;
-  monitorToggleBtn.textContent = "Connect";
-  monitorRestartBtn.disabled = true;
-  monitorLog("\n[disconnected]\n");
-}
-
-async function monitorRestart() {
-  if (!monitorPort) return;
-  try {
-    // Standard auto-reset sequence (CP210x/CH9102-style USB-serial boards):
-    // RTS toggles the EN/reset pin; DTR stays released so it boots the app, not the bootloader.
-    await monitorPort.setSignals({ dataTerminalReady: false, requestToSend: true });
-    await new Promise(r => setTimeout(r, 150));
-    await monitorPort.setSignals({ dataTerminalReady: false, requestToSend: false });
-  } catch (err) {
-    monitorLog(`\n[restart failed: ${err.message}]\n`);
-  }
-}
-
-monitorToggleBtn.addEventListener("click", () => {
-  monitorPort ? monitorDisconnect() : monitorConnect();
-});
-monitorRestartBtn.addEventListener("click", monitorRestart);
-
-if (!("serial" in navigator)) {
-  monitorToggleBtn.disabled = true;
-  monitorLog("Web Serial isn't supported in this browser. Use Chrome or Edge on a computer.");
-}
-
 // ---- Device screen ----------------------------------------------------
-// Normally: real local time, with a periodic ambient animation (smile by
-// day, sleep from 8pm on). While any board is installing: JOY plays
-// continuously instead, regardless of the ambient schedule, then hands
-// back to normal behaviour the moment that install finishes or errors.
-// installStart/installEnd are called from makeInstallButton() above —
-// function declarations are hoisted, so the call site above being earlier
-// in the file than this definition is fine.
+// Real local time, with a periodic ambient animation: smile by day, sleep
+// from 8pm on. (No install-triggered animation — the install dialog is a
+// modal that covers this screen anyway, so nothing driven by install state
+// was ever visible while it mattered.)
 const screenEl = document.getElementById("device-screen");
 const animEl = document.getElementById("screen-anim");
 const hEl = document.getElementById("clock-h");
@@ -657,14 +410,10 @@ const AMBIENT = {
   day:   { src: "assets/cruzr_smile.gif", duration: 10000 }, // one loop of the half-speed smile gif
   night: { src: "assets/cruzr_sleep.gif", duration: 10000 }, // placeholder — re-tune once cruzr_sleep.gif is in hand
 };
-const JOY_SRC = "assets/cruzr_joy.gif";
 const NIGHT_START_HOUR = 20; // 8pm local time
 
 const CYCLE_MS = 30 * 1000; // web-page cadence, more often than the real device's 2 min so it stays visible
 const FIRST_PLAY_DELAY_MS = 3000;
-
-let ambientHideTimer = null;
-const installingButtons = new Set();
 
 function updateClock() {
   const now = new Date();
@@ -679,30 +428,10 @@ function currentAmbient() {
 }
 
 function playAmbient() {
-  if (installingButtons.size > 0) return; // an install owns the screen right now
   const ambient = currentAmbient();
   animEl.src = ambient.src + "?t=" + Date.now(); // restart from frame 0
   screenEl.classList.add("playing");
-  ambientHideTimer = setTimeout(() => {
-    screenEl.classList.remove("playing");
-    ambientHideTimer = null;
-  }, ambient.duration);
-}
-
-function installStart(btn) {
-  const wasIdle = installingButtons.size === 0;
-  installingButtons.add(btn);
-  if (!wasIdle) return; // another board is already driving the JOY overlay
-  if (ambientHideTimer) { clearTimeout(ambientHideTimer); ambientHideTimer = null; }
-  animEl.src = JOY_SRC + "?t=" + Date.now();
-  screenEl.classList.add("installing", "playing");
-}
-
-function installEnd(btn) {
-  installingButtons.delete(btn);
-  if (installingButtons.size > 0) return; // a different board is still installing
-  screenEl.classList.remove("installing", "playing");
-  // the regular 30s cycle (already running below) resumes the ambient gif on its own schedule
+  setTimeout(() => screenEl.classList.remove("playing"), ambient.duration);
 }
 
 setTimeout(() => {

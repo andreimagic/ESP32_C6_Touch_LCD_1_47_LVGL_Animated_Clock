@@ -1372,7 +1372,7 @@ static void provision_internal_flash()
   lv_obj_align(pct, LV_ALIGN_CENTER, 0, 28);
 
   lv_obj_t *note = lv_label_create(scr);
-  lv_label_set_text(note, "one-off — do not power off");
+  lv_label_set_text(note, "one-off - do not power off");
   lv_obj_set_style_text_color(note, lv_color_make(110, 110, 130), 0);
   lv_obj_align(note, LV_ALIGN_BOTTOM_MID, 0, -8);
   lv_timer_handler();

@@ -65,7 +65,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v3.6.0"
+#define FW_VERSION      "v3.6.1"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -366,8 +366,9 @@ fs::FS *STORAGE           = nullptr;
 bool    storageAvailable  = false;   // some filesystem is mounted
 bool    storageIsInternal = false;   // true when that filesystem is FFat
 // FFat is mounted. Not the same as storageIsInternal: when a card wins, FFat is
-// still mounted alongside it so provision_internal_flash() can mirror the card
-// across, while STORAGE keeps pointing at the card.
+// mounted alongside it just long enough for provision_internal_flash() to mirror
+// the card across, while STORAGE keeps pointing at the card. setup() unmounts it
+// again straight afterwards, so past boot this is true only without a card.
 bool    ffatMounted       = false;
 
 // ── mDNS hostname ────────────────────────────────────────────────────────────
@@ -1233,9 +1234,28 @@ static bool bootstrap_config()
 //
 //  While a card is inserted it is the master copy. A GIF is skipped when name and
 //  size already match, which makes this idempotent and near-free on every later
-//  boot, and re-copies only what actually changed. config.ini is always refreshed
-//  instead of size-compared: a text edit easily preserves the byte count.
+//  boot, and re-copies only what actually changed. config.ini is compared byte
+//  for byte instead: a text edit easily preserves the byte count, and the file is
+//  small enough that reading both copies costs less than rewriting one.
 // ══════════════════════════════════════════════════════════════════════════════
+
+// True when the card and internal flash hold byte-identical copies of `path`.
+static bool provision_same_content(const char *path)
+{
+  File a = SD.open(path, FILE_READ);
+  File b = FFat.open(path, FILE_READ);
+  bool same = a && b && a.size() == b.size();
+
+  uint8_t ba[256], bb[256];
+  while (same && a.available()) {
+    size_t n = a.read(ba, sizeof(ba));
+    if (n == 0) break;
+    same = b.read(bb, n) == n && memcmp(ba, bb, n) == 0;
+  }
+  if (a) a.close();
+  if (b) b.close();
+  return same;
+}
 
 // One file, copied in chunks through a temp name that is renamed into place only
 // after a complete write. A power cut mid-copy therefore leaves no truncated GIF
@@ -1324,10 +1344,14 @@ static void provision_internal_flash()
     Serial.printf("[PROV] no %s on card — nothing to mirror\n", GIF_DIR_FS);
   }
 
-  // config.ini is always refreshed while a card is present (see header note).
-  File cfg_src = SD.open("/config.ini", FILE_READ);
-  size_t cfg_size = cfg_src ? cfg_src.size() : 0;
-  if (cfg_src) cfg_src.close();
+  // config.ini is copied only when its content differs (see header note).
+  // cfg_size stays 0 when there is nothing to copy.
+  size_t cfg_size = 0;
+  if (!provision_same_content("/config.ini")) {
+    File cfg_src = SD.open("/config.ini", FILE_READ);
+    cfg_size = cfg_src ? cfg_src.size() : 0;
+    if (cfg_src) cfg_src.close();
+  }
   total += cfg_size;
 
   if (todo_n == 0 && cfg_size == 0) {
@@ -12503,7 +12527,11 @@ void setup()
     // Mount the internal partition *alongside* the card rather than instead of
     // it, so provision_internal_flash() can mirror one onto the other later in
     // setup(). STORAGE deliberately stays on the card — a card always wins.
-    if (FFat.begin(true)) {
+    //
+    // Two file slots, not the library default of 10: provisioning never has more
+    // than one flash file open, and every slot is ~4KB of heap allocated at mount
+    // time. setup() unmounts this again as soon as the mirror is done.
+    if (FFat.begin(true, "/ffat", 2)) {
       ffatMounted = true;
       Serial.printf("    FFat also mounted for mirroring — %u KB free\n",
                     (unsigned)(FFat.freeBytes() / 1024));
@@ -12636,6 +12664,19 @@ void setup()
   // interruption. No-ops in well under a millisecond once flash matches the card.
   Serial.println("[7a] Checking internal flash against card...");
   provision_internal_flash();
+
+  // The mirror mount has done its job. Left in place it keeps its open-file
+  // slots allocated for the whole session — each one carries a 4096-byte sector
+  // cache (see the max_files note at SD.begin()) — on top of the card's own. On
+  // the C6 that left the largest free block too small for a second GIF once the
+  // first had come and gone.
+  if (ffatMounted && !storageIsInternal) {
+    FFat.end();
+    ffatMounted = false;
+    Serial.printf("    FFat unmounted — heap free=%u  largest=%u\n",
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+  }
 #endif
 
 #if BOARD_HAS_USB_HID

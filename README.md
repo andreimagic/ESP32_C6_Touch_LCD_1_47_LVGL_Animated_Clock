@@ -61,7 +61,7 @@ One sketch builds for both boards. The target is detected at compile time and ev
 | **Rolling Dice** | Animated rolling frames → final dice face reveal. Shake or hard-tilt to re-roll |
 | **Flip a Coin** | Instant flip with ASCII coin art (heads/tails) |
 | **Tennis Letters** | Breakout-style ASCII game. Catch cycling letters (a-z) with a tilt-controlled paddle. Score points and complete alphabets |
-| **Letters Rain** | Falling-letters ASCII game. Letters and modifiers rain in waves; catch the target letter (A→Z) with a gyro-controlled paddle. Wrong catches shrink the paddle; `+` / `-` modify its size; `*` restores the default. Miss the target letter and the game ends. Last score saved to `config.ini` |
+| **Letters Rain** | Falling-letters ASCII game in two modes: **Alphabet** — catch the target letter (A→Z) with a gyro-controlled paddle — and **Words** — catch a word's letters in order. Wrong catches shrink the paddle; `+` / `-` modify its size; `*` restores the default. Miss the target letter and the game ends. Alphabet's last score and Words' best saved to `config.ini` |
 | **Snake Letters** | Classic snake ASCII game in two modes: **Alphabet** — steer using tilt to eat a-z in order — and **Words** — catch the letter missing from a word (`d_g`). Avoid distraction letters and manage length with modifiers. Each mode's high score is persisted to `config.ini` |
 | **KY-023 joystick** *(S3)* | Optional £2 module on the expansion header that stands in for the missing IMU, bringing Tennis Letters, Letters Rain, Snake Letters and ToneQuest back to the S3. Off by default and claims no pins until enabled — see [KY-023 Joystick](#ky-023-joystick-s3-only) |
 | **Bingo!** | On-device 1–90 number caller. Tap or tilt to draw a ball with a cycling reveal animation and buzzer; long-press the circle for a history popup of every number called. No repeats — powered by a fresh Fisher-Yates shuffle each game |
@@ -319,7 +319,7 @@ for the screen mid-game:
 | Where | Button press |
 |---|---|
 | Apps carousel | Enters the highlighted item, like tapping the middle |
-| Snake Letters mode carousel | Starts the highlighted mode. Push **up** to back out to the apps carousel; left/right pages the modes |
+| Letters Rain / Snake Letters mode carousel | Starts the highlighted mode. Push **up** to back out to the apps carousel; left/right pages the modes |
 | Tennis Letters, Letters Rain, Snake Letters — playing | **Pauses**, like tapping the field |
 | Same games — paused | **Resumes**, like tapping the *Paused* popup |
 | Any joystick game — game over | Plays again, like tapping the popup |
@@ -595,6 +595,8 @@ fall_speed_change_ms = 10
 paddle_speed_ms = 200
 paddle_speed_min_ms = 50
 paddle_speed_change_ms = 5
+words_high_score = 0
+words = ["box", "cat", "dog", "cactus", "rainbow"]
 
 [snake]
 high_score = 0
@@ -1097,10 +1099,22 @@ An ASCII falling-letters game. Letters and modifiers descend in separate waves �
 - Catching a **wrong letter** shrinks the paddle by 1.
 - Catching `+` enlarges the paddle (max 10); `-` shrinks it (min 3).
 - Catching `*` (rare — approx every 20 waves) instantly restores the paddle to its configured default size.
-- If the **target letter falls** through without being caught, the game ends and the last score is saved.
-- Catch all 26 letters to win. The status bar shows ✓ on completion.
+- If the **target letter falls** through without being caught, the game ends.
 
-Each successive target spawns within 5–15 columns of the previous one, keeping the action in a natural zone. Speed increases with every correct catch. Last score is persisted to `config.ini`.
+Each successive target spawns within 5–15 columns of the previous one, keeping the action in a natural zone. Speed increases with every correct catch.
+
+Entering the game first shows a **mode carousel**, the same one Snake Letters uses — page it with the arrows, a swipe or the joystick, tap (or press the joystick button) to play, and long-press (or push the joystick up) to go back:
+
+- **Alphabet** — *Catch the Alphabet!* The target runs A→Z, shown capitalised in the status bar. Catch all 26 to win; the status bar shows `OK!`. Your letter count is saved as `last_score`.
+- **Words** — *Catch the words!* The status bar shows a whole word, and you catch its letters **in order**: caught letters turn white, the one you need next is cyan, the rest stay grey. Finishing a word plays the success tune — every word, not just record runs — scores one, and brings in the next word. The list loops forever, so a game only ends when a target gets past you. The popup shows the words you completed and your previous best; beating it saves a new `words_high_score`.
+
+Decoys, modifiers, speed and the paddle behave identically in both modes.
+
+| Key (`[letter_rain]`) | Default | Meaning |
+|---|---|---|
+| `last_score` | `0` | Letters caught in the last Alphabet game. Written by the game. |
+| `words_high_score` | `0` | Words best, in words completed. Written by the game. |
+| `words` | `["box", "cat", "dog", "cactus", "rainbow"]` | Words mode list, played in order and looped. Lowercase a-z only (anything else is stripped); up to 24 words of up to 15 letters, which all fit the status bar. A bare `box, cat, dog` list works too. Separate from `[snake] words`. |
 
 #### Snake Letters
 Classic snake ASCII game. Steer using tilt — or a [joystick](#ky-023-joystick-s3-only) on an S3, in all four directions. Avoid "distraction" letters that end the game instantly. Look out for modifiers: `-` shrinks the snake, and `/` halves its length.
@@ -1821,7 +1835,8 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v3.3.1 | ✅ released | **Improvements** - Ensure GIFs and Scripts folders are created at Boot, allowing users to upload files from the Web interface on a fresh device; Exiting the configuration carousel items with a long-press will now Save and Exit directly to the Clock view |
 | v3.3.2 | ✅ released | **Bugfix** - Fix boot panic in ensure_dir() when no storage is mounted |
 | v3.4.0 | ✅ released | **KY-023 joystick (S3)** — an optional £2 analog joystick on the expansion header stands in for the IMU the S3 does not have, bringing **Tennis Letters**, **Letters Rain**, **Snake Letters** and **ToneQuest** back to that board. VRy/VRx on GPIO 9/10 (ADC1, so the WiFi radio cannot disturb them) and SW on GPIO 8, powered from 3V3. Opt-in via a new **Extra Games** toggle in the USB carousel, or `[joystick] extra_games` in `config.ini`: until it is on, no pin is claimed, no ADC is read and the four games stay hidden. The resting centre is measured at boot rather than assumed, and each half-travel is scaled against its own span, so an off-centre stick still reaches both walls. Two control schemes, both reusing the games' existing speeds — **direction** (push and it slides, what the tilt does today) and **position** (deflection sets and holds the object, what the bubble level does today) — selectable per paddle game with `paddle_mode`; Snake is four-way direction and ToneQuest is position on both axes, keeping its levelling gate, its tones and its scoring untouched. Tunable via `dead_zone_percent` / `edge_percent`, with `invert_x` / `invert_y` for a module mounted rotated. Left/right on the stick pages the apps carousel (with auto-repeat while held); the button enters the highlighted item, pauses and resumes Tennis Letters, Letters Rain and Snake Letters, and restarts a finished game. The C6 compiles none of it: `BOARD_HAS_JOYSTICK` is 0 there, so the setting does not exist rather than merely being hidden |
-| v3.5.0 | 🚀 new | **Snake Letters: Words mode** — a new mode carousel lets you choose Alphabet or Words; in Words, catch the missing letter in each configurable word, with a separate persisted high score. **Toolchain refresh and warning cleanup** — pins LVGL 9.6.0 and Arduino_GFX 1.6.8; updates deprecated LVGL configuration and object-flag APIs, and replaces the deprecated Node 20 Arduino CLI setup action with a pinned, checksum-verified CLI install. Clean builds report zero warnings on both boards. **Internal flash on the ESP32-C6** — the C6 gets the same SD-primary, FFat-fallback storage the S3 has. A new partition table (`partitions/esp32c6-ffat-8MB.csv`: one 3 MB app slot plus a 4.9 MB FFat partition) lets a C6 run without a card: GIFs and `config.ini` are mirrored from SD at boot, then used as fallback when the card is removed. Applied to the C6 build only; the S3 partition layout is unchanged. **Upgrading a C6 from v3.4.0 or earlier requires the `-full.bin`** — the `-app.bin` does not write the new table. SD-card settings and GIFs are untouched; a card inserted on first boot is mirrored to FFat. |
+| v3.5.0 | ✅ released | **Snake Letters: Words mode** — a new mode carousel lets you choose Alphabet or Words; in Words, catch the missing letter in each configurable word, with a separate persisted high score. **Toolchain refresh and warning cleanup** — pins LVGL 9.6.0 and Arduino_GFX 1.6.8; updates deprecated LVGL configuration and object-flag APIs, and replaces the deprecated Node 20 Arduino CLI setup action with a pinned, checksum-verified CLI install. Clean builds report zero warnings on both boards. **Internal flash on the ESP32-C6** — the C6 gets the same SD-primary, FFat-fallback storage the S3 has. A new partition table (`partitions/esp32c6-ffat-8MB.csv`: one 3 MB app slot plus a 4.9 MB FFat partition) lets a C6 run without a card: GIFs and `config.ini` are mirrored from SD at boot, then used as fallback when the card is removed. Applied to the C6 build only; the S3 partition layout is unchanged. **Upgrading a C6 from v3.4.0 or earlier requires the `-full.bin`** — the `-app.bin` does not write the new table. SD-card settings and GIFs are untouched; a card inserted on first boot is mirrored to FFat. |
+| v3.6.0 | 🚀 new | **Letters Rain: Alphabet and Words modes** — entering Letters Rain now opens the same mode carousel as Snake Letters (arrows, swipe or joystick to page; tap or the button to play; hold or joystick up to go back). **Words** shows a whole word in the status bar — caught letters white, the next one cyan, the rest grey — and you catch its letters in order; every finished word plays the success tune and scores one, the list loops forever, and the game ends only on a missed target. New `[letter_rain]` keys `words` and `words_high_score`; `last_score` stays the Alphabet letter count. Decoys, modifiers, speed and paddle are unchanged. The mode carousel and the word-list parser are now shared by both games |
 
 ## License
 

@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0a0e22">
+<title>Bingo!</title>
+<style>
+:root{--bg:#0a0e22;--panel:#10173a;--line:#3c78dc;--cyan:#64dcff;--gold:#ffdc3c;--olive:#b4b464;--text:#dfe6ff;
+--mono:"DejaVu Sans Mono",ui-monospace,Menlo,Consolas,"Liberation Mono",monospace}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--mono);overscroll-behavior:none}
+body{min-height:100vh;min-height:100dvh;padding:max(12px,env(safe-area-inset-top)) 12px max(12px,env(safe-area-inset-bottom));display:flex;justify-content:center}
+main{width:100%;max-width:640px;display:flex;flex-direction:column}
+h1{font-size:1.5rem;margin:.4rem 0 1rem;letter-spacing:.04em;font-weight:700}
+h1 i{font-style:normal;color:var(--cyan)}
+button{font:inherit;color:var(--text);background:var(--panel);border:2px solid var(--line);border-radius:8px;padding:.7rem 1.1rem;cursor:pointer;touch-action:manipulation}
+button:hover:not(:disabled){background:#17214f}
+button:disabled{opacity:.5;cursor:default}
+button:focus-visible,summary:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+#circle{--d:min(78vw,46dvh,400px);display:block;margin:0 auto;width:var(--d);height:var(--d);border-radius:50%;padding:0;
+ background:#14192d;border:4px solid #5064b4;font-size:calc(var(--d)*.5);font-weight:700;line-height:1;color:#fff;font-family:var(--mono)}
+#circle:hover{background:#181f3a}
+#num.amber{color:#ffd23c}
+#bar{display:flex;justify-content:space-between;gap:8px;padding:1rem .2rem;font-size:clamp(.85rem,3.4vw,1.1rem);color:var(--olive)}
+.row{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin:.4rem 0;font-size:.85rem}
+.row button{padding:.55rem .9rem;font-size:.9rem}
+#next{flex:1 1 100%;background:var(--line);color:#fff;font-weight:700;font-size:1.1rem;padding:.8rem}
+#next:hover:not(:disabled){background:#4d89ea}
+#sensor{color:var(--olive)}
+.help{font-size:.85rem;line-height:1.6;color:#9aa6d6;margin:.6rem 0}
+.help kbd{border:1px solid #3a4780;border-radius:4px;padding:0 .35em;color:var(--text)}
+#hist{position:fixed;inset:0;background:rgba(7,10,24,.88);display:flex;align-items:center;justify-content:center;padding:12px}
+#hb{background:var(--bg);border:2px solid #78a0dc;border-radius:8px;padding:1rem;width:100%;max-width:560px;max-height:90dvh;overflow:auto}
+#hb h2{margin:0 0 .7rem;font-size:1.05rem;color:#a0c8ff}
+#hg{display:grid;grid-template-columns:repeat(auto-fill,minmax(2.6rem,1fr));gap:6px;font-size:1.1rem}
+#hg span{text-align:center;padding:.2rem 0;border-radius:4px;background:#10173a}
+#hg span.last{background:var(--line);color:#fff;font-weight:700}
+#hb p{margin:.8rem 0 .5rem;font-size:.8rem;color:#6a72a8}
+#hb button{padding:.5rem 1rem;font-size:.9rem}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+<h1>Bingo<i>!</i></h1>
+
+<button id="circle" aria-label="Call next number"><span id="num">–</span></button>
+<div id="bar"><span id="prev"></span><span id="left"></span></div>
+<span id="live" class="sr" aria-live="polite"></span>
+
+<div class="row">
+  <button id="next">Next number</button>
+  <button id="hbtn">History</button>
+  <button id="ng">New game</button>
+  <label><input type="checkbox" id="snd" checked> Sound</label>
+</div>
+<div class="row"><button id="tiltBtn" hidden>Enable tilt controls</button><span id="sensor"></span></div>
+<p class="help">The numbers 1 to 90 are shuffled once per game, so none repeats. Click the circle, press <kbd>Space</kbd>, <kbd>Enter</kbd> or <kbd>→</kbd>, or tilt a phone left or right to call the next number. <kbd>H</kbd> shows everything called so far. The game is kept if you reload the page.</p>
+</main>
+
+<div id="hist" role="dialog" aria-modal="true" aria-labelledby="ht" hidden>
+  <div id="hb"><h2 id="ht"></h2><div id="hg"></div><p>Esc or tap outside to go back</p><button id="hclose">Back</button></div>
+</div>
+
+<script>
+(()=>{
+const N=90,TILT_HI=30,TILT_LO=12;
+const $=s=>document.querySelector(s);
+const store={get(k,d){try{const v=localStorage.getItem(k);return v===null?d:JSON.parse(v)}catch{return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
+const rnd=n=>Math.floor(Math.random()*n);
+const touchDev=('ontouchstart' in window)||navigator.maxTouchPoints>0;
+let order=[],count=0,busy=false,sound=store.get('lr_sound',true),ac=null,wl=null;
+let tilt=0,tiltOn=false,tiltAsked=false,armed=true,histFocus=null;
+
+/* ---------- sound ---------- */
+function tone(f,d,t0=0){if(!sound)return;try{ac=ac||new(window.AudioContext||window.webkitAudioContext)();if(ac.state==='suspended')ac.resume();
+ const o=ac.createOscillator(),g=ac.createGain();o.type='square';o.frequency.value=f;g.gain.value=.04;o.connect(g);g.connect(ac.destination);
+ const s=ac.currentTime+t0;o.start(s);o.stop(s+d)}catch{}}
+const tuneOK=()=>[523,659,784,1046].forEach((f,i)=>tone(f,.12,i*.12));
+
+/* ---------- game (ported from bn_* in the sketch) ---------- */
+function shuffle(){order=Array.from({length:N},(_,i)=>i+1);
+ for(let i=N-1;i>0;i--){const j=rnd(i+1);[order[i],order[j]]=[order[j],order[i]]}}
+const save=()=>store.set('bn_state',{order,count});
+function load(){
+ const s=store.get('bn_state',null);
+ if(s&&Array.isArray(s.order)&&s.order.length===N&&s.order.every(n=>Number.isInteger(n)&&n>=1&&n<=N)&&new Set(s.order).size===N&&Number.isInteger(s.count)&&s.count>=0&&s.count<=N){order=s.order;count=s.count}
+ else{shuffle();count=0}}
+function render(){
+ const cur=count?order[count-1]:null;
+ $('#num').textContent=cur??'–';
+ $('#prev').textContent='Previous: '+(count>=2?order[count-2]:'-');
+ $('#left').textContent='Numbers left: '+(N-count);
+ $('#live').textContent=cur?`Number ${cur}`:'';
+ const full=count>=N;$('#next').disabled=full;$('#next').textContent=full?'Full house: all 90 called':'Next number'}
+async function keepAwake(){try{if('wakeLock' in navigator&&!wl){wl=await navigator.wakeLock.request('screen');wl.addEventListener('release',()=>{wl=null})}}catch{}}
+function reveal(){
+ if(busy||count>=N||!$('#hist').hidden)return;
+ if(touchDev)enableTilt();
+ keepAwake();
+ busy=true;let step=0;const el=$('#num');
+ const id=setInterval(()=>{
+  if(step<3){el.textContent=order[count+rnd(N-count)];el.classList.add('amber');tone(800,.06);step++}
+  else{clearInterval(id);el.classList.remove('amber');count++;busy=false;save();render();tone(1200,.14);if(count>=N)tuneOK()}
+ },250)}
+function newGame(){
+ if(busy)return;
+ if(count>0&&count<N&&!confirm('Start a new game? The current numbers will be lost.'))return;
+ shuffle();count=0;save();render()}
+
+/* ---------- history ---------- */
+function openHist(){
+ if(busy||!$('#hist').hidden)return;
+ $('#ht').textContent=`Called: ${count} / ${N}`;
+ const g=$('#hg');g.innerHTML='';
+ if(!count)g.textContent='(none yet)';
+ for(let i=0;i<count;i++){const s=document.createElement('span');s.textContent=String(order[i]).padStart(2,'0');if(i===count-1)s.className='last';g.appendChild(s)}
+ histFocus=document.activeElement;$('#hist').hidden=false;$('#hclose').focus()}
+function closeHist(){$('#hist').hidden=true;if(histFocus)histFocus.focus()}
+
+/* ---------- tilt (mobile accelerometer) ---------- */
+function setSensor(s){$('#sensor').textContent={on:'Tilt controls on: tilt left or right',none:touchDev?'No tilt sensor found. Tap the circle instead.':'',denied:'Tilt blocked. Tap the circle, or allow motion access in browser settings.'}[s]||''}
+function onOri(e){
+ if(e.gamma==null||e.beta==null)return;
+ tiltOn=true;
+ const a=(((screen.orientation&&screen.orientation.angle)??window.orientation??0)%360+360)%360;
+ tilt=a===0?e.gamma:a===90?e.beta:a===180?-e.gamma:-e.beta;
+ if(armed&&Math.abs(tilt)>TILT_HI){armed=false;reveal()}
+ else if(!armed&&Math.abs(tilt)<TILT_LO)armed=true}
+async function enableTilt(){
+ if(tiltAsked&&!$('#sensor').textContent.includes('blocked'))return;
+ tiltAsked=true;
+ try{const DO=window.DeviceOrientationEvent;
+  if(DO&&typeof DO.requestPermission==='function'&&await DO.requestPermission()!=='granted'){setSensor('denied');return}
+ }catch{setSensor('denied');return}
+ window.addEventListener('deviceorientation',onOri);
+ setTimeout(()=>setSensor(tiltOn?'on':'none'),1200)}
+
+/* ---------- wiring ---------- */
+$('#circle').onclick=reveal;$('#next').onclick=reveal;$('#hbtn').onclick=openHist;$('#ng').onclick=newGame;
+$('#hclose').onclick=closeHist;
+$('#hist').addEventListener('click',e=>{if(e.target.id==='hist')closeHist()});
+$('#snd').checked=sound;$('#snd').onchange=e=>{sound=e.target.checked;store.set('lr_sound',sound)};
+addEventListener('keydown',e=>{
+ if(e.key==='Escape'&&!$('#hist').hidden){closeHist();return}
+ const el=e.target;
+ if(el.tagName==='BUTTON'&&el.id!=='circle'&&el.id!=='next')return;
+ if(e.key===' '||e.key==='Enter'||e.key==='ArrowRight'){
+  if(el.id==='circle'||el.id==='next'){if(e.key==='ArrowRight'){e.preventDefault();reveal()}return}
+  e.preventDefault();reveal()}
+ else if(e.key==='h'||e.key==='H')openHist()});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&count>0&&count<N)keepAwake()});
+if(touchDev){$('#tiltBtn').hidden=false;$('#tiltBtn').onclick=enableTilt}
+load();render();
+})();
+</script>
+</body>
+</html>

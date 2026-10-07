@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0a0e22">
+<title>Snake Letters</title>
+<style>
+:root{--bg:#0a0e22;--panel:#10173a;--line:#3c78dc;--cyan:#64dcff;--gold:#ffdc3c;--olive:#b4b464;--grey:#5a5a6e;--text:#dfe6ff;
+--mono:"DejaVu Sans Mono",ui-monospace,Menlo,Consolas,"Liberation Mono",monospace}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--mono);overscroll-behavior:none}
+body{min-height:100vh;min-height:100dvh;padding:max(12px,env(safe-area-inset-top)) 12px max(12px,env(safe-area-inset-bottom));display:flex;justify-content:center}
+main{width:100%;max-width:860px}
+h1{font-size:1.5rem;margin:.4rem 0 .3rem;letter-spacing:.04em;font-weight:700}
+h1 i{font-style:normal;color:var(--cyan)}
+.nav{margin:0 0 1rem;font-size:.85rem}.nav a{color:var(--cyan)}
+button{font:inherit;color:var(--text);background:var(--panel);border:2px solid var(--line);border-radius:8px;padding:.7rem 1.1rem;cursor:pointer;touch-action:manipulation}
+button:hover{background:#17214f}
+button:focus-visible,textarea:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.card{text-align:left;display:flex;flex-direction:column;gap:.5rem;padding:1rem;border-color:#26335f;min-height:7.5rem}
+.card b{font-size:1.15rem}.card span{font-size:.85rem;color:#9aa6d6;line-height:1.4}
+.card.on{border-color:var(--cyan);background:#142050}
+.card.on b{color:var(--cyan)}
+#play{width:100%;margin:12px 0;background:var(--line);color:#fff;border-color:var(--line);font-weight:700;font-size:1.1rem}
+#play:hover{background:#4d89ea}
+.help{font-size:.85rem;line-height:1.6;color:#9aa6d6;margin:.6rem 0}
+.help kbd{border:1px solid #3a4780;border-radius:4px;padding:0 .35em;color:var(--text)}
+.row{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin:.6rem 0;font-size:.85rem}
+.row button{padding:.45rem .8rem;font-size:.85rem}
+#sensor{color:var(--olive)}
+details{margin-top:.8rem;border:1px solid #26335f;border-radius:8px;padding:.6rem .8rem}
+summary{cursor:pointer;font-size:.9rem}
+textarea{width:100%;margin:.6rem 0;background:#070a18;color:var(--text);border:1px solid #26335f;border-radius:6px;padding:.5rem;font:inherit;font-size:.9rem}
+#wrap{position:relative;width:100%;border:2px solid #26335f;border-radius:8px;overflow:hidden;background:#070a18}
+canvas{display:block;width:100%;touch-action:none}
+#bar{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;padding:.7rem .2rem;font-size:clamp(.85rem,3.4vw,1.1rem);color:var(--olive)}
+#bar span:last-child{text-align:right}
+#tg{color:var(--cyan);font-weight:700;letter-spacing:.08em;text-align:center}
+#ctl{display:flex;gap:10px;justify-content:space-between}
+#ov{position:absolute;inset:0;background:rgba(7,10,24,.82);display:flex;align-items:center;justify-content:center;padding:12px}
+#ov[hidden]{display:none}
+#ovb{background:var(--bg);border:2px solid var(--line);border-radius:8px;padding:1.1rem 1.4rem;text-align:center;min-width:min(260px,100%)}
+#ovb.win{border-color:#3cc864}
+#ovb h2{margin:0 0 .5rem;font-size:1.2rem}#ovb h2.gold{color:var(--gold)}
+#ovb p{margin:.25rem 0;color:#a0c8ff}#ovb p.big{color:#fff;font-size:1.3rem}
+#ovb .b{display:flex;gap:8px;justify-content:center;margin-top:.9rem;flex-wrap:wrap}
+[hidden]{display:none!important}
+@media (max-width:520px){.cards{grid-template-columns:1fr}.card{min-height:0}}
+</style>
+</head>
+<body>
+<main>
+<h1>Snake <i>Letters</i></h1>
+<p class="nav"><a href="letters-rain.html">Play Letters Rain</a></p>
+
+<section id="menu">
+  <div class="cards" role="radiogroup" aria-label="Game mode">
+    <button class="card on" data-m="0" role="radio" aria-checked="true"><b>Alphabet</b><span>Catch the Alphabet! Eat a to z in order, then around again. Distractions appear after 10 letters.</span></button>
+    <button class="card" data-m="1" role="radio" aria-checked="false"><b>Words</b><span>Fix the words! Eat the letter that fills the blank. Wrong letters are deadly from the start.</span></button>
+  </div>
+  <button id="play">Play</button>
+  <p class="help">Eat the letter shown below the field and the snake grows. Touching any other letter ends the game. <kbd>-</kbd> shrinks the snake by 1, <kbd>/</kbd> halves it.</p>
+  <p class="help"><kbd>←</kbd> <kbd>↑</kbd> <kbd>↓</kbd> <kbd>→</kbd> or <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> steer &middot; <kbd>Space</kbd> pause &middot; <kbd>Enter</kbd> play &middot; <kbd>Esc</kbd> menu. On a phone, tilt to steer (the starting tilt is your neutral, and pausing then resuming resets it). Without a tilt sensor, swipe on the field.</p>
+  <div class="row"><button id="tiltBtn" hidden>Enable tilt controls</button><span id="sensor"></span></div>
+  <div class="row">
+    <label><input type="checkbox" id="vw" checked> Side walls</label>
+    <label><input type="checkbox" id="hw"> Top and bottom walls</label>
+    <label><input type="checkbox" id="snd" checked> Sound</label>
+  </div>
+  <p class="help" style="margin-top:0">Without walls the snake wraps to the opposite edge.</p>
+  <details><summary>Words list</summary>
+    <textarea id="wl" rows="4" spellcheck="false" aria-label="Words, separated by commas or new lines"></textarea>
+    <div class="row"><button id="wsave">Save words</button><button id="wreset">Reset</button><span id="wmsg"></span></div>
+    <p class="help">Lowercase a-z only. Up to 24 words, 2 to 15 letters each. Words play in order and loop, with a random letter blanked each time.</p>
+  </details>
+</section>
+
+<section id="game" hidden>
+  <div id="wrap"><canvas id="cv"></canvas>
+    <div id="ov" hidden><div id="ovb"><h2 id="ot"></h2><p id="o1" class="big"></p><p id="o2"></p><div class="b" id="obtn"></div></div></div>
+  </div>
+  <div id="bar"><span id="sc"></span><span id="tg"></span><span id="lb"></span></div>
+  <div id="ctl"><button id="pb">Pause</button><button id="mb">Menu</button></div>
+</section>
+</main>
+
+<script>
+(()=>{
+const COLS=40,ROWS=9,MAXLEN=200,MAXDIS=10,TH=8;
+const CFG={size:3,speed:600,speedMin:200,speedStep:5,dis:3,level:10};
+const DEF=['box','cat','dog','cactus','rainbow'];
+const DX=[0,0,-1,1],DY=[-1,1,0,0],OPP=[1,0,3,2]; // 0 up, 1 down, 2 left, 3 right
+const $=s=>document.querySelector(s);
+const store={get(k,d){try{const v=localStorage.getItem(k);return v===null?d:JSON.parse(v)}catch{return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
+let words=store.get('sn_words',DEF),bests=[store.get('sn_best',0),store.get('sn_wbest',0)],sound=store.get('lr_sound',true);
+const O={vw:store.get('sn_vw',true),hw:store.get('sn_hw',false)};
+let mode=0,G=null,screen='menu',tiltOn=false,tiltAsked=false,cal=null,ori={b:0,g:0},ac=null,lt=0,sw=null;
+const touchDev=('ontouchstart' in window)||navigator.maxTouchPoints>0;
+const cv=$('#cv'),ctx=cv.getContext('2d');
+const rnd=n=>Math.floor(Math.random()*n);
+const cmin=()=>O.vw?1:0,cmax=()=>O.vw?COLS-2:COLS-1,rmin=()=>O.hw?1:0,rmax=()=>O.hw?ROWS-2:ROWS-1;
+
+/* ---------- sound ---------- */
+function tone(f,d,t0=0){if(!sound)return;try{ac=ac||new(window.AudioContext||window.webkitAudioContext)();if(ac.state==='suspended')ac.resume();
+ const o=ac.createOscillator(),g=ac.createGain();o.type='square';o.frequency.value=f;g.gain.value=.04;o.connect(g);g.connect(ac.destination);
+ const s=ac.currentTime+t0;o.start(s);o.stop(s+d)}catch{}}
+const beep=()=>tone(600,.04);
+const tuneOK=()=>[523,659,784,1046].forEach((f,i)=>tone(f,.12,i*.12));
+const tuneBad=()=>[392,330,262].forEach((f,i)=>tone(f,.18,i*.18));
+
+/* ---------- game logic (ported from sn_* in the sketch) ---------- */
+const best=()=>bests[mode];
+const onBody=(c,r)=>G.body.some(s=>s[0]===c&&s[1]===r);
+function ahead(c,r,gap){const[hc,hr]=G.body[0];
+ switch(G.dir){case 3:return r===hr&&c>hc&&c-hc<=gap;case 2:return r===hr&&c<hc&&hc-c<=gap;
+  case 1:return c===hc&&r>hr&&r-hr<=gap;default:return c===hc&&r<hr&&hr-r<=gap}}
+function place(bad){let c,r,n=0;
+ do{c=cmin()+rnd(cmax()-cmin()+1);r=rmin()+rnd(rmax()-rmin()+1);n++}while(n<300&&bad(c,r));
+ return{c,r}}
+function nextTarget(){
+ if(mode){G.word=words[G.seq%words.length];G.blank=rnd(G.word.length);G.tch=G.word[G.blank]}
+ else G.tch=String.fromCharCode(97+G.seq%26)}
+function spawnLetters(){
+ nextTarget();
+ const t=place((c,r)=>onBody(c,r)||ahead(c,r,4)||(G.m&&G.m.c===c&&G.m.r===r));
+ G.t=t;G.dis=[];
+ const want=(mode||G.score>=CFG.level)?Math.min(CFG.dis,MAXDIS):0;
+ const pool=[...'abcdefghijklmnopqrstuvwxyz'].filter(l=>l!==G.tch);
+ for(let i=pool.length-1;i>0;i--){const j=rnd(i+1);[pool[i],pool[j]]=[pool[j],pool[i]]}
+ for(let d=0;d<want;d++){
+  const p=place((c,r)=>onBody(c,r)||ahead(c,r,4)||(c===t.c&&r===t.r)||(G.m&&G.m.c===c&&G.m.r===r)||G.dis.some(x=>x.c===c&&x.r===r));
+  G.dis.push({c:p.c,r:p.r,ch:pool[d]})}}
+function spawnMod(){
+ const p=place((c,r)=>onBody(c,r)||(c===G.t.c&&r===G.t.r)||G.dis.some(x=>x.c===c&&x.r===r));
+ G.m={c:p.c,r:p.r,ch:rnd(2)?'-':'/'}}
+const modWait=()=>(10+rnd(21))*1000;
+function end(){
+ G.run=false;
+ if(G.score>best()){G.beat=true;G.won=true;bests[mode]=G.score;store.set(mode?'sn_wbest':'sn_best',G.score)}
+ const ok=G.beat||(mode===0&&G.seq>=26);
+ draw();
+ setTimeout(()=>{if(screen!=='game'||G.run)return;ok?tuneOK():tuneBad();showEnd()},500)}
+function move(){
+ if(G.q.length)G.dir=G.q.shift();
+ let nx=G.body[0][0]+DX[G.dir],ny=G.body[0][1]+DY[G.dir];
+ if(O.hw){if(ny<rmin()||ny>rmax())return end()}else ny=(ny+ROWS)%ROWS;
+ if(O.vw){if(nx<cmin()||nx>cmax())return end()}else nx=(nx+COLS)%COLS;
+ for(let i=0;i<G.body.length-1;i++)if(G.body[i][0]===nx&&G.body[i][1]===ny)return end();
+ if(G.dis.some(d=>d.c===nx&&d.r===ny))return end();
+ const ateT=nx===G.t.c&&ny===G.t.r,ateM=G.m&&nx===G.m.c&&ny===G.m.r;
+ const grow=ateT&&G.body.length<MAXLEN;
+ G.body.unshift([nx,ny]);if(!grow)G.body.pop();
+ if(ateM){
+  G.m=null;G.modT=modWait();
+  const min=Math.max(1,CFG.size);
+  if(G.mch==='-'){if(G.body.length>min)G.body.pop()}else G.body.length=Math.max(min,G.body.length>>1);
+  beep()}
+ if(ateT){
+  G.score++;G.seq++;
+  if(CFG.speedStep>0)G.speed=Math.max(CFG.speedMin,G.speed-CFG.speedStep);
+  const cycle=mode===0&&G.seq%26===0,newHigh=!G.beat&&G.score>best();
+  if(cycle||newHigh){G.won=true;if(newHigh){G.beat=true;bests[mode]=G.score;store.set(mode?'sn_wbest':'sn_best',G.score)}tuneOK()}
+  else beep();
+  spawnLetters()}}
+function steer(d){
+ const last=G.q.length?G.q[G.q.length-1]:G.dir;
+ if(d===last||d===OPP[last]||G.q.length>=2)return;
+ G.q.push(d)}
+function tiltDir(){
+ if(!tiltOn||!cal)return;
+ const db=ori.b-cal.b,dg=ori.g-cal.g,a=(((screen.orientation&&screen.orientation.angle)??window.orientation??0)%360+360)%360;
+ const[r,u]=a===0?[dg,-db]:a===90?[db,dg]:a===180?[-dg,db]:[-db,-dg];
+ if(Math.max(Math.abs(r),Math.abs(u))<TH)return;
+ if(Math.abs(r)>=Math.abs(u))steer(r>0?3:2);else steer(u>0?0:1)}
+function frame(t){
+ requestAnimationFrame(frame);
+ const dt=Math.min(100,t-lt);lt=t;
+ if(!G||screen!=='game')return;
+ if(G.run&&!G.pause){
+  tiltDir();
+  G.fa+=dt;
+  while(G.run&&G.fa>=G.speed){G.fa-=G.speed;move()}
+  if(G.run){G.modT-=dt;if(G.modT<=0){if(G.m){G.m=null;G.modT=modWait()}else{spawnMod();G.mch=G.m.ch;G.modT=modWait()}}}
+ }
+ draw()}
+
+/* ---------- drawing ---------- */
+let cw=10,chh=20;
+function resize(){
+ const W=$('#wrap').clientWidth||600,dpr=window.devicePixelRatio||1;
+ cw=W/COLS;chh=Math.min(cw*2.3,innerHeight*.55/ROWS);
+ cv.width=Math.round(W*dpr);cv.height=Math.round(chh*ROWS*dpr);
+ cv.style.height=chh*ROWS+'px';ctx.setTransform(dpr,0,0,dpr,0,0)}
+function draw(){
+ if(!G)return;
+ ctx.clearRect(0,0,cv.width,cv.height);
+ ctx.font=`bold ${Math.min(cw*1.5,chh*.85)}px ${getComputedStyle(document.body).getPropertyValue('--mono')}`;
+ ctx.textAlign='center';ctx.textBaseline='middle';
+ const put=(c,r,s,col)=>{ctx.fillStyle=col;ctx.fillText(s,(c+.5)*cw,(r+.5)*chh+1)};
+ if(O.hw)for(let c=0;c<COLS;c++){put(c,0,'-','#2c4a8a');put(c,ROWS-1,'-','#2c4a8a')}
+ if(O.vw)for(let r=0;r<ROWS;r++){if(O.hw&&(r===0||r===ROWS-1))continue;put(0,r,'|','#2c4a8a');put(COLS-1,r,'|','#2c4a8a')}
+ G.dis.forEach(d=>put(d.c,d.r,d.ch,'#fff'));
+ if(G.m)put(G.m.c,G.m.r,G.m.ch,'#ffdc3c');
+ put(G.t.c,G.t.r,G.tch,'#fff');
+ G.body.forEach((s,i)=>put(s[0],s[1],'*',i?'#7ee787':'#64dcff'));
+ status()}
+let lastBar='';
+function status(){
+ const t=G.won&&!G.run?'Excellent!':mode?G.word.slice(0,G.blank)+'_'+G.word.slice(G.blank+1):G.tch.toUpperCase();
+ const s=`Score: ${G.score}|${t}|Best: ${best()}`;
+ if(s===lastBar)return;lastBar=s;
+ const p=s.split('|');$('#sc').textContent=p[0];$('#tg').textContent=p[1];$('#lb').textContent=p[2]}
+
+/* ---------- screens ---------- */
+function show(n){screen=n;$('#menu').hidden=n!=='menu';$('#game').hidden=n!=='game'}
+function setMode(m){mode=m;document.querySelectorAll('.card').forEach(c=>{const on=+c.dataset.m===m;c.classList.toggle('on',on);c.setAttribute('aria-checked',on)})}
+function overlay(title,l1,l2,gold,win,btns){
+ $('#ot').textContent=title;$('#ot').className=gold?'gold':'';$('#ovb').className=win?'win':'';$('#o1').textContent=l1;$('#o2').textContent=l2;
+ const b=$('#obtn');b.innerHTML='';
+ btns.forEach(([label,fn],i)=>{const x=document.createElement('button');x.textContent=label;x.onclick=fn;if(!i)x.style.borderColor='#64dcff';b.appendChild(x)});
+ G.primary=btns[0][1];$('#ov').hidden=false;b.firstChild.focus()}
+function hideOv(){$('#ov').hidden=true;if(G)G.primary=null}
+function showEnd(){
+ overlay(G.beat?'New best!':G.won?'Excellent!':'Game over',
+  mode?`${G.score} word${G.score===1?'':'s'}`:`${G.score} letters`,
+  `Best: ${best()}`,G.beat,G.won,[['Play again',start],['Menu',toMenu]])}
+function pause(){
+ if(!G||!G.run)return;
+ if(G.pause){G.pause=false;cal=null;hideOv();$('#pb').textContent='Pause';return}
+ G.pause=true;$('#pb').textContent='Resume';
+ overlay('Paused',`Score: ${G.score}`,'',false,false,[['Resume',pause],['Menu',toMenu]])}
+function toMenu(){G=null;lastBar='';hideOv();show('menu')}
+function start(){
+ if(touchDev)enableTilt();
+ cal=null;
+ const mc=(cmin()+cmax())>>1,mr=(rmin()+rmax())>>1,len=Math.max(1,Math.min(CFG.size,MAXLEN));
+ G={body:Array.from({length:len},(_,i)=>[Math.max(cmin(),mc-i),mr]),dir:3,q:[],score:0,seq:0,won:false,beat:false,run:true,pause:false,
+  speed:CFG.speed,fa:0,m:null,mch:'-',modT:modWait(),t:{c:0,r:0},tch:'a',word:'',blank:0,dis:[],primary:null};
+ spawnLetters();lastBar='';
+ show('game');hideOv();$('#pb').textContent='Pause';resize();draw()}
+
+/* ---------- tilt (mobile accelerometer) ---------- */
+function setSensor(s){$('#sensor').textContent={on:'Tilt controls on',none:touchDev?'No tilt sensor found. Swipe on the field to steer.':'',denied:'Tilt blocked. Swipe on the field to steer, or allow motion access in browser settings.'}[s]||''}
+function onOri(e){
+ if(e.gamma==null||e.beta==null)return;
+ tiltOn=true;ori={b:e.beta,g:e.gamma};if(!cal)cal={b:e.beta,g:e.gamma}}
+async function enableTilt(){
+ if(tiltAsked&&!$('#sensor').textContent.includes('blocked'))return;
+ tiltAsked=true;
+ try{const DO=window.DeviceOrientationEvent;
+  if(DO&&typeof DO.requestPermission==='function'&&await DO.requestPermission()!=='granted'){setSensor('denied');return}
+ }catch{setSensor('denied');return}
+ window.addEventListener('deviceorientation',onOri);
+ setTimeout(()=>setSensor(tiltOn?'on':'none'),1200)}
+
+/* ---------- input ---------- */
+const KD={ArrowUp:0,w:0,W:0,ArrowDown:1,s:1,S:1,ArrowLeft:2,a:2,A:2,ArrowRight:3,d:3,D:3};
+addEventListener('keydown',e=>{
+ if(e.target.tagName==='TEXTAREA')return;
+ const k=e.key;
+ if(screen==='menu'){
+  if(k==='ArrowLeft'||k==='ArrowRight'||k==='a'||k==='d'){setMode(mode?0:1);e.preventDefault()}
+  else if(k==='1'||k==='2')setMode(+k-1);
+  else if(k==='Enter'&&document.activeElement===document.body)start();
+  return}
+ if(k in KD){e.preventDefault();if(G&&G.run&&!G.pause)steer(KD[k])}
+ else if(k==='Escape'||k==='p'||k==='P'||k===' '){e.preventDefault();if(G&&G.run)pause();else if(k==='Escape')toMenu()}
+ else if(k==='Enter'&&G&&G.primary&&document.activeElement.tagName!=='BUTTON'){e.preventDefault();G.primary()}
+ else if(k==='m'||k==='M')toMenu()});
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&G&&G.run&&!G.pause)pause()});
+cv.addEventListener('touchstart',e=>{if(tiltOn)return;const t=e.touches[0];sw={x:t.clientX,y:t.clientY};e.preventDefault()},{passive:false});
+cv.addEventListener('touchmove',e=>{
+ if(tiltOn||!sw||!G||!G.run||G.pause)return;
+ const t=e.touches[0],dx=t.clientX-sw.x,dy=t.clientY-sw.y;e.preventDefault();
+ if(Math.max(Math.abs(dx),Math.abs(dy))<24)return;
+ steer(Math.abs(dx)>Math.abs(dy)?(dx>0?3:2):(dy>0?1:0));sw={x:t.clientX,y:t.clientY}},{passive:false});
+const re=()=>{cal=null;if(screen==='game'){resize();draw()}};
+addEventListener('resize',re);
+addEventListener('orientationchange',()=>setTimeout(re,200));
+
+/* ---------- menu wiring ---------- */
+document.querySelectorAll('.card').forEach(c=>c.onclick=()=>setMode(+c.dataset.m));
+$('#play').onclick=start;$('#pb').onclick=pause;$('#mb').onclick=toMenu;
+$('#snd').checked=sound;$('#snd').onchange=e=>{sound=e.target.checked;store.set('lr_sound',sound)};
+$('#vw').checked=O.vw;$('#vw').onchange=e=>{O.vw=e.target.checked;store.set('sn_vw',O.vw)};
+$('#hw').checked=O.hw;$('#hw').onchange=e=>{O.hw=e.target.checked;store.set('sn_hw',O.hw)};
+$('#wl').value=words.join(', ');
+function parseWords(t){return t.toLowerCase().split(/[\s,;"'\[\]]+/).map(w=>w.replace(/[^a-z]/g,'').slice(0,15)).filter(w=>w.length>=2).slice(0,24)}
+$('#wsave').onclick=()=>{const w=parseWords($('#wl').value);
+ if(!w.length){$('#wmsg').textContent='No usable words. Keeping the current list.';return}
+ words=w;store.set('sn_words',w);$('#wl').value=w.join(', ');$('#wmsg').textContent=`Saved ${w.length} word${w.length===1?'':'s'}.`};
+$('#wreset').onclick=()=>{words=DEF.slice();store.set('sn_words',words);$('#wl').value=words.join(', ');$('#wmsg').textContent='Default list restored.'};
+if(touchDev){$('#tiltBtn').hidden=false;$('#tiltBtn').onclick=enableTilt}
+requestAnimationFrame(t=>{lt=t;frame(t)});
+})();
+</script>
+</body>
+</html>

@@ -12,8 +12,9 @@
 html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--mono);overscroll-behavior:none}
 body{min-height:100vh;min-height:100dvh;padding:max(12px,env(safe-area-inset-top)) 12px max(12px,env(safe-area-inset-bottom));display:flex;justify-content:center}
 main{width:100%;max-width:860px}
-h1{font-size:1.5rem;margin:.4rem 0 1rem;letter-spacing:.04em;font-weight:700}
+h1{font-size:1.5rem;margin:.4rem 0 .3rem;letter-spacing:.04em;font-weight:700}
 h1 i{font-style:normal;color:var(--cyan)}
+.nav{margin:0 0 1rem;font-size:.85rem}.nav a{color:var(--cyan)}
 button{font:inherit;color:var(--text);background:var(--panel);border:2px solid var(--line);border-radius:8px;padding:.7rem 1.1rem;cursor:pointer;touch-action:manipulation}
 button:hover{background:#17214f}
 button:focus-visible,textarea:focus-visible,summary:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
@@ -52,6 +53,7 @@ canvas{display:block;width:100%;touch-action:none}
 <body>
 <main>
 <h1>Letters <i>Rain</i></h1>
+<p class="nav"><a href="snake-letters.html">Play Snake Letters</a></p>
 
 <section id="menu">
   <div class="cards" role="radiogroup" aria-label="Game mode">

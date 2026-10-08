@@ -62,8 +62,8 @@ canvas{display:block;width:100%;touch-action:none}
   </div>
   <button id="play">Play</button>
   <p class="help">Eat the letter shown below the field and the snake grows. Touching any other letter ends the game. <kbd>-</kbd> shrinks the snake by 1, <kbd>/</kbd> halves it.</p>
-  <p class="help"><kbd>←</kbd> <kbd>↑</kbd> <kbd>↓</kbd> <kbd>→</kbd> or <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> steer &middot; <kbd>Space</kbd> pause &middot; <kbd>Enter</kbd> play &middot; <kbd>Esc</kbd> menu. On a phone, tilt to steer (the starting tilt is your neutral, and pausing then resuming resets it). Without a tilt sensor, swipe on the field.</p>
-  <div class="row"><button id="tiltBtn" hidden>Enable tilt controls</button><span id="sensor"></span></div>
+  <p class="help"><kbd>←</kbd> <kbd>↑</kbd> <kbd>↓</kbd> <kbd>→</kbd> or <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> steer &middot; <kbd>Space</kbd> pause &middot; <kbd>Enter</kbd> play &middot; <kbd>Esc</kbd> menu. On a phone, tilt to steer (the starting tilt is your neutral, and pausing then resuming resets it). Turn Tilt controls off (or use a phone without a tilt sensor) to swipe on the field instead.</p>
+  <div class="row"><label id="tiltLbl" hidden><input type="checkbox" id="tiltChk" checked> Tilt controls</label><span id="sensor"></span></div>
   <div class="row">
     <label><input type="checkbox" id="vw" checked> Side walls</label>
     <label><input type="checkbox" id="hw"> Top and bottom walls</label>
@@ -96,7 +96,7 @@ const $=s=>document.querySelector(s);
 const store={get(k,d){try{const v=localStorage.getItem(k);return v===null?d:JSON.parse(v)}catch{return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
 let words=store.get('sn_words',DEF),bests=[store.get('sn_best',0),store.get('sn_wbest',0)],sound=store.get('lr_sound',true);
 const O={vw:store.get('sn_vw',true),hw:store.get('sn_hw',false)};
-let mode=0,G=null,screen='menu',tiltOn=false,tiltAsked=false,cal=null,ori={b:0,g:0},ac=null,lt=0,sw=null;
+let mode=0,G=null,screen='menu',tiltOn=false,tiltAsked=false,tiltDenied=false,tiltPref=store.get('lr_tilt',true),cal=null,ori={b:0,g:0},ac=null,lt=0,sw=null;
 const touchDev=('ontouchstart' in window)||navigator.maxTouchPoints>0;
 const cv=$('#cv'),ctx=cv.getContext('2d');
 const rnd=n=>Math.floor(Math.random()*n);
@@ -169,7 +169,7 @@ function steer(d){
  if(d===last||d===OPP[last]||G.q.length>=2)return;
  G.q.push(d)}
 function tiltDir(){
- if(!tiltOn||!cal)return;
+ if(!useTilt()||!cal)return;
  const db=ori.b-cal.b,dg=ori.g-cal.g,a=(((screen.orientation&&screen.orientation.angle)??window.orientation??0)%360+360)%360;
  const[r,u]=a===0?[dg,-db]:a===90?[db,dg]:a===180?[-dg,db]:[-db,-dg];
  if(Math.max(Math.abs(r),Math.abs(u))<TH)return;
@@ -242,18 +242,19 @@ function start(){
  show('game');hideOv();$('#pb').textContent='Pause';resize();draw()}
 
 /* ---------- tilt (mobile accelerometer) ---------- */
-function setSensor(s){$('#sensor').textContent={on:'Tilt controls on',none:touchDev?'No tilt sensor found. Swipe on the field to steer.':'',denied:'Tilt blocked. Swipe on the field to steer, or allow motion access in browser settings.'}[s]||''}
+const useTilt=()=>tiltPref&&tiltOn;
+function setSensor(s){tiltDenied=s==='denied';$('#sensor').textContent={off:'Touch controls on. Swipe on the field to steer.',on:'Tilt controls on',none:touchDev?'No tilt sensor found. Swipe on the field to steer.':'',denied:'Tilt blocked. Swipe on the field to steer, or allow motion access in browser settings.'}[s]||''}
 function onOri(e){
  if(e.gamma==null||e.beta==null)return;
  tiltOn=true;ori={b:e.beta,g:e.gamma};if(!cal)cal={b:e.beta,g:e.gamma}}
 async function enableTilt(){
- if(tiltAsked&&!$('#sensor').textContent.includes('blocked'))return;
+ if(!tiltPref||(tiltAsked&&!tiltDenied))return;
  tiltAsked=true;
  try{const DO=window.DeviceOrientationEvent;
   if(DO&&typeof DO.requestPermission==='function'&&await DO.requestPermission()!=='granted'){setSensor('denied');return}
  }catch{setSensor('denied');return}
  window.addEventListener('deviceorientation',onOri);
- setTimeout(()=>setSensor(tiltOn?'on':'none'),1200)}
+ setTimeout(()=>setSensor(!tiltPref?'off':tiltOn?'on':'none'),1200)}
 
 /* ---------- input ---------- */
 const KD={ArrowUp:0,w:0,W:0,ArrowDown:1,s:1,S:1,ArrowLeft:2,a:2,A:2,ArrowRight:3,d:3,D:3};
@@ -270,9 +271,9 @@ addEventListener('keydown',e=>{
  else if(k==='Enter'&&G&&G.primary&&document.activeElement.tagName!=='BUTTON'){e.preventDefault();G.primary()}
  else if(k==='m'||k==='M')toMenu()});
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&G&&G.run&&!G.pause)pause()});
-cv.addEventListener('touchstart',e=>{if(tiltOn)return;const t=e.touches[0];sw={x:t.clientX,y:t.clientY};e.preventDefault()},{passive:false});
+cv.addEventListener('touchstart',e=>{if(useTilt())return;const t=e.touches[0];sw={x:t.clientX,y:t.clientY};e.preventDefault()},{passive:false});
 cv.addEventListener('touchmove',e=>{
- if(tiltOn||!sw||!G||!G.run||G.pause)return;
+ if(useTilt()||!sw||!G||!G.run||G.pause)return;
  const t=e.touches[0],dx=t.clientX-sw.x,dy=t.clientY-sw.y;e.preventDefault();
  if(Math.max(Math.abs(dx),Math.abs(dy))<24)return;
  steer(Math.abs(dx)>Math.abs(dy)?(dx>0?3:2):(dy>0?1:0));sw={x:t.clientX,y:t.clientY}},{passive:false});
@@ -292,7 +293,13 @@ $('#wsave').onclick=()=>{const w=parseWords($('#wl').value);
  if(!w.length){$('#wmsg').textContent='No usable words. Keeping the current list.';return}
  words=w;store.set('sn_words',w);$('#wl').value=w.join(', ');$('#wmsg').textContent=`Saved ${w.length} word${w.length===1?'':'s'}.`};
 $('#wreset').onclick=()=>{words=DEF.slice();store.set('sn_words',words);$('#wl').value=words.join(', ');$('#wmsg').textContent='Default list restored.'};
-if(touchDev){$('#tiltBtn').hidden=false;$('#tiltBtn').onclick=enableTilt}
+if(touchDev){
+ $('#tiltLbl').hidden=false;$('#tiltChk').checked=tiltPref;
+ if(!tiltPref)setSensor('off');
+ $('#tiltChk').onchange=e=>{tiltPref=e.target.checked;store.set('lr_tilt',tiltPref);
+  if(!tiltPref){setSensor('off');return}
+  cal=null;setSensor(tiltAsked&&!tiltDenied?(tiltOn?'on':'none'):'');enableTilt()}
+}
 requestAnimationFrame(t=>{lt=t;frame(t)});
 })();
 </script>

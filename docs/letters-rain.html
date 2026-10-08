@@ -63,7 +63,7 @@ canvas{display:block;width:100%;touch-action:none}
   <button id="play">Play</button>
   <p class="help">Catch the letter shown below the field. A wrong letter shrinks the paddle, <kbd>+</kbd> grows it, <kbd>-</kbd> shrinks it, <kbd>*</kbd> resets it. Missing the target ends the game.</p>
   <p class="help"><kbd>←</kbd> <kbd>→</kbd> or <kbd>A</kbd> <kbd>D</kbd> move &middot; <kbd>Space</kbd> pause &middot; <kbd>Enter</kbd> play &middot; <kbd>Esc</kbd> menu. On a phone, tilt left and right.</p>
-  <div class="row"><button id="tiltBtn" hidden>Enable tilt controls</button><span id="sensor"></span><label><input type="checkbox" id="snd" checked> Sound</label></div>
+  <div class="row"><label id="tiltLbl" hidden><input type="checkbox" id="tiltChk" checked> Tilt controls</label><span id="sensor"></span><label><input type="checkbox" id="snd" checked> Sound</label></div>
   <details><summary>Words list</summary>
     <textarea id="wl" rows="4" spellcheck="false" aria-label="Words, separated by commas or new lines"></textarea>
     <div class="row"><button id="wsave">Save words</button><button id="wreset">Reset</button><span id="wmsg"></span></div>
@@ -88,7 +88,7 @@ const DEF=['box','cat','dog','cactus','rainbow'];
 const $=s=>document.querySelector(s);
 const store={get(k,d){try{const v=localStorage.getItem(k);return v===null?d:JSON.parse(v)}catch{return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
 let words=store.get('lr_words',DEF),best=store.get('lr_best',0),lastScore=store.get('lr_last',0),sound=store.get('lr_sound',true);
-let mode=0,G=null,screen='menu',keys={l:0,r:0},touchDir=0,tilt=0,tiltOn=false,tiltAsked=false,ac=null,lt=0;
+let mode=0,G=null,screen='menu',keys={l:0,r:0},touchDir=0,tilt=0,tiltOn=false,tiltAsked=false,tiltDenied=false,tiltPref=store.get('lr_tilt',true),ac=null,lt=0;
 const touchDev=('ontouchstart' in window)||navigator.maxTouchPoints>0;
 const cv=$('#cv'),ctx=cv.getContext('2d');
 const rnd=n=>Math.floor(Math.random()*n);
@@ -163,8 +163,8 @@ function end(won){
 function step(d){G.px=Math.max(1,Math.min(COLS-1-G.size,G.px+d))}
 function padTick(){
  let dir=(keys.r?1:0)-(keys.l?1:0),amt=1;
- if(!dir&&tiltOn){if(tilt>TH)dir=1;else if(tilt<-TH)dir=-1;if(Math.abs(tilt)>28)amt=2}
- if(!dir&&!tiltOn)dir=touchDir;
+ if(!dir&&useTilt()){if(tilt>TH)dir=1;else if(tilt<-TH)dir=-1;if(Math.abs(tilt)>28)amt=2}
+ if(!dir&&!useTilt())dir=touchDir;
  if(dir)step(dir*amt)}
 function frame(t){
  requestAnimationFrame(frame);
@@ -235,14 +235,15 @@ function start(){
  show('game');hideOv();$('#pb').textContent='Pause';resize();draw()}
 
 /* ---------- tilt (mobile accelerometer) ---------- */
-function setSensor(s){$('#sensor').textContent={on:'Tilt controls on',none:touchDev?'No tilt sensor found. Touch the left or right half of the field.':'',denied:'Tilt blocked. Touch the left or right half of the field, or allow motion access in browser settings.'}[s]||''}
+const useTilt=()=>tiltPref&&tiltOn;
+function setSensor(s){tiltDenied=s==='denied';$('#sensor').textContent={off:'Touch controls on. Touch the left or right half of the field.',on:'Tilt controls on',none:touchDev?'No tilt sensor found. Touch the left or right half of the field.':'',denied:'Tilt blocked. Touch the left or right half of the field, or allow motion access in browser settings.'}[s]||''}
 function onOri(e){
  if(e.gamma==null||e.beta==null)return;
  tiltOn=true;
  const a=(((screen.orientation&&screen.orientation.angle)??window.orientation??0)%360+360)%360;
  tilt=a===0?e.gamma:a===90?e.beta:a===180?-e.gamma:-e.beta}
 async function enableTilt(){
- if(tiltAsked&&!$('#sensor').textContent.includes('blocked'))return;
+ if(!tiltPref||(tiltAsked&&!tiltDenied))return;
  tiltAsked=true;
  try{
   const DO=window.DeviceOrientationEvent;
@@ -251,7 +252,7 @@ async function enableTilt(){
   }
  }catch{setSensor('denied');return}
  window.addEventListener('deviceorientation',onOri);
- setTimeout(()=>setSensor(tiltOn?'on':'none'),1200)}
+ setTimeout(()=>setSensor(!tiltPref?'off':tiltOn?'on':'none'),1200)}
 
 /* ---------- input ---------- */
 addEventListener('keydown',e=>{
@@ -274,7 +275,7 @@ addEventListener('keyup',e=>{const k=e.key;
 addEventListener('blur',()=>{keys.l=keys.r=0;touchDir=0});
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&G&&G.run&&!G.pause)pause()});
 function touchSet(e){
- if(tiltOn){touchDir=0;return}
+ if(useTilt()){touchDir=0;return}
  const t=e.touches[0];if(!t){touchDir=0;return}
  const r=cv.getBoundingClientRect();touchDir=t.clientX<r.left+r.width/2?-1:1;e.preventDefault()}
 ['touchstart','touchmove'].forEach(n=>cv.addEventListener(n,touchSet,{passive:false}));
@@ -292,7 +293,13 @@ $('#wsave').onclick=()=>{const w=parseWords($('#wl').value);
  if(!w.length){$('#wmsg').textContent='No usable words. Keeping the current list.';return}
  words=w;store.set('lr_words',w);$('#wl').value=w.join(', ');$('#wmsg').textContent=`Saved ${w.length} word${w.length===1?'':'s'}.`};
 $('#wreset').onclick=()=>{words=DEF.slice();store.set('lr_words',words);$('#wl').value=words.join(', ');$('#wmsg').textContent='Default list restored.'};
-if(touchDev){$('#tiltBtn').hidden=false;$('#tiltBtn').onclick=enableTilt}
+if(touchDev){
+ $('#tiltLbl').hidden=false;$('#tiltChk').checked=tiltPref;
+ if(!tiltPref)setSensor('off');
+ $('#tiltChk').onchange=e=>{tiltPref=e.target.checked;store.set('lr_tilt',tiltPref);
+  if(!tiltPref){setSensor('off');return}
+  setSensor(tiltAsked&&!tiltDenied?(tiltOn?'on':'none'):'');enableTilt()}
+}
 requestAnimationFrame(t=>{lt=t;frame(t)});
 })();
 </script>

@@ -1,6 +1,6 @@
 {
   "name": "ESP32-C6 Touch LCD 1.47 — LVGL Animated Clock",
-  "short_name": "Letters Rain",
+  "short_name": "ESP32 Clock",
   "icons": [
     {
       "src": "assets/icon-192.png",

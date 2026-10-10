@@ -46,6 +46,11 @@ canvas{display:block;width:100%;touch-action:none}
 #ovb h2{margin:0 0 .5rem;font-size:1.2rem}#ovb h2.gold{color:var(--gold)}
 #ovb p{margin:.25rem 0;color:#a0c8ff}#ovb p.big{color:#fff;font-size:1.3rem}
 #ovb .b{display:flex;gap:8px;justify-content:center;margin-top:.9rem;flex-wrap:wrap}
+#tiltLbl{display:flex;align-items:center;gap:10px}
+.seg{display:inline-flex;gap:2px;padding:3px;border:2px solid var(--line);border-radius:999px;background:#070a18}
+.row .seg button{border:0;border-radius:999px;background:transparent;color:#9aa6d6;padding:.4rem 1.1rem;font-size:.85rem}
+.row .seg button:hover{background:#17214f}
+.row .seg button[aria-checked=true]{background:var(--line);color:#fff;font-weight:700}
 [hidden]{display:none!important}
 @media (max-width:520px){.cards{grid-template-columns:1fr}.card{min-height:0}}
 </style>
@@ -71,8 +76,8 @@ canvas{display:block;width:100%;touch-action:none}
   </div>
   <button id="play">Play</button>
   <p class="help">Eat the letter shown below the field and the snake grows. Touching any other letter ends the game. <kbd>-</kbd> shrinks the snake by 1, <kbd>/</kbd> halves it.</p>
-  <p class="help"><kbd>←</kbd> <kbd>↑</kbd> <kbd>↓</kbd> <kbd>→</kbd> or <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> steer &middot; <kbd>Space</kbd> pause &middot; <kbd>Enter</kbd> play &middot; <kbd>Esc</kbd> menu. On a phone, tilt to steer (the starting tilt is your neutral, and pausing then resuming resets it). Turn Tilt controls off (or use a phone without a tilt sensor) to swipe on the field instead.</p>
-  <div class="row"><label id="tiltLbl" hidden><input type="checkbox" id="tiltChk" checked> Tilt controls</label><span id="sensor"></span></div>
+  <p class="help"><kbd>←</kbd> <kbd>↑</kbd> <kbd>↓</kbd> <kbd>→</kbd> or <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> steer &middot; <kbd>Space</kbd> pause &middot; <kbd>Enter</kbd> play &middot; <kbd>Esc</kbd> menu. On a phone, tilt to steer (the starting tilt is your neutral, and pausing then resuming resets it). Switch Controls to Touch (or use a phone without a tilt sensor) to swipe on the field instead.</p>
+  <div class="row"><div id="tiltLbl" hidden><span>Controls</span><div class="seg" role="radiogroup" aria-label="Mobile controls"><button type="button" role="radio" data-v="1" aria-checked="true">Tilt</button><button type="button" role="radio" data-v="0" aria-checked="false">Touch</button></div></div><span id="sensor"></span></div>
   <div class="row">
     <label><input type="checkbox" id="vw" checked> Side walls</label>
     <label><input type="checkbox" id="hw"> Top and bottom walls</label>
@@ -303,11 +308,14 @@ $('#wsave').onclick=()=>{const w=parseWords($('#wl').value);
  words=w;store.set('sn_words',w);$('#wl').value=w.join(', ');$('#wmsg').textContent=`Saved ${w.length} word${w.length===1?'':'s'}.`};
 $('#wreset').onclick=()=>{words=DEF.slice();store.set('sn_words',words);$('#wl').value=words.join(', ');$('#wmsg').textContent='Default list restored.'};
 if(touchDev){
- $('#tiltLbl').hidden=false;$('#tiltChk').checked=tiltPref;
- if(!tiltPref)setSensor('off');
- $('#tiltChk').onchange=e=>{tiltPref=e.target.checked;store.set('lr_tilt',tiltPref);
-  if(!tiltPref){setSensor('off');return}
-  cal=null;setSensor(tiltAsked&&!tiltDenied?(tiltOn?'on':'none'):'');enableTilt()}
+ $('#tiltLbl').hidden=false;
+ const segs=[...document.querySelectorAll('#tiltLbl button')];
+ const sync=()=>segs.forEach(b=>b.setAttribute('aria-checked',(b.dataset.v==='1')===tiltPref));
+ sync();if(!tiltPref)setSensor('off');
+ segs.forEach(b=>b.onclick=()=>{const v=b.dataset.v==='1';if(v===tiltPref)return;
+  tiltPref=v;store.set('lr_tilt',v);sync();
+  if(!v){setSensor('off');return}
+  cal=null;setSensor(tiltAsked&&!tiltDenied?(tiltOn?'on':'none'):'');enableTilt()});
 }
 requestAnimationFrame(t=>{lt=t;frame(t)});
 })();

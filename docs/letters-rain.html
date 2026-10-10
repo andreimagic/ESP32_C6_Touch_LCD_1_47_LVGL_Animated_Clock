@@ -146,11 +146,10 @@ function setSize(n){G.size=Math.max(PMIN,Math.min(PMAX,n));G.px=Math.min(G.px,CO
 function fall(){
  if(G.mod>0&&--G.mod===0)waveMods();
  G.ents.forEach(e=>e.r++);
- const hit=G.ents.filter(e=>e.r>=ROWS-1);
+ const hit=G.ents.filter(e=>e.r>=ROWS-1),tch=targetCh();
  G.ents=G.ents.filter(e=>e.r<ROWS-1);
  for(const e of hit){
-  if(e.dead)continue;
-  const caught=e.c>=G.px&&e.c<G.px+G.size,isT=e.ch===targetCh();
+  const caught=e.c>=G.px&&e.c<G.px+G.size,isT=e.ch===tch;
   if(caught){
    if(isT){
     ramp();
@@ -158,7 +157,6 @@ function fall(){
     else{G.score++;beep()}
     if(!mode&&G.score>=26){end(true);return}
     if(!mode)G.ti++;
-    hit.forEach(x=>{if(isLetter(x.ch))x.dead=true});
     G.ents=G.ents.filter(x=>!isLetter(x.ch));
     waveLetters();
    }else if(e.ch==='+')setSize(G.size+1);

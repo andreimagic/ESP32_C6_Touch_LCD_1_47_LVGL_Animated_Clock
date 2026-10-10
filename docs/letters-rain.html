@@ -96,8 +96,8 @@ canvas{display:block;width:100%;touch-action:none}
 
 <script>
 (()=>{
-const COLS=40,ROWS=9,PMIN=3,PMAX=10,MAXENT=7,TH=8;
-const CFG={paddle:6,decoys:5,fall:850,fallMin:600,fallStep:10,pad:150,padMin:50,padStep:5};
+const COLS=40,ROWS=9,PMIN=3,PMAX=10,MAXENT=12,TH=8;
+const CFG={rain:3,scatter:4,paddle:6,decoys:5,fall:850,fallMin:600,fallStep:10,pad:150,padMin:50,padStep:5};
 const DEF=['box','cat','dog','cactus','rainbow'];
 const $=s=>document.querySelector(s);
 const store={get(k,d){try{const v=localStorage.getItem(k);return v===null?d:JSON.parse(v)}catch{return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
@@ -125,15 +125,20 @@ function pickCol(used,near,lo,hi){const c=[];
  return c.length?c[rnd(c.length)]:-1}
 function usage(){const u=[],ch={};G.ents.forEach(e=>{u[e.c]=true;ch[e.ch]=true});return[u,ch]}
 function waveLetters(){
- if(G.ents.length>=MAXENT)return;
  const[u,ch]=usage(),t=targetCh(),tc=pickCol(u,G.lastCol,5,15);
  if(tc<0)return;
  G.ents.push({c:tc,r:1,ch:t});u[tc]=true;G.lastCol=tc;
  for(let d=0;d<CFG.decoys-1&&G.ents.length<MAXENT;d++){
   const pool=[...'abcdefghijklmnopqrstuvwxyz'].filter(l=>l!==t&&!ch[l]);
   const dc=pickCol(u,-1);if(!pool.length||dc<0)break;
-  const p=pool[rnd(pool.length)];G.ents.push({c:dc,r:1,ch:p});u[dc]=true;ch[p]=true}
+  const p=pool[rnd(pool.length)];G.ents.push({c:dc,r:1+rnd(CFG.scatter),ch:p});u[dc]=true;ch[p]=true}
  G.mod=3+rnd(3)}
+function trickle(){
+ if(G.ents.length>=MAXENT)return;
+ const[u,ch]=usage(),t=targetCh();
+ const pool=[...'abcdefghijklmnopqrstuvwxyz'].filter(l=>l!==t&&!ch[l]),c=pickCol(u,-1);
+ if(!pool.length||c<0)return;
+ G.ents.push({c,r:1,ch:pool[rnd(pool.length)]})}
 function waveMods(){
  const[u,ch]=usage();
  for(const m of '+-'){if(ch[m]||G.ents.length>=MAXENT)continue;const c=pickCol(u,-1);if(c<0)break;G.ents.push({c,r:1,ch:m});u[c]=true;ch[m]=true}
@@ -157,7 +162,7 @@ function fall(){
     else{G.score++;beep()}
     if(!mode&&G.score>=26){end(true);return}
     if(!mode)G.ti++;
-    G.ents=G.ents.filter(x=>!isLetter(x.ch));
+    G.ents=G.ents.filter(x=>x.ch!==targetCh());
     waveLetters();
    }else if(e.ch==='+')setSize(G.size+1);
    else if(e.ch==='-')setSize(G.size-1);
@@ -165,6 +170,7 @@ function fall(){
    else setSize(G.size-1);
   }else if(isT){end(false);return}
  }
+ if(G.run&&CFG.rain&&++G.rt>=CFG.rain){G.rt=0;trickle()}
 }
 function end(won){
  G.run=false;
@@ -240,7 +246,7 @@ function pause(){
 function toMenu(){G=null;lastBar='';hideOv();show('menu')}
 function start(){
  if(touchDev)enableTilt();
- G={ents:[],px:0,size:CFG.paddle,score:0,ti:0,wi:0,word:'',lastCol:COLS>>1,star:0,mod:-1,run:true,pause:false,won:false,
+ G={ents:[],px:0,size:CFG.paddle,score:0,ti:0,wi:0,word:'',lastCol:COLS>>1,star:0,mod:-1,run:true,pause:false,rt:0,won:false,
   fall:CFG.fall,pspeed:CFG.pad,beat:false,prev:0,fa:0,pa:0,primary:null};
  if(mode)loadWord();
  G.px=Math.floor((COLS-G.size)/2);waveLetters();lastBar='';

@@ -65,7 +65,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v3.6.1"
+#define FW_VERSION      "v3.6.2"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -7725,7 +7725,10 @@ static void tl_stop()
 //    '*'      : restore paddle to cfg.lr_paddle_size (rare, ~1 per 20)
 //
 //  Spawn rules:
-//    · Letter wave:   target + decoys all enter on row 1 simultaneously
+//    · Letter wave:   target enters on row 1; its decoys start on rows
+//                     1..LR_SCATTER_ROWS so a wave is scattered, not one line
+//    · Letter rain:   an extra decoy drops every LR_RAIN_EVERY fall-ticks,
+//                     and decoys are NOT cleared when the target is caught
 //    · Modifier wave: +, -, (and occasionally *) enter on row 1, spawned
 //                     3–5 fall-ticks AFTER the letter wave (random delay)
 //    · Target column stays within 5–15 cols of the previous target
@@ -7739,7 +7742,9 @@ static void tl_stop()
 #define LR_GYRO_THRESH   0.25f
 #define LR_PADDLE_MIN     3
 #define LR_PADDLE_MAX    10
-#define LR_MAX_ENTITIES   7      // array headroom (max_entities is 3 or 5 from config)
+#define LR_MAX_ENTITIES  12      // array headroom: wave (max_entities is 3 or 5 from config) + modifiers + rain
+#define LR_RAIN_EVERY     3      // trickle one decoy letter every N fall ticks (0 = rain off)
+#define LR_SCATTER_ROWS   4      // wave decoys start on a random row in 1..LR_SCATTER_ROWS
 
 // ── Entity arrays (parallel, index 0..LR_MAX_ENTITIES-1) ─────────────────────
 // Using flat int/char/bool arrays instead of a struct to avoid Arduino IDE
@@ -7769,6 +7774,7 @@ static bool  lr_target_on_screen  = false; // target letter currently active
 //   Modifiers (+/-/*) ride a separate row that enters 3–5 rows BEHIND the letters.
 //   lr_mod_delay_ticks counts down fall ticks before spawning the modifier row.
 static int   lr_mod_delay_ticks   = 0;   // ticks remaining before modifier row spawns
+static int   lr_rain_ticks        = 0;   // fall ticks since the last rain decoy
 static int   lr_last_target_col   = -1;  // column of most recently spawned target letter
 static int   lr_since_star        = 0;   // non-star waves since last '*'
 
@@ -7936,7 +7942,7 @@ static int lr_pick_col(bool col_used[LR_COLS], int near_col, int range_lo, int r
 // Spawn the letter wave at row 1:
 //   - target letter (guaranteed, column within 5–15 of previous target)
 //   - (lr_max_entities - 1) decoy letters on different columns, same row
-// All letters spawn simultaneously at row 1.
+// The target enters on row 1; decoys start on rows 1..LR_SCATTER_ROWS.
 static void lr_spawn_letter_wave()
 {
   // Build used-column map from any still-active entities (modifiers may still be falling)
@@ -7950,7 +7956,18 @@ static void lr_spawn_letter_wave()
 
   // ── Place target letter first ─────────────────────────────────────────────
   int tslot = lr_free_slot();
-  if (tslot < 0) return;
+  if (tslot < 0) {
+    // Crowded field (rain + modifiers): drop one still-falling letter to make
+    // room, so a wave is never left without its target.
+    for (int i = 0; i < LR_MAX_ENTITIES && tslot < 0; i++) {
+      if (lr_ent_active[i] && lr_ent_ch[i] >= 'a' && lr_ent_ch[i] <= 'z' &&
+          lr_ent_row[i] < LR_ROWS - 1) {
+        lr_ent_active[i] = false;
+        tslot = i;
+      }
+    }
+    if (tslot < 0) tslot = 0;   // cannot happen in practice
+  }
 
   int tcol = lr_pick_col(col_used,
                          lr_last_target_col,
@@ -7990,7 +8007,7 @@ static void lr_spawn_letter_wave()
     if (dcol < 0) break;
 
     lr_ent_col[dslot]    = dcol;
-    lr_ent_row[dslot]    = 1;
+    lr_ent_row[dslot]    = 1 + random(LR_SCATTER_ROWS);   // scattered start rows
     lr_ent_ch[dslot]     = pick;
     lr_ent_active[dslot] = true;
     col_used[dcol]       = true;
@@ -7999,6 +8016,42 @@ static void lr_spawn_letter_wave()
 
   // Schedule modifier wave 3–5 rows behind (i.e. after that many fall ticks)
   lr_mod_delay_ticks = 3 + random(3);  // 3, 4, or 5
+}
+
+// Letter rain: one extra decoy at row 1 in any free column. Never the current
+// target and never a letter already on screen, so exactly one copy of the
+// target is ever falling. Leaves two slots spare for the next target/modifiers.
+static void lr_spawn_rain_letter()
+{
+  bool col_used[LR_COLS] = {};
+  bool ch_used[128]      = {};
+  int  n_active          = 0;
+  for (int i = 0; i < LR_MAX_ENTITIES; i++) {
+    if (!lr_ent_active[i]) continue;
+    n_active++;
+    col_used[(int)lr_ent_col[i]]   = true;
+    ch_used[(uint8_t)lr_ent_ch[i]] = true;
+  }
+  if (n_active >= LR_MAX_ENTITIES - 2) return;
+
+  const char tch = lr_target_ch();
+  char pool[26];
+  int  npool = 0;
+  for (int l = 0; l < 26; l++) {
+    char lc = (char)('a' + l);
+    if (lc == tch || ch_used[(uint8_t)lc]) continue;
+    pool[npool++] = lc;
+  }
+  if (npool == 0) return;
+
+  int col  = lr_pick_col(col_used, -1, 0, 0);
+  int slot = lr_free_slot();
+  if (col < 0 || slot < 0) return;
+
+  lr_ent_col[slot]    = col;
+  lr_ent_row[slot]    = 1;
+  lr_ent_ch[slot]     = pool[random(npool)];
+  lr_ent_active[slot] = true;
 }
 
 // Spawn the modifier wave at row 1:
@@ -8090,19 +8143,24 @@ static void lr_fall_tick_cb(lv_timer_t * /*t*/)
   }
 
   // ── Move every active entity down one row ─────────────────────────────────
+  for (int i = 0; i < LR_MAX_ENTITIES; i++)
+    if (lr_ent_active[i]) lr_ent_row[i]++;
+
+  // Everything this tick is judged against the target as it stood at the start
+  // of the tick, so a wrong letter landing together with the right one still
+  // counts as wrong (and shrinks the paddle) in either slot order.
+  const char tick_target = lr_target_ch();
+
+  // ── Resolve entities that reached the paddle row ──────────────────────────
   for (int i = 0; i < LR_MAX_ENTITIES; i++) {
-    if (!lr_ent_active[i]) continue;
-
-    lr_ent_row[i]++;
-
-    if (lr_ent_row[i] < LR_ROWS - 1) continue;  // still falling
+    if (!lr_ent_active[i] || lr_ent_row[i] < LR_ROWS - 1) continue;
 
     // ── Entity reached paddle row ─────────────────────────────────────────
     int  col     = lr_ent_col[i];
     char ch      = lr_ent_ch[i];
     bool caught  = (col >= lr_paddle_x && col < lr_paddle_x + lr_paddle_cur_size);
     bool is_letter = (ch >= 'a' && ch <= 'z');
-    bool is_target = (ch == lr_target_ch());
+    bool is_target = (ch == tick_target);
 
     lr_ent_active[i] = false;  // despawn regardless
 
@@ -8148,12 +8206,15 @@ static void lr_fall_tick_cb(lv_timer_t * /*t*/)
           return;
         }
 
-        // Advance target, clear remaining letters, spawn new letter wave
+        // Advance target and spawn the new letter wave. Decoys still falling are
+        // kept (the rain carries on); only a falling copy of the NEW target's
+        // letter is dropped so exactly one of it is on screen. Decoys already on
+        // the paddle row this tick are still resolved normally by this loop.
         if (lr_mode == GM_MODE_ALPHA) lr_target_idx++;   // Words advanced above
         lr_render_target();
-        // Kill any remaining decoy letters (modifiers keep falling)
+        const char next_t = lr_target_ch();
         for (int j = 0; j < LR_MAX_ENTITIES; j++) {
-          if (lr_ent_active[j] && lr_ent_ch[j] >= 'a' && lr_ent_ch[j] <= 'z')
+          if (lr_ent_active[j] && lr_ent_ch[j] == next_t && lr_ent_row[j] < LR_ROWS - 1)
             lr_ent_active[j] = false;
         }
         lr_spawn_letter_wave();
@@ -8208,6 +8269,12 @@ static void lr_fall_tick_cb(lv_timer_t * /*t*/)
   // is still true, it means it just fell through in this same tick (handled
   // above). If letters wave is gone and target never appeared — shouldn't
   // happen because lr_spawn_letter_wave() always places target. No action needed.
+
+  // ── Letter rain: one extra decoy every LR_RAIN_EVERY ticks ────────────────
+  if (LR_RAIN_EVERY > 0 && ++lr_rain_ticks >= LR_RAIN_EVERY) {
+    lr_rain_ticks = 0;
+    lr_spawn_rain_letter();
+  }
 
   lr_render();
 }
@@ -8434,6 +8501,7 @@ static void lr_game_start()
   lr_paddle_x          = (LR_COLS - lr_paddle_cur_size) / 2;
   lr_target_on_screen  = false;
   lr_mod_delay_ticks   = -1;
+  lr_rain_ticks        = 0;
   lr_last_target_col   = LR_COLS / 2;  // start near centre so first wave has room to spread
   lr_since_star        = 0;
 

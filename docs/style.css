@@ -117,6 +117,67 @@ a:hover {
     text-decoration: none;
 }
 
+.games-menu {
+    position: relative;
+}
+
+.games-menu-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    font: inherit;
+}
+
+.games-menu-chevron {
+    display: inline-block;
+    font-size: 1rem;
+    line-height: 1;
+    transition: transform 0.2s ease;
+}
+
+.games-dropdown {
+    position: absolute;
+    top: calc(100% + 0.75rem);
+    left: 50%;
+    width: 12rem;
+    padding: 0.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background-color: var(--nav-bg);
+    box-shadow: 0 8px 24px var(--nav-shadow);
+    list-style: none;
+    opacity: 0;
+    visibility: hidden;
+    transform: translate(-50%, -0.5rem);
+    transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
+}
+
+.games-menu:hover .games-dropdown,
+.games-menu:focus-within .games-dropdown,
+.games-menu.open .games-dropdown {
+    opacity: 1;
+    visibility: visible;
+    transform: translate(-50%, 0);
+}
+
+.games-menu.open .games-menu-chevron {
+    transform: rotate(180deg);
+}
+
+.games-dropdown .nav-links {
+    display: block;
+    padding: 0.6rem 0.75rem;
+    border-radius: 5px;
+}
+
+.games-dropdown .nav-links:hover {
+    background-color: var(--secondary-color);
+}
+
 .theme-btn {
     background: none;
     border: 2px solid var(--border-color);
@@ -423,6 +484,39 @@ footer {
     .nav-links {
         display: block;
         padding: 0.5rem 0;
+    }
+
+    .games-menu {
+        width: 100%;
+    }
+
+    .games-menu-toggle {
+        justify-content: center;
+        width: 100%;
+    }
+
+    .games-dropdown {
+        position: static;
+        display: none;
+        width: 100%;
+        margin: 0.25rem 0 0;
+        padding: 0.25rem;
+        border: 0;
+        box-shadow: none;
+        opacity: 1;
+        visibility: visible;
+        transform: none;
+    }
+
+    .games-menu.open .games-dropdown,
+    .games-menu:hover .games-dropdown,
+    .games-menu:focus-within .games-dropdown {
+        display: block;
+        transform: none;
+    }
+
+    .games-dropdown .nav-links {
+        padding: 0.6rem;
     }
 
     .hero h1 {

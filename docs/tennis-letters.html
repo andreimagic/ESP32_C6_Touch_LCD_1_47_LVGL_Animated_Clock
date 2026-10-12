@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0a0e22">
+<title>Tennis Letters</title>
+<style>
+:root{--bg:#0a0e22;--panel:#10173a;--line:#3c78dc;--cyan:#64dcff;--gold:#ffdc3c;--olive:#b4b464;--grey:#5a5a6e;--text:#dfe6ff;
+--mono:"DejaVu Sans Mono",ui-monospace,Menlo,Consolas,"Liberation Mono",monospace}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--mono);overscroll-behavior:none}
+body{min-height:100vh;min-height:100dvh;padding:max(12px,env(safe-area-inset-top)) 12px max(12px,env(safe-area-inset-bottom));display:flex;justify-content:center}
+main{width:100%;max-width:860px}
+h1{font-size:1.5rem;margin:.4rem 0 .3rem;letter-spacing:.04em;font-weight:700}
+h1 i{font-style:normal;color:var(--cyan)}
+.nav{margin:0 0 1rem;font-size:.85rem}.nav a{color:var(--cyan)}
+button{font:inherit;color:var(--text);background:var(--panel);border:2px solid var(--line);border-radius:8px;padding:.7rem 1.1rem;cursor:pointer;touch-action:manipulation}
+button:hover{background:#17214f}
+button:focus-visible,input:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+#play{width:100%;margin:12px 0;background:var(--line);color:#fff;border-color:var(--line);font-weight:700;font-size:1.1rem}
+#play:hover{background:#4d89ea}
+.help{font-size:.85rem;line-height:1.6;color:#9aa6d6;margin:.6rem 0}
+.help kbd{border:1px solid #3a4780;border-radius:4px;padding:0 .35em;color:var(--text)}
+.row{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin:.6rem 0;font-size:.85rem}
+.row button{padding:.45rem .8rem;font-size:.85rem}
+#sensor{color:var(--olive)}
+#tiltLbl{display:flex;align-items:center;gap:10px}
+.seg{display:inline-flex;gap:2px;padding:3px;border:2px solid var(--line);border-radius:999px;background:#070a18}
+.row .seg button{border:0;border-radius:999px;background:transparent;color:#9aa6d6;padding:.4rem 1.1rem;font-size:.85rem}
+.row .seg button:hover{background:#17214f}
+.row .seg button[aria-checked=true]{background:var(--line);color:#fff;font-weight:700}
+details{margin-top:.8rem;border:1px solid #26335f;border-radius:8px;padding:.6rem .8rem}
+summary{cursor:pointer;font-size:.9rem}
+input[type=number]{width:5.5rem;background:#070a18;color:var(--text);border:1px solid #26335f;border-radius:6px;padding:.35rem;font:inherit}
+#wrap{position:relative;width:100%;border:2px solid #26335f;border-radius:8px;overflow:hidden;background:#070a18}
+canvas{display:block;width:100%;touch-action:none}
+#bar{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:.7rem .2rem;font-size:clamp(.85rem,3.4vw,1.1rem);color:var(--olive)}
+#bar span:last-child{text-align:right}
+#ctl{display:flex;gap:10px;justify-content:space-between}
+#ov{position:absolute;inset:0;background:rgba(7,10,24,.82);display:flex;align-items:center;justify-content:center;padding:12px}
+#ov[hidden]{display:none}
+#ovb{background:var(--bg);border:2px solid var(--line);border-radius:8px;padding:1.1rem 1.4rem;text-align:center;min-width:min(260px,100%)}
+#ovb h2{margin:0 0 .5rem;font-size:1.2rem}#ovb h2.gold{color:var(--gold)}
+#ovb p{margin:.25rem 0;color:#a0c8ff}#ovb p.big{color:#fff;font-size:1.3rem}
+#ovb .b{display:flex;gap:8px;justify-content:center;margin-top:.9rem;flex-wrap:wrap}
+[hidden]{display:none!important}
+</style>
+<!-- Browser favicon -->
+<link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png">
+
+<!-- iPhone / iPad Home Screen -->
+<link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon-letters.png">
+
+<!-- Web App Manifest -->
+<link rel="manifest" href="tennis.webmanifest">
+</head>
+<body>
+<main>
+<h1>Tennis <i>Letters</i></h1>
+<p class="nav"><a href="snake-letters.html">Play Snake Letters</a> | <a href="letters-rain.html">Letters Rain</a></p>
+
+<section id="menu">
+  <button id="play">Play</button>
+  <p class="help">The ball is a letter, a to z, and it bounces off the three walls. Keep it in play with the paddle: every catch scores one and moves on to the next letter. Each bounce off the top wall speeds up both the ball and the paddle. Miss the ball and the game ends. Finish a full alphabet (26 catches) for the win tune.</p>
+  <p class="help"><kbd>←</kbd> <kbd>→</kbd> or <kbd>A</kbd> <kbd>D</kbd> move the paddle (hold to keep moving) &middot; <kbd>Space</kbd> pause &middot; <kbd>Enter</kbd> play &middot; <kbd>Esc</kbd> menu. On a phone, tilt left and right.</p>
+  <div class="row">
+    <div id="tiltLbl" hidden><span>Controls</span><div class="seg" role="radiogroup" aria-label="Mobile controls"><button type="button" role="radio" data-v="1" aria-checked="true">Tilt</button><button type="button" role="radio" data-v="0" aria-checked="false">Touch</button></div></div>
+    <span id="sensor"></span>
+    <label><input type="checkbox" id="snd" checked> Sound</label>
+  </div>
+  <details><summary>Settings</summary>
+    <div class="row"><label>Paddle size (1-10) <input type="number" id="cs" min="1" max="10"></label>
+    <label>Ball speed, ms per step (50-2000) <input type="number" id="cb" min="50" max="2000"></label></div>
+    <p class="help">Defaults are 6 and 500. The ball speeds up every top-wall bounce down to 200 ms, and the paddle from 250 ms down to 100 ms.</p>
+  </details>
+</section>
+
+<section id="game" hidden>
+  <div id="wrap"><canvas id="cv"></canvas>
+    <div id="ov" hidden><div id="ovb"><h2 id="ot"></h2><p id="o1" class="big"></p><p id="o2"></p><div class="b" id="obtn"></div></div></div>
+  </div>
+  <div id="bar"><span id="sc"></span><span id="lb"></span></div>
+  <div id="ctl"><button id="pb">Pause</button><button id="mb">Menu</button></div>
+</section>
+</main>
+
+<script>
+(()=>{
+const COLS=40,ROWS=9,TH=8;
+const CFG={size:6,ball:500,ballMin:200,ballStep:10,pad:250,padMin:100,padStep:5};
+const $=s=>document.querySelector(s);
+const store={get(k,d){try{const v=localStorage.getItem(k);return v===null?d:JSON.parse(v)}catch{return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,Math.round(+v)||a));
+CFG.size=clamp(store.get('tn_size',6),1,10);CFG.ball=clamp(store.get('tn_ball',500),50,2000);
+let best=store.get('tn_best',0),sound=store.get('lr_sound',true);
+let T=null,screen='menu',keys={l:0,r:0},touchDir=0,tilt=0,tiltOn=false,tiltAsked=false,tiltDenied=false,tiltPref=store.get('lr_tilt',true),ac=null,lt=0;
+const touchDev=('ontouchstart' in window)||navigator.maxTouchPoints>0;
+const cv=$('#cv'),ctx=cv.getContext('2d');
+const rnd=n=>Math.floor(Math.random()*n);
+
+/* ---------- sound ---------- */
+function tone(f,d,t0=0){if(!sound)return;try{ac=ac||new(window.AudioContext||window.webkitAudioContext)();if(ac.state==='suspended')ac.resume();
+ const o=ac.createOscillator(),g=ac.createGain();o.type='square';o.frequency.value=f;g.gain.value=.04;o.connect(g);g.connect(ac.destination);
+ const s=ac.currentTime+t0;o.start(s);o.stop(s+d)}catch{}}
+const beep=()=>tone(800,.04);
+const tuneOK=()=>[523,659,784,1046].forEach((f,i)=>tone(f,.12,i*.12));
+const tuneBad=()=>[392,330,262].forEach((f,i)=>tone(f,.18,i*.18));
+
+/* ---------- game logic (ported from tl_* in the sketch) ---------- */
+function ramp(){
+ if(CFG.ballStep>0)T.ballMs=Math.max(Math.min(CFG.ballMin,CFG.ball),T.ballMs-CFG.ballStep);
+ if(CFG.padStep>0)T.padMs=Math.max(CFG.padMin,T.padMs-CFG.padStep)}
+function ball(){
+ let nx=T.bx+T.dx,ny=T.by+T.dy,bounced=false;
+ if(nx<=0||nx>=COLS-1){T.dx=-T.dx;nx=T.bx+T.dx;bounced=true}
+ if(ny<=0){T.dy=-T.dy;ramp();ny=T.by+T.dy;bounced=true}
+ if(ny>=ROWS-1){
+  if(nx>=T.px&&nx<T.px+CFG.size){
+   T.dy=-T.dy;ny=T.by+T.dy;bounced=true;T.score++;
+   const alpha=T.score%26===0,hi=!T.beat&&T.score>best;
+   if(hi){T.beat=true;best=T.score;store.set('tn_best',best);tuneOK()}else if(alpha)tuneOK();
+   T.li=(T.li+1)%26;
+  }else{T.bx=nx;T.by=ny;end();return}
+ }
+ if(bounced)beep();
+ T.bx=nx;T.by=ny}
+function end(){
+ T.run=false;
+ if(T.score>best){best=T.score;store.set('tn_best',best)}
+ draw();
+ setTimeout(()=>{if(screen!=='game'||T.run)return;(T.beat||T.score>=26)?tuneOK():tuneBad();showEnd()},500)}
+function step(d){T.px=clamp(T.px+d,1,COLS-1-CFG.size)}
+const useTilt=()=>tiltPref&&tiltOn;
+function padTick(){
+ let dir=(keys.r?1:0)-(keys.l?1:0),amt=1;
+ if(!dir&&useTilt()){if(tilt>TH)dir=1;else if(tilt<-TH)dir=-1;if(Math.abs(tilt)>28)amt=2}
+ if(!dir&&!useTilt())dir=touchDir;
+ if(dir)step(dir*amt)}
+function frame(t){
+ requestAnimationFrame(frame);
+ const dt=Math.min(100,t-lt);lt=t;
+ if(!T||screen!=='game')return;
+ if(T.run&&!T.pause){
+  T.fa+=dt;T.pa+=dt;
+  while(T.run&&T.fa>=T.ballMs){T.fa-=T.ballMs;ball()}
+  while(T.pa>=T.padMs){T.pa-=T.padMs;padTick()}
+ }
+ draw()}
+
+/* ---------- drawing ---------- */
+let cw=10,chh=20;
+function resize(){
+ const W=$('#wrap').clientWidth||600,dpr=window.devicePixelRatio||1;
+ cw=W/COLS;chh=Math.min(cw*2.3,innerHeight*.55/ROWS);
+ cv.width=Math.round(W*dpr);cv.height=Math.round(chh*ROWS*dpr);
+ cv.style.height=chh*ROWS+'px';ctx.setTransform(dpr,0,0,dpr,0,0)}
+function draw(){
+ if(!T)return;
+ ctx.clearRect(0,0,cv.width,cv.height);
+ ctx.font=`bold ${Math.min(cw*1.5,chh*.85)}px ${getComputedStyle(document.body).getPropertyValue('--mono')}`;
+ ctx.textAlign='center';ctx.textBaseline='middle';
+ const put=(c,r,s,col)=>{ctx.fillStyle=col;ctx.fillText(s,(c+.5)*cw,(r+.5)*chh+1)};
+ for(let c=0;c<COLS;c++)put(c,0,'-','#2c4a8a');
+ for(let r=1;r<ROWS-1;r++){put(0,r,'|','#2c4a8a');put(COLS-1,r,'|','#2c4a8a')}
+ for(let i=0;i<CFG.size;i++)put(T.px+i,ROWS-1,'=','#64dcff');
+ put(T.bx,T.by,String.fromCharCode(97+T.li),'#fff');   // ball drawn last so a miss stays visible on the paddle row
+ const s=`Score: ${T.score}|High Score: ${best}`;
+ if(s!==bar){bar=s;const p=s.split('|');$('#sc').textContent=p[0];$('#lb').textContent=p[1]}}
+let bar='';
+
+/* ---------- screens ---------- */
+function show(n){screen=n;$('#menu').hidden=n!=='menu';$('#game').hidden=n!=='game'}
+function overlay(title,l1,l2,gold,btns){
+ $('#ot').textContent=title;$('#ot').className=gold?'gold':'';$('#o1').textContent=l1;$('#o2').textContent=l2;
+ const b=$('#obtn');b.innerHTML='';
+ btns.forEach(([label,fn],i)=>{const x=document.createElement('button');x.textContent=label;x.onclick=fn;if(!i)x.style.borderColor='#64dcff';b.appendChild(x)});
+ T.primary=btns[0][1];$('#ov').hidden=false;b.firstChild.focus()}
+function hideOv(){$('#ov').hidden=true;if(T)T.primary=null}
+function showEnd(){
+ overlay(T.beat?'New high score!':'Score:',`${T.score} letters`,`${Math.floor(T.score/26)} alphabets`,T.beat,[['Play again',start],['Menu',toMenu]])}
+function pause(){
+ if(!T||!T.run)return;
+ if(T.pause){T.pause=false;hideOv();$('#pb').textContent='Pause';return}
+ T.pause=true;$('#pb').textContent='Resume';
+ overlay('Paused',`Score: ${T.score}`,'',false,[['Resume',pause],['Menu',toMenu]])}
+function toMenu(){T=null;bar='';hideOv();show('menu')}
+function start(){
+ if(touchDev)enableTilt();
+ T={bx:COLS>>1,by:ROWS>>1,dx:rnd(2)?1:-1,dy:1,px:(COLS-CFG.size)>>1,score:0,li:0,beat:false,run:true,pause:false,
+  ballMs:CFG.ball,padMs:CFG.pad,fa:0,pa:0,primary:null};
+ bar='';show('game');hideOv();$('#pb').textContent='Pause';resize();draw()}
+
+/* ---------- tilt (mobile accelerometer) ---------- */
+function setSensor(s){tiltDenied=s==='denied';$('#sensor').textContent={off:'Touch controls on. Touch the left or right half of the field.',on:'Tilt controls on',none:touchDev?'No tilt sensor found. Touch the left or right half of the field.':'',denied:'Tilt blocked. Touch the left or right half of the field, or allow motion access in browser settings.'}[s]||''}
+function onOri(e){
+ if(e.gamma==null||e.beta==null)return;
+ tiltOn=true;
+ const a=(((screen.orientation&&screen.orientation.angle)??window.orientation??0)%360+360)%360;
+ tilt=a===0?e.gamma:a===90?e.beta:a===180?-e.gamma:-e.beta}
+async function enableTilt(){
+ if(!tiltPref||(tiltAsked&&!tiltDenied))return;
+ tiltAsked=true;
+ try{const DO=window.DeviceOrientationEvent;
+  if(DO&&typeof DO.requestPermission==='function'&&await DO.requestPermission()!=='granted'){setSensor('denied');return}
+ }catch{setSensor('denied');return}
+ window.addEventListener('deviceorientation',onOri);
+ setTimeout(()=>setSensor(!tiltPref?'off':tiltOn?'on':'none'),1200)}
+
+/* ---------- input ---------- */
+addEventListener('keydown',e=>{
+ if(e.target.tagName==='INPUT')return;
+ const k=e.key,L=k==='ArrowLeft'||k==='a'||k==='A',R=k==='ArrowRight'||k==='d'||k==='D';
+ if(screen==='menu'){if(k==='Enter'&&document.activeElement===document.body)start();return}
+ if(L||R){e.preventDefault();
+  if(L)keys.l=1;else keys.r=1;
+  if(!e.repeat&&T&&T.run&&!T.pause){step(L?-1:1);T.pa=0}}
+ else if(k==='Escape'||k==='p'||k==='P'||k===' '){e.preventDefault();if(T&&T.run)pause();else if(k==='Escape')toMenu()}
+ else if(k==='Enter'&&T&&T.primary&&document.activeElement.tagName!=='BUTTON'){e.preventDefault();T.primary()}
+ else if(k==='m'||k==='M')toMenu()});
+addEventListener('keyup',e=>{const k=e.key;
+ if(k==='ArrowLeft'||k==='a'||k==='A')keys.l=0;
+ if(k==='ArrowRight'||k==='d'||k==='D')keys.r=0});
+addEventListener('blur',()=>{keys.l=keys.r=0;touchDir=0});
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&T&&T.run&&!T.pause)pause()});
+function touchSet(e){
+ if(useTilt()){touchDir=0;return}
+ const t=e.touches[0];if(!t){touchDir=0;return}
+ const r=cv.getBoundingClientRect();touchDir=t.clientX<r.left+r.width/2?-1:1;e.preventDefault()}
+['touchstart','touchmove'].forEach(n=>cv.addEventListener(n,touchSet,{passive:false}));
+['touchend','touchcancel'].forEach(n=>cv.addEventListener(n,e=>{touchDir=e.touches.length?touchDir:0}));
+const re=()=>{if(screen==='game'){resize();draw()}};
+addEventListener('resize',re);
+addEventListener('orientationchange',()=>setTimeout(re,200));
+
+/* ---------- menu wiring ---------- */
+$('#play').onclick=start;$('#pb').onclick=pause;$('#mb').onclick=toMenu;
+$('#snd').checked=sound;$('#snd').onchange=e=>{sound=e.target.checked;store.set('lr_sound',sound)};
+$('#cs').value=CFG.size;$('#cb').value=CFG.ball;
+$('#cs').onchange=e=>{CFG.size=clamp(e.target.value,1,10);e.target.value=CFG.size;store.set('tn_size',CFG.size)};
+$('#cb').onchange=e=>{CFG.ball=clamp(e.target.value,50,2000);e.target.value=CFG.ball;store.set('tn_ball',CFG.ball)};
+if(touchDev){
+ $('#tiltLbl').hidden=false;
+ const segs=[...document.querySelectorAll('#tiltLbl button')];
+ const sync=()=>segs.forEach(b=>b.setAttribute('aria-checked',(b.dataset.v==='1')===tiltPref));
+ sync();if(!tiltPref)setSensor('off');
+ segs.forEach(b=>b.onclick=()=>{const v=b.dataset.v==='1';if(v===tiltPref)return;
+  tiltPref=v;store.set('lr_tilt',v);sync();
+  if(!v){setSensor('off');return}
+  setSensor(tiltAsked&&!tiltDenied?(tiltOn?'on':'none'):'');enableTilt()});
+}
+requestAnimationFrame(t=>{lt=t;frame(t)});
+})();
+</script>
+</body>
+</html>

@@ -30,17 +30,55 @@ document.addEventListener('DOMContentLoaded', () => {
     const mobileMenuBtn = document.getElementById('mobile-menu');
     const navMenu = document.querySelector('.nav-menu');
     const navLinks = document.querySelectorAll('.nav-links');
+    const gamesMenu = document.querySelector('.games-menu');
+    const gamesMenuToggle = document.getElementById('games-menu-toggle');
+
+    function closeGamesMenu() {
+        gamesMenu.classList.remove('open');
+        gamesMenuToggle.setAttribute('aria-expanded', 'false');
+    }
+
+    function closeMobileMenu() {
+        navMenu.classList.remove('active');
+        mobileMenuBtn.setAttribute('aria-expanded', 'false');
+        closeGamesMenu();
+    }
 
     mobileMenuBtn.addEventListener('click', () => {
-        navMenu.classList.toggle('active');
+        const isOpen = navMenu.classList.toggle('active');
+        mobileMenuBtn.setAttribute('aria-expanded', String(isOpen));
+    });
+
+    mobileMenuBtn.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            mobileMenuBtn.click();
+        }
+    });
+
+    gamesMenuToggle.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const isOpen = gamesMenu.classList.toggle('open');
+        gamesMenuToggle.setAttribute('aria-expanded', String(isOpen));
     });
 
     navLinks.forEach(link => {
         link.addEventListener('click', () => {
-            if (navMenu.classList.contains('active')) {
-                navMenu.classList.remove('active');
-            }
+            closeMobileMenu();
         });
+    });
+
+    document.addEventListener('click', (event) => {
+        if (!gamesMenu.contains(event.target)) {
+            closeGamesMenu();
+        }
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            closeGamesMenu();
+            closeMobileMenu();
+        }
     });
 
     // 3. Smooth Scrolling

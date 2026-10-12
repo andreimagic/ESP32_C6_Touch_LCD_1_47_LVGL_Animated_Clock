@@ -5,6 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ESP32-C6 Touch LCD 1.47" — LVGL Animated Clock</title>
     <link rel="stylesheet" href="style.css">
+    <!-- Browser favicon -->
+    <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png">
+
+    <!-- iPhone / iPad Home Screen -->
+    <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png">
+
+    <!-- Web App Manifest -->
+    <link rel="manifest" href="site.webmanifest">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Fira+Code&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -12,14 +21,23 @@
     <nav class="navbar">
         <div class="nav-container">
             <a href="#" class="logo">⌚ ESP32-C6 Clock</a>
-            <div class="menu-toggle" id="mobile-menu">
+            <div class="menu-toggle" id="mobile-menu" role="button" tabindex="0" aria-expanded="false" aria-label="Open navigation menu">
                 <span class="bar"></span>
                 <span class="bar"></span>
                 <span class="bar"></span>
             </div>
             <ul class="nav-menu">
                 <li><a href="user-manual.html" class="nav-links">User Manual</a></li>
-                <li><a href="bingo.html" class="nav-links">Bingo Cards</a></li>
+                <li class="games-menu">
+                    <button class="nav-links games-menu-toggle" id="games-menu-toggle" type="button" aria-expanded="false" aria-controls="games-menu">Play!</button>
+                    <ul class="games-dropdown" id="games-menu">
+                        <li><a href="bingo-caller.html" class="nav-links">Bingo Caller</a></li>
+                        <li><a href="bingo-cards.html" class="nav-links">Bingo Cards</a></li>
+                        <li><a href="snake-letters.html" class="nav-links">Snake Letters</a></li>
+                        <li><a href="tennis-letters.html" class="nav-links">Tennis Letters</a></li>
+                        <li><a href="letters-rain.html" class="nav-links">Letters Rain</a></li>
+                    </ul>
+                </li>
                 <li><a href="#gallery" class="nav-links">Gallery</a></li>
                 <li><a href="#features" class="nav-links">Features</a></li>
                 <li><a href="#hardware" class="nav-links">Hardware</a></li>
@@ -216,7 +234,7 @@
             <h3>🎾 Tennis Letters</h3>
             <p>A Breakout-style ASCII game where the ball is a cycling letter (a-z). Use the device's <strong>Y-axis tilt</strong> to move the paddle and catch the ball. Each catch increments the score and advances the letter. Completing a full alphabet plays a success tune. High scores are persisted to <code class="code-inline">config.ini</code>, along with numerous configurable variables to make the game more challenging.</p>
 
-            <h3>🌧 Letters Rain - <a href="letters-rain.html" class="nav-links">Try it here online!</a></h3>
+            <h3>🌧 Letters Rain - <a href="letters-rain.html" target="_blank" class="nav-links">Try it here online!</a></h3>
             <p>An ASCII falling-letters game in two modes, chosen from a carousel when you open it: <strong>Alphabet</strong> (catch A→Z) and <strong>Words</strong> (catch a word's letters in order, with the word shown in the status bar — caught letters white, the next one cyan, the rest grey; every finished word plays the success tune). Letters and modifiers descend in separate waves — a letter wave (target + decoys) enters first, followed by a modifier wave (<code>+</code> / <code>-</code> / <code>*</code>) 3–5 rows behind. Use the device's <strong>Y-axis tilt</strong> to move the paddle:</p>
             <ul>
                 <li>Catch the <strong>target letter</strong> (shown capitalised in the status bar, A→Z) to score. The remaining decoys clear and a fresh letter wave spawns immediately.</li>
@@ -228,10 +246,10 @@
             </ul>
             <p>Each successive target spawns within 5–15 columns of the previous one, keeping the action in a natural zone. Speed increases with every correct catch. Last score is persisted to <code class="code-inline">config.ini</code>.</p>
 
-            <h3>🐍 Snake Letters</h3>
+            <h3>🐍 Snake Letters - <a href="snake-letters.html" target="_blank" class="nav-links">Try it here online!</a></h3>
             <p>A classic snake ASCII game in two modes, chosen from a carousel when you open it. <strong>Alphabet</strong>: steer the snake using the device's <strong>tilt</strong> to eat letters of the alphabet in order (a-z); after reaching a certain score, "distraction" letters appear—touching any of them ends the game immediately! <strong>Words</strong>: fill in the missing letter of a word shown in the status bar (<code class="code-inline">d_g</code>), with distractions from the first word. The word list is yours to edit in <code class="code-inline">config.ini</code>. Look out for modifiers: <code class="code-inline">-</code> shrinks your snake, and <code class="code-inline">/</code> halves its length. High scores are persisted to <code class="code-inline">config.ini</code>.</p>
 
-            <h3>🎱 Bingo!</h3>
+            <h3>🎱 Bingo! - <a href="bingo-caller.html" target="_blank" class="nav-links">Try it here online!</a></h3>
             <p>An on-device 1–90 number caller for playing classic bingo with printed tickets. A large circle shows the current ball with a status bar underneath (<code class="code-inline">Previous: X</code> / <code class="code-inline">Numbers left: Y</code>). <strong>Tap</strong> anywhere, or <strong>tilt left/right</strong>, to draw the next ball — each draw plays a short cycle-and-reveal animation with a distinct buzzer pattern. <strong>Long-press inside the circle</strong> opens a history popup of every number called so far, in call order. Numbers are drawn from a fresh shuffle each game, so there are never repeats; calling all 90 plays a success tune. Pair it with the printable ticket sheets at <a href="#webconfig">Web Configuration</a>.</p>
 
             <h3>🌅 ToneQuest</h3>
@@ -382,7 +400,7 @@ duration = 10
                         <tr><td>v2.5.0</td><td>✅ released</td><td>Letters Rain game: letters and modifiers fall in waves; catch the target letter (A→Z) with a gyro paddle while dodging wrong letters.</td></tr>
                         <tr><td>v2.6.0</td><td>✅ released</td><td>Snake Letters game: classic snake with alphabet targets, distraction letters, and length modifiers.</td></tr>
                         <tr><td>v2.6.1</td><td>✅ released</td><td>Bugfix: Clock editor touch zones re-derived from drawn geometry (fixes drift between HH/mm/date fields); Metronome BPM label right-aligned to stop digit overlap.</td></tr>
-                        <tr><td>v2.7.0</td><td>✅ released</td><td>Bingo! on-device 1–90 number caller with tap/tilt draw and call-history popup; printable UK/housie ticket sheets served at <code>/bingo</code> from Web Configuration, also mirrored here on the docs site at <a href="bingo.html">Bingo Cards</a>.</td></tr>
+                        <tr><td>v2.7.0</td><td>✅ released</td><td>Bingo! on-device 1–90 number caller with tap/tilt draw and call-history popup; printable UK/housie ticket sheets served at <code>/bingo</code> from Web Configuration, also mirrored here on the docs site at <a href="bingo-cards.html">Bingo Cards</a>.</td></tr>
                         <tr><td>v2.7.1</td><td>✅ released</td><td>WiFi configuration redesign: three-way WiFi / AP / Off mode selector (replaces the on/off toggle); non-blocking connect with automatic AP rescue on a rejected password and exponential backoff for unreachable networks; AP hotspot is now open and uniquely named per device, PIN guards the web UI only; alarm always fires with a drift-warning overlay when no time-sync source is available.</td></tr>
                         <tr><td>v2.7.2</td><td>✅ released</td><td>Three-stage CI/CD pipeline: compile validation against a pinned toolchain, an <code>FW_VERSION</code> guard that fails any PR reusing a released version, and automatic tag-and-release on <code>main</code> — plus a weekly canary that rebuilds against the latest upstream core and libraries. One shared tune engine now backs the apps menu and every game, fixing two tune bugs.</td></tr>
                         <tr><td>v3.0.0</td><td>✅ released</td><td>ESP32-S3 support — one sketch, two boards, all hardware differences in <code>board_config.h</code>; storage abstraction that falls back from SD card to the S3's internal FFat partition (with a generated default <code>config.ini</code> on a virgin device); tilt-only games and emotion cycling hidden at runtime where no IMU answers; swipe left/right to adjust brightness on every board; atomic config writes (temp file + rename); AP SSID MAC read from eFuse instead of the not-yet-created softAP netif; missing-GIF paths reported instead of rendering a blank screen; web file manager at <code>/files</code> — browse, download, delete and upload from the browser, with a three-layer free-space guard; dual-target CI and releases — every release ships a binary set per board, built from one shared target definition.</td></tr>

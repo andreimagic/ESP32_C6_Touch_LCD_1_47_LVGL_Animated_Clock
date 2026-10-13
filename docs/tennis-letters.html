@@ -99,7 +99,7 @@ canvas{display:block;width:100%;touch-action:none}
 <script>
 (()=>{
 const COLS=40,ROWS=9,TH=8;
-const CFG={size:6,ball:500,ballMin:200,ballStep:10,pad:250,padMin:100,padStep:5};
+const CFG={size:6,ball:500,ballMin:200,ballStep:10,pad:150,padMin:50,padStep:5};
 const $=s=>document.querySelector(s);
 const store={get(k,d){try{const v=localStorage.getItem(k);return v===null?d:JSON.parse(v)}catch{return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,Math.round(+v)||a));

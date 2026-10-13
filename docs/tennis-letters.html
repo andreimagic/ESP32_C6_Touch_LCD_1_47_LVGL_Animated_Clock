@@ -18,6 +18,12 @@ h1 i{font-style:normal;color:var(--cyan)}
 button{font:inherit;color:var(--text);background:var(--panel);border:2px solid var(--line);border-radius:8px;padding:.7rem 1.1rem;cursor:pointer;touch-action:manipulation}
 button:hover{background:#17214f}
 button:focus-visible,input:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.card{text-align:left;display:flex;flex-direction:column;gap:.5rem;padding:1rem;border-color:#26335f;min-height:7.5rem}
+.card b{font-size:1.15rem}.card span{font-size:.85rem;color:#9aa6d6;line-height:1.4}
+.card.on{border-color:var(--cyan);background:#142050}
+.card.on b{color:var(--cyan)}
+@media (max-width:520px){.cards{grid-template-columns:1fr}.card{min-height:0}}
 #play{width:100%;margin:12px 0;background:var(--line);color:#fff;border-color:var(--line);font-weight:700;font-size:1.1rem}
 #play:hover{background:#4d89ea}
 .help{font-size:.85rem;line-height:1.6;color:#9aa6d6;margin:.6rem 0}
@@ -62,9 +68,13 @@ canvas{display:block;width:100%;touch-action:none}
 <p class="nav"><a href="snake-letters.html">Play Snake Letters</a> | <a href="letters-rain.html">Letters Rain</a></p>
 
 <section id="menu">
+  <div class="cards" role="radiogroup" aria-label="Game mode">
+    <button class="card on" data-m="0" role="radio" aria-checked="true"><b>Easy</b><span>The ball always bounces at the same diagonal angle, whatever part of the paddle you hit.</span></button>
+    <button class="card" data-m="1" role="radio" aria-checked="false"><b>Hard</b><span>Where the ball lands on the paddle sets its angle, and the paddle's own movement adds spin. The ball never goes straight up.</span></button>
+  </div>
   <button id="play">Play</button>
-  <p class="help">The ball is a letter, a to z, and it bounces off the three walls. Keep it in play with the paddle: every catch scores one and moves on to the next letter. Each bounce off the top wall speeds up both the ball and the paddle. Miss the ball and the game ends. Finish a full alphabet (26 catches) for the win tune.</p>
-  <p class="help"><kbd>←</kbd> <kbd>→</kbd> or <kbd>A</kbd> <kbd>D</kbd> move the paddle (hold to keep moving) &middot; <kbd>Space</kbd> pause &middot; <kbd>Enter</kbd> play &middot; <kbd>Esc</kbd> menu. On a phone, tilt left and right.</p>
+  <p class="help">The ball is a letter, a to z, and it bounces off the three walls. Keep it in play with the paddle: every catch scores one and moves on to the next letter. Each bounce off the top wall speeds up both the ball and the paddle. Miss the ball and the game ends. Finish a full alphabet (26 catches) for the win tune. In Hard, catching on the left of the paddle sends the ball left and on the right sends it right, with the edges giving the steepest angle. A paddle that is moving when it catches adds spin: moving with the ball speeds it up sideways, moving against it flicks it back. The ball never goes straight up, so there is no safe spot to park. Each mode keeps its own high score.</p>
+  <p class="help"><kbd>←</kbd> <kbd>→</kbd> or <kbd>A</kbd> <kbd>D</kbd> move the paddle (hold to keep moving) &middot; <kbd>Space</kbd> pause &middot; <kbd>Enter</kbd> play &middot; <kbd>←</kbd> <kbd>→</kbd> in the menu pick the mode &middot; <kbd>Esc</kbd> menu. On a phone, tilt left and right.</p>
   <div class="row">
     <div id="tiltLbl" hidden><span>Controls</span><div class="seg" role="radiogroup" aria-label="Mobile controls"><button type="button" role="radio" data-v="1" aria-checked="true">Tilt</button><button type="button" role="radio" data-v="0" aria-checked="false">Touch</button></div></div>
     <span id="sensor"></span>
@@ -89,15 +99,17 @@ canvas{display:block;width:100%;touch-action:none}
 <script>
 (()=>{
 const COLS=40,ROWS=9,TH=8;
-const CFG={size:6,ball:500,ballMin:200,ballStep:10,pad:250,padMin:100,padStep:5};
+const CFG={size:6,ball:500,ballMin:200,ballStep:10,pad:150,padMin:50,padStep:5};
 const $=s=>document.querySelector(s);
 const store={get(k,d){try{const v=localStorage.getItem(k);return v===null?d:JSON.parse(v)}catch{return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,Math.round(+v)||a));
 CFG.size=clamp(store.get('tn_size',6),1,10);CFG.ball=clamp(store.get('tn_ball',500),50,2000);
-let best=store.get('tn_best',0),sound=store.get('lr_sound',true);
+const BKEY=['tn_best','tn_hbest'];
+let bests=BKEY.map(k=>store.get(k,0)),mode=0,sound=store.get('lr_sound',true);
 let T=null,screen='menu',keys={l:0,r:0},touchDir=0,tilt=0,tiltOn=false,tiltAsked=false,tiltDenied=false,tiltPref=store.get('lr_tilt',true),ac=null,lt=0;
 const touchDev=('ontouchstart' in window)||navigator.maxTouchPoints>0;
 const cv=$('#cv'),ctx=cv.getContext('2d');
+const best=()=>bests[mode];
 const rnd=n=>Math.floor(Math.random()*n);
 
 /* ---------- sound ---------- */
@@ -112,15 +124,28 @@ const tuneBad=()=>[392,330,262].forEach((f,i)=>tone(f,.18,i*.18));
 function ramp(){
  if(CFG.ballStep>0)T.ballMs=Math.max(Math.min(CFG.ballMin,CFG.ball),T.ballMs-CFG.ballStep);
  if(CFG.padStep>0)T.padMs=Math.max(CFG.padMin,T.padMs-CFG.padStep)}
+// Hard mode: sideways speed (-2..2, never 0) from the landing spot plus paddle spin.
+// Left of centre goes left, right of centre goes right, the edges are steepest.
+// A centre catch keeps the ball's current direction; a moving paddle adds spin:
+// with the ball it speeds it up, against the ball it flicks it back the other way.
+function deflect(x){
+ const c=(CFG.size-1)/2,sp=T.mv,cur=Math.sign(T.dx)||1;
+ if(c===0||Math.abs((x-T.px-c)/c)<.25)return sp?sp*(sp===cur?2:1):cur;
+ const o=(x-T.px-c)/c,m=Math.abs(o),side=o<0?-1:1;
+ const d=Math.max(-2,Math.min(2,side*(m<.7?1:2)+sp));
+ return d||side}
 function ball(){
  let nx=T.bx+T.dx,ny=T.by+T.dy,bounced=false;
- if(nx<=0||nx>=COLS-1){T.dx=-T.dx;nx=T.bx+T.dx;bounced=true}
+ if(nx<1){nx=2-nx;T.dx=-T.dx;bounced=true}
+ else if(nx>COLS-2){nx=2*(COLS-2)-nx;T.dx=-T.dx;bounced=true}
  if(ny<=0){T.dy=-T.dy;ramp();ny=T.by+T.dy;bounced=true}
  if(ny>=ROWS-1){
   if(nx>=T.px&&nx<T.px+CFG.size){
    T.dy=-T.dy;ny=T.by+T.dy;bounced=true;T.score++;
-   const alpha=T.score%26===0,hi=!T.beat&&T.score>best;
-   if(hi){T.beat=true;best=T.score;store.set('tn_best',best);tuneOK()}else if(alpha)tuneOK();
+   if(mode){T.dx=deflect(nx);nx=T.bx+T.dx;   // leave the paddle on the NEW heading straight away
+    if(nx<1){nx=2-nx;T.dx=-T.dx}else if(nx>COLS-2){nx=2*(COLS-2)-nx;T.dx=-T.dx}}
+   const alpha=T.score%26===0,hi=!T.beat&&T.score>best();
+   if(hi){T.beat=true;bests[mode]=T.score;store.set(BKEY[mode],T.score);tuneOK()}else if(alpha)tuneOK();
    T.li=(T.li+1)%26;
   }else{T.bx=nx;T.by=ny;end();return}
  }
@@ -128,16 +153,16 @@ function ball(){
  T.bx=nx;T.by=ny}
 function end(){
  T.run=false;
- if(T.score>best){best=T.score;store.set('tn_best',best)}
+ if(T.score>best()){bests[mode]=T.score;store.set(BKEY[mode],T.score)}
  draw();
  setTimeout(()=>{if(screen!=='game'||T.run)return;(T.beat||T.score>=26)?tuneOK():tuneBad();showEnd()},500)}
-function step(d){T.px=clamp(T.px+d,1,COLS-1-CFG.size)}
+function step(d){T.mv=Math.sign(d);T.px=clamp(T.px+d,1,COLS-1-CFG.size)}
 const useTilt=()=>tiltPref&&tiltOn;
 function padTick(){
  let dir=(keys.r?1:0)-(keys.l?1:0),amt=1;
  if(!dir&&useTilt()){if(tilt>TH)dir=1;else if(tilt<-TH)dir=-1;if(Math.abs(tilt)>28)amt=2}
  if(!dir&&!useTilt())dir=touchDir;
- if(dir)step(dir*amt)}
+ T.mv=dir;if(dir)step(dir*amt)}
 function frame(t){
  requestAnimationFrame(frame);
  const dt=Math.min(100,t-lt);lt=t;
@@ -166,11 +191,12 @@ function draw(){
  for(let r=1;r<ROWS-1;r++){put(0,r,'|','#2c4a8a');put(COLS-1,r,'|','#2c4a8a')}
  for(let i=0;i<CFG.size;i++)put(T.px+i,ROWS-1,'=','#64dcff');
  put(T.bx,T.by,String.fromCharCode(97+T.li),'#fff');   // ball drawn last so a miss stays visible on the paddle row
- const s=`Score: ${T.score}|High Score: ${best}`;
+ const s=`Score: ${T.score}|High Score: ${best()}`;
  if(s!==bar){bar=s;const p=s.split('|');$('#sc').textContent=p[0];$('#lb').textContent=p[1]}}
 let bar='';
 
 /* ---------- screens ---------- */
+function setMode(m){mode=m;document.querySelectorAll('.card').forEach(c=>{const on=+c.dataset.m===m;c.classList.toggle('on',on);c.setAttribute('aria-checked',on)})}
 function show(n){screen=n;$('#menu').hidden=n!=='menu';$('#game').hidden=n!=='game'}
 function overlay(title,l1,l2,gold,btns){
  $('#ot').textContent=title;$('#ot').className=gold?'gold':'';$('#o1').textContent=l1;$('#o2').textContent=l2;
@@ -188,7 +214,7 @@ function pause(){
 function toMenu(){T=null;bar='';hideOv();show('menu')}
 function start(){
  if(touchDev)enableTilt();
- T={bx:COLS>>1,by:ROWS>>1,dx:rnd(2)?1:-1,dy:1,px:(COLS-CFG.size)>>1,score:0,li:0,beat:false,run:true,pause:false,
+ T={bx:COLS>>1,by:ROWS>>1,dx:rnd(2)?1:-1,dy:1,px:(COLS-CFG.size)>>1,mv:0,score:0,li:0,beat:false,run:true,pause:false,
   ballMs:CFG.ball,padMs:CFG.pad,fa:0,pa:0,primary:null};
  bar='';show('game');hideOv();$('#pb').textContent='Pause';resize();draw()}
 
@@ -212,7 +238,11 @@ async function enableTilt(){
 addEventListener('keydown',e=>{
  if(e.target.tagName==='INPUT')return;
  const k=e.key,L=k==='ArrowLeft'||k==='a'||k==='A',R=k==='ArrowRight'||k==='d'||k==='D';
- if(screen==='menu'){if(k==='Enter'&&document.activeElement===document.body)start();return}
+ if(screen==='menu'){
+  if(L||R){setMode(mode?0:1);e.preventDefault()}
+  else if(k==='1'||k==='2')setMode(+k-1);
+  else if(k==='Enter'&&document.activeElement===document.body)start();
+  return}
  if(L||R){e.preventDefault();
   if(L)keys.l=1;else keys.r=1;
   if(!e.repeat&&T&&T.run&&!T.pause){step(L?-1:1);T.pa=0}}
@@ -235,6 +265,7 @@ addEventListener('resize',re);
 addEventListener('orientationchange',()=>setTimeout(re,200));
 
 /* ---------- menu wiring ---------- */
+document.querySelectorAll('.card').forEach(c=>c.onclick=()=>setMode(+c.dataset.m));
 $('#play').onclick=start;$('#pb').onclick=pause;$('#mb').onclick=toMenu;
 $('#snd').checked=sound;$('#snd').onchange=e=>{sound=e.target.checked;store.set('lr_sound',sound)};
 $('#cs').value=CFG.size;$('#cb').value=CFG.ball;

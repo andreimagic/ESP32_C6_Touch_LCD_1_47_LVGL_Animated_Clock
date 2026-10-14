@@ -14,5 +14,6 @@
     }
   ],
   "start_url": "/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/",
-  "display": "standalone"
+  "display": "standalone",
+  "scope": "/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/"
 }

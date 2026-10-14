@@ -51,6 +51,8 @@ canvas{display:block;width:100%;touch-action:none}
 .row .seg button{border:0;border-radius:999px;background:transparent;color:#9aa6d6;padding:.4rem 1.1rem;font-size:.85rem}
 .row .seg button:hover{background:#17214f}
 .row .seg button[aria-checked=true]{background:var(--line);color:#fff;font-weight:700}
+.foot{margin:2rem 0 .5rem;font-size:.75rem;text-align:center;color:#6a72a8}
+.foot a{color:#6a72a8;text-underline-offset:2px}.foot a:hover{color:var(--cyan)}
 [hidden]{display:none!important}
 @media (max-width:520px){.cards{grid-template-columns:1fr}.card{min-height:0}}
 </style>
@@ -59,10 +61,10 @@ canvas{display:block;width:100%;touch-action:none}
 <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png">
 
 <!-- iPhone / iPad Home Screen -->
-<link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon-snake.png">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon-letters.png">
 
 <!-- Web App Manifest -->
-<link rel="manifest" href="snake.webmanifest">
+<link rel="manifest" href="games.webmanifest">
 </head>
 <body>
 <main>
@@ -84,6 +86,8 @@ canvas{display:block;width:100%;touch-action:none}
     <label><input type="checkbox" id="snd" checked> Sound</label>
   </div>
   <p class="help" style="margin-top:0">Without walls the snake wraps to the opposite edge.</p>
+  <div class="row"><button id="installBtn" type="button" hidden>Add to home screen</button></div>
+  <p class="help" id="installHint" hidden>On iPhone or iPad: tap the Share button in Safari, then choose <b>Add to Home Screen</b>.</p>
   <details><summary>Words list</summary>
     <textarea id="wl" rows="4" spellcheck="false" aria-label="Words, separated by commas or new lines"></textarea>
     <div class="row"><button id="wsave">Save words</button><button id="wreset">Reset</button><span id="wmsg"></span></div>
@@ -98,6 +102,7 @@ canvas{display:block;width:100%;touch-action:none}
   <div id="bar"><span id="sc"></span><span id="tg"></span><span id="lb"></span></div>
   <div id="ctl"><button id="pb">Pause</button><button id="mb">Menu</button></div>
 </section>
+<p class="foot"><a href="https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock" target="_blank" rel="noopener">View project on GitHub</a> &middot; <a href="https://andreimagic.github.io/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/" target="_blank" rel="noopener">Project page</a></p>
 </main>
 
 <script>
@@ -318,6 +323,21 @@ if(touchDev){
   cal=null;setSensor(tiltAsked&&!tiltDenied?(tiltOn?'on':'none'):'');enableTilt()});
 }
 requestAnimationFrame(t=>{lt=t;frame(t)});
+})();
+</script>
+<script>
+/* Add to home screen: Chromium shows the real install prompt on tap; iOS Safari has no API, so it gets a hint */
+(()=>{
+ const btn=document.getElementById('installBtn'),hint=document.getElementById('installHint');
+ if(!btn||matchMedia('(display-mode: standalone)').matches||navigator.standalone===true)return;
+ const ios=/iphone|ipad|ipod/i.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+ let dp=null;
+ addEventListener('beforeinstallprompt',e=>{e.preventDefault();dp=e;btn.hidden=false});
+ addEventListener('appinstalled',()=>{dp=null;btn.hidden=true;hint.hidden=true});
+ btn.onclick=async()=>{
+  if(dp){const p=dp;dp=null;btn.hidden=true;p.prompt();try{await p.userChoice}catch{}return}
+  hint.hidden=!hint.hidden};
+ if(ios)btn.hidden=false;
 })();
 </script>
 </body>

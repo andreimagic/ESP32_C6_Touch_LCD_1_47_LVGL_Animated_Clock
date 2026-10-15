@@ -14,5 +14,8 @@
     }
   ],
   "start_url": "/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/letters-rain.html",
-  "display": "standalone"
+  "display": "standalone",
+  "scope": "/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/",
+  "background_color": "#0a0e22",
+  "theme_color": "#0a0e22"
 }

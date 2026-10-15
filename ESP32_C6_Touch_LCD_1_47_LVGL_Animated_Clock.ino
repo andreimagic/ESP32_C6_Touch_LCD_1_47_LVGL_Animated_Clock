@@ -9667,7 +9667,7 @@ static void gm_select_build()
     },
     tennis_cards[GM_MODE_COUNT] = {
       {":-)", "Easy", "Catch the alphabet!"},
-      {">:(", "Hard", "Aim your bounces!"},
+      {";-)", "Hard", "Aim your bounces!"},
     };
   const int mode = gm_mode();
   const auto &card = apps_idx == 4 ? tennis_cards[mode]

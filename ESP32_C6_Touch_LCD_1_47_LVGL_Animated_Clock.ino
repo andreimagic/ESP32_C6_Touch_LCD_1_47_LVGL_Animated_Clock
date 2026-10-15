@@ -65,7 +65,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v3.6.2"
+#define FW_VERSION      "v3.7.0"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -135,7 +135,8 @@ struct AppConfig {
   uint8_t joy_paddle_mode = JPM_DIRECTION; // [joystick] paddle_mode (direction|position)
   bool joy_invert_x      = false;          // [joystick] invert_x — module mounted rotated
   bool joy_invert_y      = false;          // [joystick] invert_y
-  int  tennis_high_score             = 0;       // [tennis] high_score
+  int  tennis_high_score             = 0;       // [tennis] high_score (Easy mode best, in letters)
+  int  tennis_hard_high_score        = 0;       // [tennis] hard_high_score (Hard mode best, in letters)
   int  tennis_paddle_size            = 6;       // [tennis] paddle_size  (chars, 1-10)
   int  tennis_ball_speed_ms          = 500;     // [tennis] ball_speed_ms
   int  tennis_ball_speed_min_ms      = 200;     // [tennis] ball_speed_min_ms
@@ -1700,6 +1701,10 @@ static void load_config()
         cfg.tennis_high_score = atoi(val);
         Serial.printf("[CFG]   tennis.high_score      = %d\n", cfg.tennis_high_score);
       }
+      else if (strcmp(key, "hard_high_score") == 0) {
+        cfg.tennis_hard_high_score = max(0, atoi(val));
+        Serial.printf("[CFG]   tennis.hard_high_score = %d\n", cfg.tennis_hard_high_score);
+      }
       else if (strcmp(key, "paddle_size") == 0) {
         cfg.tennis_paddle_size = atoi(val);
         if (cfg.tennis_paddle_size < 1)  cfg.tennis_paddle_size = 1;
@@ -2105,6 +2110,7 @@ static void save_config()
 
   fw.print("\n[tennis]\n");
   fw.printf("high_score = %d\n",      cfg.tennis_high_score);
+  fw.printf("hard_high_score = %d\n", cfg.tennis_hard_high_score);
   fw.printf("paddle_size = %d\n",     cfg.tennis_paddle_size);
   fw.printf("ball_speed_ms = %d\n",          cfg.tennis_ball_speed_ms);
   fw.printf("ball_speed_min_ms = %d\n",      cfg.tennis_ball_speed_min_ms);
@@ -2231,6 +2237,7 @@ static void seed_tennis_config()
   fa.println();
   fa.println("[tennis]");
   fa.printf("high_score = %d\n",      cfg.tennis_high_score);
+  fa.printf("hard_high_score = %d\n", cfg.tennis_hard_high_score);
   fa.printf("paddle_size = %d\n",     cfg.tennis_paddle_size);
   fa.printf("ball_speed_ms = %d\n",          cfg.tennis_ball_speed_ms);
   fa.printf("ball_speed_min_ms = %d\n",      cfg.tennis_ball_speed_min_ms);
@@ -7155,11 +7162,22 @@ static void app_screen_metronome()
 //
 //  Ball moves via lv_timer (slow fixed speed). Paddle via gyro timer (400ms).
 //  Buzzer beep on every bounce (wall or paddle).
+//
+//  Two modes, picked on the game mode carousel (see "GAME MODE CAROUSEL"):
+//    Easy — the ball always bounces at the same diagonal, wherever it lands.
+//    Hard — where the ball lands on the paddle sets its sideways speed
+//           (-2..2 columns per step, never straight up), and a paddle that is
+//           moving when it catches adds spin. See tl_deflect().
+//  Each mode keeps its own high score (cfg.tennis_high_score / _hard_).
 // ══════════════════════════════════════════════════════════════════════════════
 
 #define TL_COLS        40     // character columns
 #define TL_ROWS         9     // character rows (ball area, no status bar)
 #define TL_GYRO_THRESH 0.25f   // same threshold as brightness tilt
+
+// Tennis modes, offered by the mode carousel (tl_mode)
+#define GM_MODE_EASY   0
+#define GM_MODE_HARD   1
 
 // Field origin is the shared FIELD_X / FIELD_Y (see Shared game services).
 // Field height: TL_ROWS * 16 = 144px. Status bar: ~16px. Total: ~160px (fits 172).
@@ -7175,6 +7193,8 @@ static int   tl_letter_idx  = 0;   // 0='a' .. 25='z'
 static bool  tl_running     = false;
 static bool  tl_paused      = false;
 static bool  tl_beat_high   = false; // did we beat high score this game?
+static int   tl_mode        = GM_MODE_EASY;  // highlighted on the mode carousel, then played
+static int   tl_paddle_mv   = 0;     // paddle's last step: -1 left, 0 idle, +1 right (Hard-mode spin)
 
 static lv_timer_t *tl_ball_timer  = nullptr;
 static lv_timer_t *tl_gyro_timer  = nullptr;
@@ -7182,6 +7202,12 @@ static lv_obj_t   *tl_field_lbl   = nullptr;   // main ASCII art label
 static lv_obj_t   *tl_score_lbl   = nullptr;   // score bar — left
 static lv_obj_t   *tl_hi_lbl      = nullptr;   // score bar — right
 static lv_obj_t   *tl_pause_pop   = nullptr;
+
+// Best score of the mode being played
+static int &tl_high()
+{
+  return tl_mode == GM_MODE_HARD ? cfg.tennis_hard_high_score : cfg.tennis_high_score;
+}
 
 // ── Render the game field into a char buffer and update the label ─────────────
 static void tl_render()
@@ -7234,7 +7260,7 @@ static void tl_render()
 
   // Status bar — two independent labels so digits never shift alignment
   lv_label_set_text_fmt(tl_score_lbl, "Score: %d", tl_score);
-  lv_label_set_text_fmt(tl_hi_lbl,    "High Score: %d", cfg.tennis_high_score);
+  lv_label_set_text_fmt(tl_hi_lbl,    "High Score: %d", tl_high());
 }
 
 // ── Beep helper (non-blocking, direct PWM) ───────────────────────────────────
@@ -7447,6 +7473,30 @@ static void tl_resume_game()
 }
 
 // ── Ball step timer ───────────────────────────────────────────────────────────
+// Hard mode: sideways speed (-2..2, never 0) from where the ball lands on the
+// paddle (x = landing column), plus paddle spin. Left of centre sends it left,
+// right of centre sends it right, the edges are steepest. A centre catch keeps
+// the ball's current direction. A paddle that is moving at the catch adds spin:
+// with the ball it speeds it up, against the ball it flicks it back.
+static int tl_deflect(int x)
+{
+  const int   size = cfg.tennis_paddle_size;
+  const float c    = (size - 1) / 2.0f;
+  const int   sp   = tl_paddle_mv;
+  const int   cur  = (tl_ball_dx < 0) ? -1 : 1;
+
+  if (c == 0.0f) return sp ? sp * (sp == cur ? 2 : 1) : cur;
+  const float o = ((float)x - (float)tl_paddle_x - c) / c;
+  const float m = fabsf(o);
+  if (m < 0.25f) return sp ? sp * (sp == cur ? 2 : 1) : cur;
+
+  const int side = (o < 0.0f) ? -1 : 1;
+  int d = side * (m < 0.7f ? 1 : 2) + sp;
+  if (d >  2) d =  2;
+  if (d < -2) d = -2;
+  return d ? d : side;
+}
+
 static void tl_ball_tick_cb(lv_timer_t * /*t*/)
 {
   if (!tl_running || !apps_cont) return;
@@ -7460,10 +7510,16 @@ static void tl_ball_tick_cb(lv_timer_t * /*t*/)
 
   bool bounced = false;
 
-  // Left/right wall bounce
-  if (nx <= 0 || nx >= TL_COLS - 1) {
+  // Left/right wall bounce: reflect about the first / last playable column
+  // (identical to flipping dx for the Easy 1-column step, and it keeps the
+  // Hard 2-column step inside the field).
+  if (nx < 1) {
+    nx = 2 - nx;
     tl_ball_dx = -tl_ball_dx;
-    nx = tl_ball_x + tl_ball_dx;
+    bounced = true;
+  } else if (nx > TL_COLS - 2) {
+    nx = 2 * (TL_COLS - 2) - nx;
+    tl_ball_dx = -tl_ball_dx;
     bounced = true;
   }
 
@@ -7495,17 +7551,25 @@ static void tl_ball_tick_cb(lv_timer_t * /*t*/)
       ny = tl_ball_y + tl_ball_dy;
       bounced = true;
       tl_score++;
+      if (tl_mode == GM_MODE_HARD) {
+        // New heading from where it landed (and the paddle's spin), applied to
+        // this very step so the ball leaves the paddle the way it was sent.
+        tl_ball_dx = tl_deflect(nx);
+        nx = tl_ball_x + tl_ball_dx;
+        if (nx < 1)                  { nx = 2 - nx;                 tl_ball_dx = -tl_ball_dx; }
+        else if (nx > TL_COLS - 2)   { nx = 2 * (TL_COLS - 2) - nx; tl_ball_dx = -tl_ball_dx; }
+      }
       bool completed_alphabet = (tl_score > 0 && tl_score % 26 == 0);
-      bool just_beat_high     = (!tl_beat_high && tl_score > cfg.tennis_high_score && cfg.tennis_high_score > 0);
+      bool just_beat_high     = (!tl_beat_high && tl_score > tl_high() && tl_high() > 0);
       // also beat if high was 0 and we scored at least 1
-      if (!tl_beat_high && cfg.tennis_high_score == 0 && tl_score > 0) just_beat_high = true;
+      if (!tl_beat_high && tl_high() == 0 && tl_score > 0) just_beat_high = true;
       // (high_score==0 means never played; beating 0 isn't celebrated unless we finish an alphabet)
-      if (!tl_beat_high && tl_score > cfg.tennis_high_score && tl_score >= 26) just_beat_high = true;
+      if (!tl_beat_high && tl_score > tl_high() && tl_score >= 26) just_beat_high = true;
       // Simpler: beat high score if score strictly exceeds stored best
-      just_beat_high = (!tl_beat_high && tl_score > cfg.tennis_high_score);
+      just_beat_high = (!tl_beat_high && tl_score > tl_high());
       if (just_beat_high) {
         tl_beat_high = true;
-        cfg.tennis_high_score = tl_score;
+        tl_high() = tl_score;
         save_config();
         tune_play_success();    // winning tune for new high score
       } else if (completed_alphabet) {
@@ -7529,8 +7593,8 @@ static void tl_ball_tick_cb(lv_timer_t * /*t*/)
       tl_render();  // paint ball on paddle row
 
       // Save high score if beaten
-      if (tl_score > cfg.tennis_high_score) {
-        cfg.tennis_high_score = tl_score;
+      if (tl_score > tl_high()) {
+        tl_high() = tl_score;
         save_config();
       }
 
@@ -7581,7 +7645,9 @@ static void tl_gyro_tick_cb(lv_timer_t * /*t*/)
 #if BOARD_HAS_JOYSTICK
   if (joy_active()) {
     if (cfg.joy_paddle_mode == JPM_POSITION) {
-      tl_paddle_x = joy_paddle_target(lo, hi);
+      const int old_x = tl_paddle_x;
+      tl_paddle_x  = joy_paddle_target(lo, hi);
+      tl_paddle_mv = (tl_paddle_x > old_x) - (tl_paddle_x < old_x);
       tl_render();
       return;
     }
@@ -7601,6 +7667,7 @@ static void tl_gyro_tick_cb(lv_timer_t * /*t*/)
     else if (y < -TL_GYRO_THRESH) step = +1;   // tilt left  → paddle moves right
   }
 
+  tl_paddle_mv = step;              // Hard mode reads this as spin at the catch
   if      (step < 0 && tl_paddle_x > lo) tl_paddle_x--;
   else if (step > 0 && tl_paddle_x < hi) tl_paddle_x++;
 
@@ -7623,6 +7690,7 @@ static void tl_game_start()
   tl_alphabets  = 0;
   tl_letter_idx = 0;
   tl_beat_high  = false;
+  tl_paddle_mv  = 0;
 
   // Build game screen
   lv_obj_clean(apps_cont);
@@ -9495,7 +9563,7 @@ static void sn_move_tick_cb(lv_timer_t * /*t*/)
 // ══════════════════════════════════════════════════════════════════════════════
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  GAME MODE CAROUSEL (app_subphase == 2) — Letters Rain and Snake Letters
+//  GAME MODE CAROUSEL (app_subphase == 2) — Tennis, Letters Rain and Snake Letters
 //
 //  Entering either game first offers its modes: one full-screen card per mode,
 //  built like an apps carousel card. Arrow zones page it, the centre zone
@@ -9508,7 +9576,7 @@ static void sn_move_tick_cb(lv_timer_t * /*t*/)
 //  (joy_click_dispatch). Cards stay clean: no scores or progress, those belong
 //  in the game.
 //
-//  Each game keeps its own selection (lr_mode, sn_mode), which survives a trip
+//  Each game keeps its own selection (tl_mode, lr_mode, sn_mode), which survives a trip
 //  back to the apps carousel, so re-entering lands on the mode last played.
 //  apps_idx says which game the carousel belongs to.
 // ══════════════════════════════════════════════════════════════════════════════
@@ -9516,13 +9584,14 @@ static void gm_select_build();
 
 static int &gm_mode()
 {
-  return apps_idx == 5 ? lr_mode : sn_mode;
+  return apps_idx == 4 ? tl_mode : apps_idx == 5 ? lr_mode : sn_mode;
 }
 
 static void gm_start()
 {
-  if (apps_idx == 5) lr_game_start();
-  else               sn_game_start();
+  if      (apps_idx == 4) tl_game_start();
+  else if (apps_idx == 5) lr_game_start();
+  else                    sn_game_start();
 }
 
 static void gm_step(int dir)
@@ -9581,8 +9650,9 @@ static lv_obj_t *gm_zone(int x, int w, lv_event_code_t code, lv_event_cb_t cb)
 
 static void gm_select_build()
 {
-  const bool rain = (apps_idx == 5);
-  if (rain) lr_stop(); else sn_stop();
+  if      (apps_idx == 4) tl_stop();
+  else if (apps_idx == 5) lr_stop();
+  else                    sn_stop();
   lv_obj_clean(apps_cont);
   app_subphase = 2;
 
@@ -9594,9 +9664,15 @@ static void gm_select_build()
     snake_cards[GM_MODE_COUNT] = {
       {"abc", "Alphabet", "Catch the Alphabet!"},
       {"d_g", "Words",    "Fix the words!"},
+    },
+    tennis_cards[GM_MODE_COUNT] = {
+      {":-)", "Easy", "Catch the alphabet!"},
+      {";-)", "Hard", "Aim your bounces!"},
     };
   const int mode = gm_mode();
-  const auto &card = rain ? rain_cards[mode] : snake_cards[mode];
+  const auto &card = apps_idx == 4 ? tennis_cards[mode]
+                   : apps_idx == 5 ? rain_cards[mode]
+                   :                 snake_cards[mode];
 
   lv_obj_t *larr = lv_label_create(apps_cont);
   lv_label_set_text(larr, LV_SYMBOL_LEFT);
@@ -10765,12 +10841,8 @@ static void app_screen_start()
     app_screen_dice_start();
     return;
   }
-  if (apps_idx == 4) {
-    tl_game_start();
-    return;
-  }
-  if (apps_idx == 5 || apps_idx == 6) {
-    gm_select_build();   // Letters Rain / Snake Letters: pick Alphabet or Words first
+  if (apps_idx >= 4 && apps_idx <= 6) {
+    gm_select_build();   // Tennis: Easy or Hard. Letters Rain / Snake Letters: Alphabet or Words
     return;
   }
   if (apps_idx == 7) {
@@ -11121,10 +11193,11 @@ static void apps_carousel_build()
     lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
     // se_flash(name_lbl); se_flash(desc_lbl);
 
-    if (cfg.tennis_high_score > 0) {
+    const int tl_best_any = max(cfg.tennis_high_score, cfg.tennis_hard_high_score);
+    if (tl_best_any > 0) {
       lv_obj_t *hs_lbl = lv_label_create(apps_cont);
       char hs_buf[32];
-      snprintf(hs_buf, sizeof(hs_buf), "Best: %d letters", cfg.tennis_high_score);
+      snprintf(hs_buf, sizeof(hs_buf), "Best: %d letters", tl_best_any);
       lv_label_set_text(hs_lbl, hs_buf);
       lv_obj_set_style_text_font(hs_lbl, &lv_font_montserrat_14, 0);
       lv_obj_set_style_text_color(hs_lbl, lv_color_make(255, 210, 60), 0);

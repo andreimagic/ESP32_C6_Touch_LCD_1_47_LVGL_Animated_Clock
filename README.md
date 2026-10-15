@@ -60,7 +60,7 @@ One sketch builds for both boards. The target is detected at compile time and ev
 | **Rock Paper Scissors** | Animated 3-2-1 countdown shake → CPU reveals its hand → GO! Shake or hard-tilt the device to restart |
 | **Rolling Dice** | Animated rolling frames → final dice face reveal. Shake or hard-tilt to re-roll |
 | **Flip a Coin** | Instant flip with ASCII coin art (heads/tails) |
-| **Tennis Letters** | Breakout-style ASCII game. Catch cycling letters (a-z) with a tilt-controlled paddle. Score points and complete alphabets |
+| **Tennis Letters** | Breakout-style ASCII game with Easy and Hard modes. Catch cycling letters (a-z); Hard mode lets paddle impact position and movement steer the ball. Separate high scores per mode |
 | **Letters Rain** | Falling-letters ASCII game in two modes: **Alphabet** — catch the target letter (A→Z) with a gyro-controlled paddle — and **Words** — catch a word's letters in order. Wrong catches shrink the paddle; `+` / `-` modify its size; `*` restores the default. Miss the target letter and the game ends. Alphabet's last score and Words' best saved to `config.ini` |
 | **Snake Letters** | Classic snake ASCII game in two modes: **Alphabet** — steer using tilt to eat a-z in order — and **Words** — catch the letter missing from a word (`d_g`). Avoid distraction letters and manage length with modifiers. Each mode's high score is persisted to `config.ini` |
 | **KY-023 joystick** *(S3)* | Optional £2 module on the expansion header that stands in for the missing IMU, bringing Tennis Letters, Letters Rain, Snake Letters and ToneQuest back to the S3. Off by default and claims no pins until enabled — see [KY-023 Joystick](#ky-023-joystick-s3-only) |
@@ -577,6 +577,7 @@ dates = 01-01-1970,06-08-2017
 
 [tennis]
 high_score = 0
+hard_high_score = 0
 paddle_size = 6
 ball_speed_ms = 500
 ball_speed_min_ms = 200
@@ -1082,13 +1083,29 @@ A full-screen BPM metronome driven by **hardware ESP32 timer** for sample-accura
 
 #### Tennis Letters
 
-A Breakout-style ASCII game where the ball is a cycling letter (a→z).
+A Breakout-style ASCII game where the ball is a cycling letter (a→z). Entering
+the game opens a mode carousel; use the arrows, swipe or joystick to choose a
+mode, tap (or press the joystick button) to start, and long-press to return to
+the Apps carousel.
 
-- **Gameplay:** Use the device's **Y-axis tilt** to move the paddle (`___`) and catch the ball. On an S3 with a [joystick](#ky-023-joystick-s3-only), push it left/right instead — or set `[joystick] paddle_mode = position` to have the paddle track the stick's deflection and hold there.
-- **Scoring:** Each catch increments the score and advances the letter. Completing a full alphabet (26 letters) plays a success tune.
-- **Game Over:** Losing the ball ends the game. High scores are persisted to `config.ini`.
-- **Controls:** Tilt left/right to move; tap the game-over popup to restart, long-press to exit.
-- **Configuration:** The `config.ini` file includes various configurable variables to increase the challenge.
+- **Easy:** The ball follows the same diagonal after every paddle catch, no
+  matter where it lands.
+- **Hard:** The landing point sets the ball's sideways heading: catches toward
+  the paddle's edges send it farther sideways, while a centre catch keeps the
+  current direction. Paddle movement at impact adds spin, either accelerating
+  or reversing the sideways heading. The ball never travels straight up.
+- **Controls:** Tilt left/right to move the paddle. On an S3 with a [KY-023
+  joystick](#ky-023-joystick-s3-only), steer with the stick; `[joystick]
+  paddle_mode` selects direction or position control. Tap during play to pause,
+  tap the pause popup to resume, and tap the game-over popup to play again.
+- **Scoring:** Each catch scores one and advances the letter. Completing each
+  alphabet (26 catches) plays the success tune. Easy and Hard keep independent
+  high scores, shown in-game; the Apps carousel shows the better of the two.
+- **Configuration:** `[tennis] high_score` stores the Easy record and
+  `[tennis] hard_high_score` stores the Hard record. Older config files do not
+  need manual changes; the new Hard record starts at zero and is written on
+  the next config save. Paddle size and ball/paddle speed settings remain
+  shared between modes.
 
 #### Letters Rain
 
@@ -1838,7 +1855,8 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v3.5.0 | ✅ released | **Snake Letters: Words mode** — a new mode carousel lets you choose Alphabet or Words; in Words, catch the missing letter in each configurable word, with a separate persisted high score. **Toolchain refresh and warning cleanup** — pins LVGL 9.6.0 and Arduino_GFX 1.6.8; updates deprecated LVGL configuration and object-flag APIs, and replaces the deprecated Node 20 Arduino CLI setup action with a pinned, checksum-verified CLI install. Clean builds report zero warnings on both boards. **Internal flash on the ESP32-C6** — the C6 gets the same SD-primary, FFat-fallback storage the S3 has. A new partition table (`partitions/esp32c6-ffat-8MB.csv`: one 3 MB app slot plus a 4.9 MB FFat partition) lets a C6 run without a card: GIFs and `config.ini` are mirrored from SD at boot, then used as fallback when the card is removed. Applied to the C6 build only; the S3 partition layout is unchanged. **Upgrading a C6 from v3.4.0 or earlier requires the `-full.bin`** — the `-app.bin` does not write the new table. SD-card settings and GIFs are untouched; a card inserted on first boot is mirrored to FFat. |
 | v3.6.0 | ✅ released | **Letters Rain: Alphabet and Words modes** — entering Letters Rain now opens the same mode carousel as Snake Letters (arrows, swipe or joystick to page; tap or the button to play; hold or joystick up to go back). **Words** shows a whole word in the status bar — caught letters white, the next one cyan, the rest grey — and you catch its letters in order; every finished word plays the success tune and scores one, the list loops forever, and the game ends only on a missed target. New `[letter_rain]` keys `words` and `words_high_score`; `last_score` stays the Alphabet letter count. Decoys, modifiers, speed and paddle are unchanged. The mode carousel and the word-list parser are now shared by both games |
 | v3.6.1 | ✅ released | **Fix: GIFs fail with "Not enough RAM" when an SD card is inserted** (#77) — on boards with internal flash, FFat stayed mounted next to the card for the whole session and held enough heap that the ESP32-C6 could show one GIF and then no more. It is now mounted only while the card is mirrored at boot, then released. `config.ini` is also no longer re-copied to internal flash on every boot: it is compared byte for byte and copied only when it changed, so the "Copying to internal flash" screen appears only when there is something to copy. Running without a card is unchanged. |
-| v3.6.2 | 🚀 new | **Letters Rain: scattered waves and continuous rain** — decoys now enter on staggered rows, and another decoy drops every three fall ticks. Decoys keep falling after the target is caught, making each new wave overlap the existing rain. A larger entity pool handles the busier field, while target selection and simultaneous catches are resolved consistently so wrong-letter catches still count as wrong. |
+| v3.6.2 | ✅ released | **Letters Rain: scattered waves and continuous rain** — decoys now enter on staggered rows, and another decoy drops every three fall ticks. Decoys keep falling after the target is caught, making each new wave overlap the existing rain. A larger entity pool handles the busier field, while target selection and simultaneous catches are resolved consistently so wrong-letter catches still count as wrong. |
+| v3.7.0 | 🚀 new | **Tennis Letters: Easy and Hard modes** — Tennis now opens with a mode carousel. Easy keeps its fixed bounce; Hard aims the ball according to where it hits the paddle and adds spin from paddle movement, so the ball cannot be safely parked straight above the paddle. Each mode has its own persisted high score (`[tennis] high_score` and `hard_high_score`); the Apps carousel shows the better record. Existing config files remain compatible, and the shared paddle and speed settings are unchanged. |
 
 ## License
 

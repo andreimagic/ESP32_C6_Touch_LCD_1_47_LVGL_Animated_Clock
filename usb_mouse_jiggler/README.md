@@ -36,3 +36,10 @@ esptool --chip esp32s3 --port /dev/ttyACM0 write-flash 0x0 usb-mouse-xiao-esp32s
 
 Because the firmware has no serial port, re-flashing needs download mode:
 hold BOOT while plugging in the USB cable, then run esptool.
+
+## CI
+
+`.github/workflows/usb-mouse.yml` builds this sketch and uploads the trimmed
+`usb-mouse-xiao-esp32s3-<sha>-full.bin` as a workflow artifact whenever files in
+this folder change. It is independent of `build.yml` / `release.yml`, so it never
+affects clock releases or the web flasher.

@@ -1,0 +1,136 @@
+# .github/workflows/usb-mouse.yml
+#
+# Builds the standalone USB mouse jiggler (usb_mouse_jiggler/) for the Seeed
+# XIAO ESP32-S3 and uploads a flash-at-0x0 image as an artifact.
+#
+# Deliberately separate from build.yml / release.yml: those compile the clock
+# sketch at the repo root for every entry in board-targets.json, key their
+# artifacts and the web-flasher mirror on `chip`, and publish clock releases.
+# This sketch is a different product on the same chip family (esp32s3), so it
+# has its own workflow, runs only when its own files change, and cannot affect
+# a clock release.
+#
+# The image is trimmed exactly like release.yml's "Collect release assets"
+# step: the core's merged.bin is padded to the whole chip, so it is cut after
+# the app (0x10000 + app size, rounded to 4KB), refusing if any non-0xFF byte
+# lies above the cut.
+
+name: USB mouse
+
+on:
+  pull_request:
+    paths:
+      - 'usb_mouse_jiggler/**'
+      - '.github/workflows/usb-mouse.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'usb_mouse_jiggler/**'
+      - '.github/workflows/usb-mouse.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: usb-mouse-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  ARDUINO_CLI_VERSION: "1.5.1"      # same pin as .github/actions/arduino-build
+  CORE_VERSION: "3.3.11"            # same core as board-targets.json
+  # USBMode=default is USB-OTG (TinyUSB), required for a HID mouse.
+  # CDCOnBoot=cdc is "Disabled" (labels are swapped in the XIAO definition), so
+  # the board enumerates as a mouse only, with no serial port.
+  FQBN: "esp32:esp32:XIAO_ESP32S3:USBMode=default,CDCOnBoot=cdc,PartitionScheme=default_8MB,DebugLevel=none"
+  SKETCH: usb_mouse_jiggler
+
+jobs:
+  build:
+    name: Seeed XIAO ESP32-S3
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install arduino-cli
+        run: |
+          set -euo pipefail
+          tarball="arduino-cli_${ARDUINO_CLI_VERSION}_Linux_64bit.tar.gz"
+          base="https://github.com/arduino/arduino-cli/releases/download/v${ARDUINO_CLI_VERSION}"
+          dir="$RUNNER_TEMP/arduino-cli"
+          mkdir -p "$dir"
+          cd "$dir"
+          curl -fsSLO "$base/$tarball"
+          curl -fsSL "$base/${ARDUINO_CLI_VERSION}-checksums.txt" | grep " ${tarball}\$" | sha256sum -c -
+          tar -xzf "$tarball" arduino-cli
+          echo "$dir" >> "$GITHUB_PATH"
+
+      - name: Restore Arduino cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.arduino15
+          key: arduino-usb-mouse-${{ runner.os }}-core${{ env.CORE_VERSION }}
+
+      - name: Install ESP32 core
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli config add board_manager.additional_urls \
+            https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install "esp32:esp32@${CORE_VERSION}"
+
+      - name: Compile
+        run: |
+          set -o pipefail
+          arduino-cli compile \
+            --fqbn "$FQBN" \
+            --warnings default \
+            --output-dir build-out \
+            "$SKETCH" 2>&1 | tee compile.log
+
+      - name: Build flashable full image
+        run: |
+          set -euo pipefail
+          MERGED="build-out/${SKETCH}.ino.merged.bin"
+          APP="build-out/${SKETCH}.ino.bin"
+          [ -f "$MERGED" ] && [ -f "$APP" ] \
+            || { echo "::error::expected build output missing"; ls -la build-out; exit 1; }
+
+          APP_END=$(( 0x10000 + $(stat -c%s "$APP") ))
+          CUT=$(( (APP_END + 4095) / 4096 * 4096 ))      # round to a 4KB sector
+          STRAY=$(tail -c "+$(( CUT + 1 ))" "$MERGED" | tr -d '\377' | wc -c)
+          if [ "$STRAY" -ne 0 ]; then
+            echo "::error::$STRAY non-0xFF bytes above offset $CUT in $MERGED — refusing to truncate."
+            exit 1
+          fi
+
+          mkdir -p dist
+          OUT="dist/usb-mouse-xiao-esp32s3-${GITHUB_SHA::7}-full.bin"
+          head -c "$CUT" "$MERGED" > "$OUT"
+          {
+            echo "### Seeed XIAO ESP32-S3 USB mouse"
+            echo ""
+            echo '```'
+            grep -E "of (program storage space|dynamic memory)" compile.log || echo "no size data"
+            echo '```'
+            echo ""
+            echo "Flashable image: \`$(basename "$OUT")\` ($(stat -c%s "$OUT") bytes) — write at \`0x0\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload flashable full image
+        uses: actions/upload-artifact@v7
+        with:
+          name: usb-mouse-xiao-esp32s3-${{ github.sha }}
+          path: dist/*-full.bin
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload compile log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: compile-log-usb-mouse
+          path: compile.log
+          retention-days: 7

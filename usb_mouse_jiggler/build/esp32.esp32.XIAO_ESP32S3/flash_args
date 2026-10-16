@@ -1,0 +1,5 @@
+--flash-mode dio --flash-freq 80m --flash-size 8MB
+0x0 usb_mouse_jiggler.ino.bootloader.bin
+0x8000 usb_mouse_jiggler.ino.partitions.bin
+0xe000 boot_app0.bin
+0x10000 usb_mouse_jiggler.ino.bin

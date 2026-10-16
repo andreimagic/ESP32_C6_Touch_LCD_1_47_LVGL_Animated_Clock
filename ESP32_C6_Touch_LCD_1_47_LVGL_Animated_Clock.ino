@@ -65,7 +65,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v3.7.0"
+#define FW_VERSION      "v3.8.0"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -135,6 +135,10 @@ struct AppConfig {
   uint8_t joy_paddle_mode = JPM_DIRECTION; // [joystick] paddle_mode (direction|position)
   bool joy_invert_x      = false;          // [joystick] invert_x — module mounted rotated
   bool joy_invert_y      = false;          // [joystick] invert_y
+  bool joy_mouse         = true;           // [joystick] mouse — in jiggler mode the stick moves the
+                                           //   USB mouse and the button is the left click
+  int  joy_mouse_speed   = 8;              // [joystick] mouse_speed (1-40) — pixels per 20 ms tick
+                                           //   at full deflection
   int  tennis_high_score             = 0;       // [tennis] high_score (Easy mode best, in letters)
   int  tennis_hard_high_score        = 0;       // [tennis] hard_high_score (Hard mode best, in letters)
   int  tennis_paddle_size            = 6;       // [tennis] paddle_size  (chars, 1-10)
@@ -266,6 +270,10 @@ static void usb_persona_begin(void);
 static void show_usb_carousel(void);
 static void hid_jiggle_arm(void);
 static void hid_jiggle_stop(void);
+#if BOARD_HAS_JOYSTICK
+static void hid_joy_mouse_update(void);   // joystick -> USB mouse movement (jiggler mode)
+static void hid_joy_button(bool down);    // joystick button -> USB mouse left button
+#endif
 #endif
 
 
@@ -635,6 +643,12 @@ static void joy_poll_cb(lv_timer_t * /*t*/)
   joy_vx = cfg.joy_invert_x ? -vx : vx;
   joy_vy = cfg.joy_invert_y ? -vy : vy;
 
+#if BOARD_HAS_USB_HID
+  // Jiggler mode: the stick drives the host's mouse pointer. A no-op unless
+  // the jiggler overlay is open and cfg.joy_mouse is on.
+  hid_joy_mouse_update();
+#endif
+
   // SW is active-low through the internal pull-up.
   const bool released = (digitalRead(JOY_SW) != LOW);
   const uint32_t now  = millis();
@@ -643,6 +657,11 @@ static void joy_poll_cb(lv_timer_t * /*t*/)
     joy_sw_since = now;
   } else if (released != joy_sw_stable && (now - joy_sw_since) >= JOY_SW_DEBOUNCE_MS) {
     joy_sw_stable = released;
+#if BOARD_HAS_USB_HID
+    // Mirror the physical button onto the mouse's left button, press AND
+    // release, so a held button drags. No-op outside jiggler mode.
+    hid_joy_button(!released);
+#endif
     if (!released) joy_click_dispatch();   // act on the press, not the release
   }
 
@@ -659,6 +678,9 @@ static void joy_stop()
 {
   if (joy_timer) { lv_timer_del(joy_timer); joy_timer = nullptr; }
   if (joy_enabled) {
+#if BOARD_HAS_USB_HID
+    hid_joy_button(false);          // never leave the mouse button held down
+#endif
     // Hand the pins back high-impedance. Nothing else on this board wants them,
     // but leaving a pull-up asserted on a header pin the user has just been told
     // is free would be a trap.
@@ -1107,6 +1129,12 @@ paddle_mode = direction
 # Set either to true if the module is mounted rotated and an axis reads backwards
 invert_x = false
 invert_y = false
+# Jiggler mode (USB mouse): the stick moves the host's pointer and the stick
+# button is the left click (hold it to drag). Needs extra_games = true, since
+# that is what powers the stick. false = the stick does nothing in jiggler mode.
+mouse = true
+# Pixels per 20 ms at full deflection (1-40). Light pushes move far less.
+mouse_speed = 8
 )INI"
 #endif
 R"INI(
@@ -1692,6 +1720,14 @@ static void load_config()
         cfg.joy_invert_y = (strcmp(val,"true")==0 || strcmp(val,"1")==0);
         Serial.printf("[CFG]   joystick.invert_y      = %s\n", cfg.joy_invert_y?"true":"false");
       }
+      else if (strcmp(key, "mouse") == 0) {
+        cfg.joy_mouse = (strcmp(val,"true")==0 || strcmp(val,"1")==0);
+        Serial.printf("[CFG]   joystick.mouse         = %s\n", cfg.joy_mouse?"true":"false");
+      }
+      else if (strcmp(key, "mouse_speed") == 0) {
+        cfg.joy_mouse_speed = max(1, min(40, atoi(val)));
+        Serial.printf("[CFG]   joystick.mouse_speed   = %d\n", cfg.joy_mouse_speed);
+      }
     }
 #endif
 
@@ -2106,6 +2142,8 @@ static void save_config()
   fw.printf("paddle_mode = %s\n",       cfg.joy_paddle_mode == JPM_POSITION ? "position" : "direction");
   fw.printf("invert_x = %s\n",          cfg.joy_invert_x ? "true" : "false");
   fw.printf("invert_y = %s\n",          cfg.joy_invert_y ? "true" : "false");
+  fw.printf("mouse = %s\n",             cfg.joy_mouse ? "true" : "false");
+  fw.printf("mouse_speed = %d\n",       cfg.joy_mouse_speed);
 #endif
 
   fw.print("\n[tennis]\n");
@@ -2448,6 +2486,8 @@ static void seed_joystick_config()
   fa.printf("paddle_mode = %s\n",       cfg.joy_paddle_mode == JPM_POSITION ? "position" : "direction");
   fa.printf("invert_x = %s\n",          cfg.joy_invert_x ? "true" : "false");
   fa.printf("invert_y = %s\n",          cfg.joy_invert_y ? "true" : "false");
+  fa.printf("mouse = %s\n",             cfg.joy_mouse ? "true" : "false");
+  fa.printf("mouse_speed = %d\n",       cfg.joy_mouse_speed);
   fa.close();
   Serial.println("[CFG] [joystick] section seeded into config.ini.");
 }
@@ -12135,6 +12175,83 @@ static uint32_t     hid_gif_open_at  = 0;
 static uint32_t     hid_next_move_at = 0;
 static bool          hid_armed        = false;
 
+#if BOARD_HAS_JOYSTICK
+// ── Joystick -> mouse ────────────────────────────────────────────────────────
+// While the jiggler overlay is open (hid_jiggle_timer exists) the KY-023 steers
+// the host's pointer and its button is the left mouse button. It is live from
+// the moment the overlay opens, not after the jiggler's 5 s arming delay.
+//
+// joy_x()/joy_y() are already dead-zoned and normalised to +-1 with invert_x /
+// invert_y applied, and joy_y() > 0 means "pushed up" — the opposite of a HID
+// mouse's +Y, hence the sign flip below. Called every joy poll (20 ms), so
+// cfg.joy_mouse_speed is pixels per 20 ms at full deflection.
+//
+// The response is quadratic: gentle pushes give fine control, a full push
+// gives full speed. The fractional part of each step is carried to the next
+// tick, otherwise anything under one pixel per tick would round to zero and
+// the pointer could never creep.
+//
+// SendReport() returns straight away when no host is attached, so an
+// unplugged or power-only USB lead cannot stall LVGL here.
+static bool  hid_joy_btn_down = false;
+static float hid_joy_rem_x    = 0.0f;
+static float hid_joy_rem_y    = 0.0f;
+
+static inline bool hid_joy_mouse_live()
+{
+  return cfg.joy_mouse && hid_jiggle_timer != nullptr;
+}
+
+// A person is driving, so the OS is not idle: push the next automatic nudge
+// out. It would otherwise yank the pointer mid-aim.
+static void hid_joy_postpone_jiggle()
+{
+  if (!hid_armed) return;
+  hid_next_move_at = millis() + (uint32_t)random(15000, 45000);
+}
+
+static void hid_joy_mouse_update()
+{
+  if (!hid_joy_mouse_live()) { hid_joy_rem_x = hid_joy_rem_y = 0.0f; return; }
+
+  const float vx = joy_x();
+  const float vy = joy_y();
+  if (vx == 0.0f && vy == 0.0f) { hid_joy_rem_x = hid_joy_rem_y = 0.0f; return; }
+
+  const float spd = (float)cfg.joy_mouse_speed;
+  const float fx  =  vx * fabsf(vx) * spd + hid_joy_rem_x;
+  const float fy  = -vy * fabsf(vy) * spd + hid_joy_rem_y;   // stick up = pointer up
+
+  int dx = (int)fx;                     // truncates toward zero
+  int dy = (int)fy;
+  hid_joy_rem_x = fx - (float)dx;
+  hid_joy_rem_y = fy - (float)dy;
+  if (dx >  127) dx =  127;
+  if (dx < -127) dx = -127;
+  if (dy >  127) dy =  127;
+  if (dy < -127) dy = -127;
+
+  if (dx != 0 || dy != 0) {
+    UsbJiggleMouse.move((int8_t)dx, (int8_t)dy);
+    hid_joy_postpone_jiggle();
+  }
+}
+
+// Press and release are mirrored, so click = tap, and holding drags.
+static void hid_joy_button(bool down)
+{
+  if (down) {
+    if (!hid_joy_mouse_live() || hid_joy_btn_down) return;
+    UsbJiggleMouse.press(MOUSE_LEFT);
+    hid_joy_btn_down = true;
+    hid_joy_postpone_jiggle();
+  } else if (hid_joy_btn_down) {
+    UsbJiggleMouse.release(MOUSE_LEFT);
+    hid_joy_btn_down = false;
+  }
+}
+#endif  // BOARD_HAS_JOYSTICK
+
 // Splits (total_dx,total_dy) into a few small relative HID reports instead of one
 // teleporting jump, then sends that exact sequence again reversed and negated.
 // The last step of the outbound leg carries the division remainder, so the raw
@@ -12173,6 +12290,9 @@ static void hid_send_nudge_round_trip(int total_dx, int total_dy)
 
 static void hid_jiggle_move_cb(lv_timer_t *t)
 {
+#if BOARD_HAS_JOYSTICK
+  if (hid_joy_btn_down) return;   // mid-click or mid-drag — never nudge the pointer then
+#endif
   uint32_t now = millis();
   if (!hid_armed) {
     if (now - hid_gif_open_at < 5000) return;   // the mandated 5s delay
@@ -12208,6 +12328,12 @@ static void hid_jiggle_stop()
 {
   if (hid_jiggle_timer) { lv_timer_del(hid_jiggle_timer); hid_jiggle_timer = nullptr; }
   hid_armed = false;
+#if BOARD_HAS_JOYSTICK
+  // The overlay can be closed by touch while the stick button is held. Let go
+  // of the mouse button, or the host is left with it stuck down.
+  if (hid_joy_btn_down) { UsbJiggleMouse.release(MOUSE_LEFT); hid_joy_btn_down = false; }
+  hid_joy_rem_x = hid_joy_rem_y = 0.0f;
+#endif
 }
 
 // ── USB bring-up — called once, at the very top of setup() ───────────────────

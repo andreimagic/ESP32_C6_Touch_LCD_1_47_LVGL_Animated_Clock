@@ -63,7 +63,7 @@ One sketch builds for both boards. The target is detected at compile time and ev
 | **Tennis Letters** | Breakout-style ASCII game with Easy and Hard modes. Catch cycling letters (a-z); Hard mode lets paddle impact position and movement steer the ball. Separate high scores per mode |
 | **Letters Rain** | Falling-letters ASCII game in two modes: **Alphabet** — catch the target letter (A→Z) with a gyro-controlled paddle — and **Words** — catch a word's letters in order. Wrong catches shrink the paddle; `+` / `-` modify its size; `*` restores the default. Miss the target letter and the game ends. Alphabet's last score and Words' best saved to `config.ini` |
 | **Snake Letters** | Classic snake ASCII game in two modes: **Alphabet** — steer using tilt to eat a-z in order — and **Words** — catch the letter missing from a word (`d_g`). Avoid distraction letters and manage length with modifiers. Each mode's high score is persisted to `config.ini` |
-| **KY-023 joystick** *(S3)* | Optional £2 module on the expansion header that stands in for the missing IMU, bringing Tennis Letters, Letters Rain, Snake Letters and ToneQuest back to the S3. Off by default and claims no pins until enabled — see [KY-023 Joystick](#ky-023-joystick-s3-only) |
+| **KY-023 joystick** *(S3)* | Optional module on the expansion header restores the tilt games and can control the USB mouse while the smile GIF is open. Off by default and claims no pins until enabled — see [KY-023 Joystick](#ky-023-joystick-s3-only) |
 | **Bingo!** | On-device 1–90 number caller. Tap or tilt to draw a ball with a cycling reveal animation and buzzer; long-press the circle for a history popup of every number called. No repeats — powered by a fresh Fisher-Yates shuffle each game |
 | **Printable Bingo tickets** | Web Configuration page links to `/bingo` — a self-contained, in-browser generator for UK/housie-style 3×9 ticket sheets (1–90) to pair with the on-device caller. Fresh tickets every load, no PIN needed |
 | **Gyro shake/tilt trigger** | While playing RPS or Dice, physically shaking the device (ΔaccelZ > 1.8 g) or tilting it hard sideways (accelY > 1.0 g) restarts the game — no tap needed |
@@ -286,6 +286,18 @@ Two tunables, both a percentage of full deflection (`[joystick]` in `config.ini`
 If an axis responds backwards — which depends only on how the module happens to
 be rotated on its leads — set `invert_x` or `invert_y` to `true` rather than
 resoldering.
+
+#### USB mouse control
+
+With **Extra Games** enabled and a USB HID persona selected, the joystick also
+controls the host mouse while the smile GIF is open. Push the stick to move the
+pointer; press its button to left-click, or hold it while moving to drag. This
+control is available as soon as the overlay opens, before the automatic mouse
+jiggler's five-second delay. Moving or clicking postpones the next automatic
+nudge so it does not interrupt deliberate pointer control. Set
+`[joystick] mouse = false` to disable joystick mouse control, or adjust
+`mouse_speed` (1–40, default 8 pixels per 20 ms at full deflection) to change
+pointer speed. This is an ESP32-S3-only feature; the ESP32-C6 has no USB HID.
 
 #### How each game reads it
 
@@ -566,6 +578,10 @@ paddle_mode = direction
 # Set either to true if the module is mounted rotated and an axis reads backwards
 invert_x = false
 invert_y = false
+# In USB HID mode, drive the host pointer while the smile GIF is open.
+mouse = true
+# Pixels per 20 ms at full deflection (1-40).
+mouse_speed = 8
 
 [birthdays]
 # Comma-separated list of birthdays in DD-MM-YYYY format.
@@ -640,6 +656,8 @@ tilt_percent = 55
 | `[joystick]` | `edge_percent` | `90` | Deflection at or past this reads as fully deflected (51–100) |
 | `[joystick]` | `paddle_mode` | `direction` | Paddle games: `direction` (push to slide) or `position` (deflection sets and holds the paddle) |
 | `[joystick]` | `invert_x` / `invert_y` | `false` | Flip an axis that responds backwards because the module is mounted rotated |
+| `[joystick]` | `mouse` | `true` | **S3 only.** Enable joystick pointer and left-click control while the smile GIF is open in a USB HID persona |
+| `[joystick]` | `mouse_speed` | `8` | **S3 only.** Pointer speed at full deflection, in pixels per 20 ms (1–40) |
 | `[birthdays]` | `dates` | _(empty)_ | Comma-separated birthdays `DD-MM-YYYY`. On a matching day, alarm and timer use `happybirthday.gif` and the Happy Birthday melody. Up to 8 entries. Section may be omitted to disable the Easter egg. |
 
 > If `config.ini` is missing the firmware boots with the hardcoded defaults shown above.
@@ -1856,7 +1874,8 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v3.6.0 | ✅ released | **Letters Rain: Alphabet and Words modes** — entering Letters Rain now opens the same mode carousel as Snake Letters (arrows, swipe or joystick to page; tap or the button to play; hold or joystick up to go back). **Words** shows a whole word in the status bar — caught letters white, the next one cyan, the rest grey — and you catch its letters in order; every finished word plays the success tune and scores one, the list loops forever, and the game ends only on a missed target. New `[letter_rain]` keys `words` and `words_high_score`; `last_score` stays the Alphabet letter count. Decoys, modifiers, speed and paddle are unchanged. The mode carousel and the word-list parser are now shared by both games |
 | v3.6.1 | ✅ released | **Fix: GIFs fail with "Not enough RAM" when an SD card is inserted** (#77) — on boards with internal flash, FFat stayed mounted next to the card for the whole session and held enough heap that the ESP32-C6 could show one GIF and then no more. It is now mounted only while the card is mirrored at boot, then released. `config.ini` is also no longer re-copied to internal flash on every boot: it is compared byte for byte and copied only when it changed, so the "Copying to internal flash" screen appears only when there is something to copy. Running without a card is unchanged. |
 | v3.6.2 | ✅ released | **Letters Rain: scattered waves and continuous rain** — decoys now enter on staggered rows, and another decoy drops every three fall ticks. Decoys keep falling after the target is caught, making each new wave overlap the existing rain. A larger entity pool handles the busier field, while target selection and simultaneous catches are resolved consistently so wrong-letter catches still count as wrong. |
-| v3.7.0 | 🚀 new | **Tennis Letters: Easy and Hard modes** — Tennis now opens with a mode carousel. Easy keeps its fixed bounce; Hard aims the ball according to where it hits the paddle and adds spin from paddle movement, so the ball cannot be safely parked straight above the paddle. Each mode has its own persisted high score (`[tennis] high_score` and `hard_high_score`); the Apps carousel shows the better record. Existing config files remain compatible, and the shared paddle and speed settings are unchanged. |
+| v3.7.0 | ✅ released | **Tennis Letters: Easy and Hard modes** — Tennis now opens with a mode carousel. Easy keeps its fixed bounce; Hard aims the ball according to where it hits the paddle and adds spin from paddle movement, so the ball cannot be safely parked straight above the paddle. Each mode has its own persisted high score (`[tennis] high_score` and `hard_high_score`); the Apps carousel shows the better record. Existing config files remain compatible, and the shared paddle and speed settings are unchanged. |
+| v3.8.0 | 🚀 new | **Joystick mouse control (ESP32-S3 only)** — when a KY-023 joystick is enabled and a USB HID persona is active, the stick moves the host pointer while the smile GIF is open and its button left-clicks or drags. Pointer movement and clicks defer the automatic jiggler so it does not interrupt manual use. Configure it with `[joystick] mouse` and `mouse_speed` (1–40, default 8); C6 builds do not include USB HID. |
 
 ## License
 

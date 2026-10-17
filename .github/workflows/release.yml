@@ -72,10 +72,51 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Resolve version
-        id: version
+      - name: Detect docs-only push
+        id: detect
         run: |
           set -euo pipefail
+          # Only a push event can be a docs-only push; other events don't qualify
+          if [ "$GITHUB_EVENT_NAME" != "push" ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Extract before/after from the event payload and list changed files
+          BEFORE=$(jq -r .before < "$GITHUB_EVENT_PATH")
+          AFTER=$(jq -r .after < "$GITHUB_EVENT_PATH")
+          # Ensure we have the commits locally
+          git fetch --no-tags origin main || true
+          CHANGED=$(git diff --name-only "$BEFORE" "$AFTER" || true)
+          if [ -z "$(echo "$CHANGED" | tr -d '[:space:]')" ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # If any changed file is outside docs/firmware/ then this is not docs-only
+          if printf '%s\n' "$CHANGED" | grep -vE '^docs/firmware/' >/dev/null; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve version
+        id: version
+        env:
+          DOCS_ONLY: ${{ steps.detect.outputs.docs_only }}
+        run: |
+          set -euo pipefail
+          # Short-circuit for docs-only pushes introduced by the mirror workflow
+          if [ "${DOCS_ONLY:-false}" = "true" ]; then
+            echo "::notice::Docs-only push detected; skipping release build/publish."
+            echo "channel=skip" >> "$GITHUB_OUTPUT"
+            echo "version=skipped" >> "$GITHUB_OUTPUT"
+            echo "label=skipped" >> "$GITHUB_OUTPUT"
+            echo "sketch=skipped" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           FW=".github/scripts/fw-version.sh"
           SKETCH="$(bash "$FW" sketch-name)"
           VERSION="$(bash "$FW" extract "$SKETCH")"
@@ -144,6 +185,7 @@ jobs:
           echo "matrix=$(jq -c . "$FILE")" >> "$GITHUB_OUTPUT"
 
   build:
+    if: needs.version.outputs.channel != 'skip'
     name: Build ${{ matrix.name }}
     needs: [version, targets]
     runs-on: ubuntu-latest
@@ -174,7 +216,7 @@ jobs:
       # The ESP32 core emits a single flashable image itself (the
       # objcopy.postobjcopy.3 hook runs esptool merge-bin), already using each
       # chip's correct bootloader offset. Consume that rather than re-deriving
-      # it. Both supported chips place the bootloader at 0x0.
+      # it. Both supported chips place their bootloader at 0x0.
       - name: Collect release assets
         env:
           LABEL: ${{ needs.version.outputs.label }}
@@ -247,6 +289,7 @@ jobs:
           if-no-files-found: error
 
   publish:
+    if: needs.version.outputs.channel != 'skip'
     name: Tag and publish
     needs: [version, targets, build]
     runs-on: ubuntu-latest
@@ -393,9 +436,9 @@ jobs:
             echo "## Build provenance"
             echo ""
             echo "Built from \`${GITHUB_SHA}\` with the toolchain pinned in"
-            echo "\`.github/board-targets.json\`, the same file CI validates against:"
+            echo "`.github/board-targets.json`, the same file CI validates against:"
             echo ""
-            jq -r '.[] | "- **\(.name)** — core `\(."core-version")`, LVGL `\(."lvgl-version")`, GFX `\(."gfx-version")`, FastIMU `\(."fastimu-version")`\n  - `\(.fqbn)`" + (if .partitions then "\n  - partition table `\(.partitions)`" else "" end)' \
+            jq -r '.[] | "- **\(.name)** — core `\(."core-version")`, LVGL `\(."lvgl-version")`, GFX `\(."gfx-version")`, FastIMU `\(."fastimu-version")`\n  - `\(.fqbn)`" + (if .partitions then[...]' \
               .github/board-targets.json
             echo ""
             echo "\`\`\`"

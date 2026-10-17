@@ -65,7 +65,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v3.8.0"
+#define FW_VERSION      "v3.8.1"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -210,6 +210,7 @@ struct AppConfig {
   #include <USBCDC.h>
   #include <USBHIDMouse.h>
   #include <USBHIDKeyboard.h>
+  #include <USBHIDGamepad.h>
   #include <Preferences.h>
   static USBCDC             ClockUSBSerial;
   static USBHIDRelativeMouse UsbJiggleMouse;
@@ -218,6 +219,12 @@ struct AppConfig {
   // Note this widens what the HID personas mean: they now enumerate a mouse
   // AND a keyboard, where before PR #39 they were mouse-only.
   static USBHIDKeyboard     UsbMacroKeyboard;
+  // Same shared `hid` object again: mouse + keyboard + gamepad is still ONE
+  // composite device on one port. The gamepad is only ever driven from the
+  // jiggler overlay's hidden joystick mode (see hid_pad_set_mode()), and sits
+  // idle at centre otherwise. Note it does widen the HID personas once more:
+  // the host now also lists a "game controller".
+  static USBHIDGamepad      UsbJoyPad;
   #undef Serial
   #define Serial ClockUSBSerial
 #endif
@@ -272,7 +279,8 @@ static void hid_jiggle_arm(void);
 static void hid_jiggle_stop(void);
 #if BOARD_HAS_JOYSTICK
 static void hid_joy_mouse_update(void);   // joystick -> USB mouse movement (jiggler mode)
-static void hid_joy_button(bool down);    // joystick button -> USB mouse left button
+static void hid_joy_button(bool down);    // joystick button -> mouse left button / gamepad button
+static void hid_jiggle_gesture_cb(lv_event_t *e);   // swipe left/right: mouse <-> joystick mode
 #endif
 #endif
 
@@ -6334,6 +6342,10 @@ static void show_math_challenge()
 static void apps_gif_longpress_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  // LONG_PRESSED still fires on a slow swipe (see SWIPE INPUT, point 2): the
+  // jiggler overlay's left/right swipe switches mouse <-> joystick, and must not
+  // also open the math gate. gesture_dir is set the moment a gesture is seen.
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_NONE) return;
   lv_indev_wait_release(lv_indev_get_act());
   show_math_challenge();
 }
@@ -12176,30 +12188,50 @@ static uint32_t     hid_next_move_at = 0;
 static bool          hid_armed        = false;
 
 #if BOARD_HAS_JOYSTICK
-// ── Joystick -> mouse ────────────────────────────────────────────────────────
-// While the jiggler overlay is open (hid_jiggle_timer exists) the KY-023 steers
-// the host's pointer and its button is the left mouse button. It is live from
-// the moment the overlay opens, not after the jiggler's 5 s arming delay.
+// ── Joystick -> mouse, or joystick -> USB gamepad ────────────────────────────
+// While the jiggler overlay is open (hid_jiggle_timer exists) the KY-023 drives
+// the host in one of two modes, flipped live by a left/right swipe on the
+// overlay (hid_jiggle_gesture_cb):
+//
+//   mouse mode    cruzr_smile.gif  stick = pointer, button = left click
+//                                  (the automatic jiggle keeps running)
+//   joystick mode cruzr_joy.gif    stick = left stick of a USB gamepad,
+//                                  button = gamepad button 1 (BUTTON_A).
+//                                  No pointer motion, no automatic jiggle.
+//
+// The overlay always opens in mouse mode. Both are live from the moment the
+// overlay opens, not after the jiggler's 5 s arming delay.
 //
 // joy_x()/joy_y() are already dead-zoned and normalised to +-1 with invert_x /
-// invert_y applied, and joy_y() > 0 means "pushed up" — the opposite of a HID
-// mouse's +Y, hence the sign flip below. Called every joy poll (20 ms), so
-// cfg.joy_mouse_speed is pixels per 20 ms at full deflection.
+// invert_y applied, and joy_y() > 0 means "pushed up". Called every joy poll
+// (20 ms).
 //
-// The response is quadratic: gentle pushes give fine control, a full push
-// gives full speed. The fractional part of each step is carried to the next
-// tick, otherwise anything under one pixel per tick would round to zero and
-// the pointer could never creep.
+// Mouse: the sign is flipped (HID mouse +Y is down) and cfg.joy_mouse_speed is
+// pixels per 20 ms at full deflection. The response is quadratic: gentle pushes
+// give fine control, a full push gives full speed. The fractional part of each
+// step is carried to the next tick, otherwise anything under one pixel per tick
+// would round to zero and the pointer could never creep.
+//
+// Gamepad: axes are sent as -127..127, linear, because the game applies its own
+// curve and dead zone on top. Y is sent inverted too, matching every HID
+// joystick: pushed forward (up) reads as the axis minimum. If a sim wants the
+// other way, flip it in the sim's own axis settings. A report is only sent when
+// a value changes.
 //
 // SendReport() returns straight away when no host is attached, so an
 // unplugged or power-only USB lead cannot stall LVGL here.
-static bool  hid_joy_btn_down = false;
+static bool  hid_pad_mode     = false;   // false = mouse, true = gamepad
+static bool  hid_joy_btn_down = false;   // mouse left button held by us
+static bool  hid_pad_btn_down = false;   // gamepad BUTTON_A held by us
+static int8_t hid_pad_x       = 0;       // last gamepad axes sent
+static int8_t hid_pad_y       = 0;
 static float hid_joy_rem_x    = 0.0f;
 static float hid_joy_rem_y    = 0.0f;
+static uint32_t hid_mode_toggled_at = 0;
 
 static inline bool hid_joy_mouse_live()
 {
-  return cfg.joy_mouse && hid_jiggle_timer != nullptr;
+  return cfg.joy_mouse && !hid_pad_mode && hid_jiggle_timer != nullptr;
 }
 
 // A person is driving, so the OS is not idle: push the next automatic nudge
@@ -12210,8 +12242,38 @@ static void hid_joy_postpone_jiggle()
   hid_next_move_at = millis() + (uint32_t)random(15000, 45000);
 }
 
+static int8_t hid_pad_axis(float v)
+{
+  int a = (int)lroundf(v * 127.0f);
+  if (a >  127) a =  127;
+  if (a < -127) a = -127;
+  return (int8_t)a;
+}
+
+// Centre the stick and let go of the button on the host.
+static void hid_pad_neutral()
+{
+  if (hid_pad_x != 0 || hid_pad_y != 0 || hid_pad_btn_down) {
+    hid_pad_x = hid_pad_y = 0;
+    hid_pad_btn_down = false;
+    UsbJoyPad.send(0, 0, 0, 0, 0, 0, HAT_CENTER, 0);
+  }
+}
+
+static void hid_pad_update()
+{
+  const int8_t x = hid_pad_axis(joy_x());
+  const int8_t y = hid_pad_axis(-joy_y());          // stick up = axis minimum
+  if (x == hid_pad_x && y == hid_pad_y) return;
+  hid_pad_x = x;
+  hid_pad_y = y;
+  UsbJoyPad.leftStick(x, y);
+}
+
 static void hid_joy_mouse_update()
 {
+  if (!hid_jiggle_timer) return;
+  if (hid_pad_mode) { hid_pad_update(); return; }
   if (!hid_joy_mouse_live()) { hid_joy_rem_x = hid_joy_rem_y = 0.0f; return; }
 
   const float vx = joy_x();
@@ -12238,17 +12300,67 @@ static void hid_joy_mouse_update()
 }
 
 // Press and release are mirrored, so click = tap, and holding drags.
+// A release lets go of WHICHEVER device holds the button, whatever the current
+// mode, so a mode flip or an overlay close mid-press can never leave one stuck.
 static void hid_joy_button(bool down)
 {
   if (down) {
-    if (!hid_joy_mouse_live() || hid_joy_btn_down) return;
-    UsbJiggleMouse.press(MOUSE_LEFT);
-    hid_joy_btn_down = true;
-    hid_joy_postpone_jiggle();
-  } else if (hid_joy_btn_down) {
-    UsbJiggleMouse.release(MOUSE_LEFT);
-    hid_joy_btn_down = false;
+    if (!hid_jiggle_timer) return;
+    if (hid_pad_mode) {
+      if (hid_pad_btn_down) return;
+      UsbJoyPad.pressButton(BUTTON_A);
+      hid_pad_btn_down = true;
+    } else {
+      if (!hid_joy_mouse_live() || hid_joy_btn_down) return;
+      UsbJiggleMouse.press(MOUSE_LEFT);
+      hid_joy_btn_down = true;
+      hid_joy_postpone_jiggle();
+    }
+  } else {
+    if (hid_joy_btn_down) { UsbJiggleMouse.release(MOUSE_LEFT); hid_joy_btn_down = false; }
+    if (hid_pad_btn_down) { UsbJoyPad.releaseButton(BUTTON_A);  hid_pad_btn_down = false; }
   }
+}
+
+// Switch mode and swap the overlay's GIF to match. Needs the joystick powered
+// (Extra Games on) — otherwise there is nothing to send and the swipe is
+// ignored, rather than showing a mode that cannot do anything.
+static void hid_pad_set_mode(bool pad)
+{
+  if (!hid_jiggle_timer || pad == hid_pad_mode) return;
+  if (!joy_active()) {
+    Serial.println("[HID] mode switch ignored — joystick is off (Extra Games)");
+    return;
+  }
+
+  hid_joy_button(false);                  // release whichever device holds the button
+  if (hid_pad_mode) hid_pad_neutral();    // leaving gamepad: centre it on the host
+  hid_joy_rem_x = hid_joy_rem_y = 0.0f;
+  hid_pad_mode  = pad;
+
+  const char *gp = pad ? GIF_JOY_PATH : GIF_SMILE_PATH;
+  lv_obj_t *gif = overlay_cont ? (lv_obj_t *)lv_obj_get_user_data(overlay_cont) : nullptr;
+  if (gif && STORAGE && STORAGE->exists(storage_path(gp))) {
+    lv_gif_set_src(gif, gp);
+  } else {
+    Serial.printf("[HID] %s not found — mode switched, GIF left as is\n", storage_path(gp));
+  }
+  Serial.printf("[HID] jiggler mode -> %s\n", pad ? "joystick (gamepad)" : "mouse");
+}
+
+// Swipe left or right on the jiggler overlay. Attached to the overlay and to its
+// GIF widget by hid_jiggle_arm(); a gesture may reach both if it bubbles, so a
+// second hit within 400 ms is the same swipe and is dropped.
+static void hid_jiggle_gesture_cb(lv_event_t * /*e*/)
+{
+  const lv_dir_t d = lv_indev_get_gesture_dir(lv_indev_get_act());
+  if (d != LV_DIR_LEFT && d != LV_DIR_RIGHT) return;   // vertical: leave it alone
+  swipe_consumed_tap = true;   // the CLICKED that follows must not close the overlay
+
+  const uint32_t now = millis();
+  if (now - hid_mode_toggled_at < 400) return;
+  hid_mode_toggled_at = now;
+  hid_pad_set_mode(!hid_pad_mode);
 }
 #endif  // BOARD_HAS_JOYSTICK
 
@@ -12291,6 +12403,7 @@ static void hid_send_nudge_round_trip(int total_dx, int total_dy)
 static void hid_jiggle_move_cb(lv_timer_t *t)
 {
 #if BOARD_HAS_JOYSTICK
+  if (hid_pad_mode)     return;   // joystick mode: the pointer is not ours to move
   if (hid_joy_btn_down) return;   // mid-click or mid-drag — never nudge the pointer then
 #endif
   uint32_t now = millis();
@@ -12321,6 +12434,22 @@ static void hid_jiggle_arm()
   hid_gif_open_at  = millis();
   hid_armed        = false;
   hid_jiggle_timer = lv_timer_create(hid_jiggle_move_cb, 1000, nullptr);
+#if BOARD_HAS_JOYSTICK
+  hid_pad_mode = false;                              // always opens in mouse mode
+  if (overlay_cont) {
+    // Hidden mode switch: swipe left/right toggles mouse <-> joystick.
+    // GESTURE_BUBBLE must be cleared or this callback never runs: indev_gesture()
+    // walks up from the pressed object while the flag is set, so with it left on
+    // it passes over this overlay and delivers the event to the screen (same
+    // reason as brightness_swipe_cb's overlay). Without this a swipe only ever
+    // produced the plain CLICKED, which closes the overlay.
+    lv_obj_set_gesture_bubble(overlay_cont, false);
+    lv_obj_add_event_cb(overlay_cont, hid_jiggle_gesture_cb, LV_EVENT_GESTURE, nullptr);
+    lv_obj_t *gif_w = (lv_obj_t *)lv_obj_get_user_data(overlay_cont);
+    if (gif_w)
+      lv_obj_add_event_cb(gif_w, hid_jiggle_gesture_cb, LV_EVENT_GESTURE, nullptr);
+  }
+#endif
   Serial.println("[HID] jiggle armed, 5s delay");
 }
 
@@ -12329,9 +12458,12 @@ static void hid_jiggle_stop()
   if (hid_jiggle_timer) { lv_timer_del(hid_jiggle_timer); hid_jiggle_timer = nullptr; }
   hid_armed = false;
 #if BOARD_HAS_JOYSTICK
-  // The overlay can be closed by touch while the stick button is held. Let go
-  // of the mouse button, or the host is left with it stuck down.
-  if (hid_joy_btn_down) { UsbJiggleMouse.release(MOUSE_LEFT); hid_joy_btn_down = false; }
+  // The overlay can be closed by touch while the stick button is held, or while
+  // in joystick mode. Let go of the button and centre the gamepad, or the host
+  // is left with a stuck button / a stick stuck off-centre.
+  hid_joy_button(false);
+  hid_pad_neutral();
+  hid_pad_mode  = false;
   hid_joy_rem_x = hid_joy_rem_y = 0.0f;
 #endif
 }
@@ -12364,6 +12496,7 @@ static void usb_persona_begin()
   if (want_hid) {
     UsbJiggleMouse.begin();
     UsbMacroKeyboard.begin();   // composite: same port, same descriptor
+    UsbJoyPad.begin();          // jiggler overlay's joystick mode
   }
   USB.begin();
 

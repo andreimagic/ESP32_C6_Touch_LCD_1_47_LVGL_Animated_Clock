@@ -81,6 +81,17 @@ jobs:
           mirror_channel edge releases/tags/edge
           rm -f release.json
 
+      - name: Check for changes
+        run: |
+          set -euo pipefail
+          # Stage the mirrored files; git add will not stage identical files.
+          git add docs/firmware || true
+          # If nothing was staged, there are no content changes to commit.
+          if git diff --staged --quiet --exit-code; then
+            echo "::notice::No changes in docs/firmware; skipping PR."
+            exit 0
+          fi
+
       - name: Open or update PR
         uses: peter-evans/create-pull-request@v6
         with:

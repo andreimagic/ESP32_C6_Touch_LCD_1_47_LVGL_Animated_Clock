@@ -12434,6 +12434,12 @@ static void hid_jiggle_arm()
   hid_pad_mode = false;                              // always opens in mouse mode
   if (overlay_cont) {
     // Hidden mode switch: swipe left/right toggles mouse <-> joystick.
+    // GESTURE_BUBBLE must be cleared or this callback never runs: indev_gesture()
+    // walks up from the pressed object while the flag is set, so with it left on
+    // it passes over this overlay and delivers the event to the screen (same
+    // reason as brightness_swipe_cb's overlay). Without this a swipe only ever
+    // produced the plain CLICKED, which closes the overlay.
+    lv_obj_set_gesture_bubble(overlay_cont, false);
     lv_obj_add_event_cb(overlay_cont, hid_jiggle_gesture_cb, LV_EVENT_GESTURE, nullptr);
     lv_obj_t *gif_w = (lv_obj_t *)lv_obj_get_user_data(overlay_cont);
     if (gif_w)

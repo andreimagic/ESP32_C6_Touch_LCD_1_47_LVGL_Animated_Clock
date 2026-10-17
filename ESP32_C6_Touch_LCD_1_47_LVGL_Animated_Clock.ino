@@ -6342,6 +6342,10 @@ static void show_math_challenge()
 static void apps_gif_longpress_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  // LONG_PRESSED still fires on a slow swipe (see SWIPE INPUT, point 2): the
+  // jiggler overlay's left/right swipe switches mouse <-> joystick, and must not
+  // also open the math gate. gesture_dir is set the moment a gesture is seen.
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_NONE) return;
   lv_indev_wait_release(lv_indev_get_act());
   show_math_challenge();
 }

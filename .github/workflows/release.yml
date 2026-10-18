@@ -41,6 +41,8 @@ on:
   push:
     branches: [main]
     tags: ['v*']   # `edge` does not match, so moving it never re-triggers this
+    paths-ignore:
+      - 'docs/firmware/**'
   workflow_dispatch:
 
 # Keyed on the event too, so a manual release on main is never queued behind

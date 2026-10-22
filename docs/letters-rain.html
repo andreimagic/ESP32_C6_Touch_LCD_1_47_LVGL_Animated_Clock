@@ -344,5 +344,9 @@ requestAnimationFrame(t=>{lt=t;frame(t)});
  if(ios)btn.hidden=false;
 })();
 </script>
+<script>
+/* Offline support: sw.js caches this game so the home-screen app also opens without a connection */
+if('serviceWorker' in navigator)addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+</script>
 </body>
 </html>

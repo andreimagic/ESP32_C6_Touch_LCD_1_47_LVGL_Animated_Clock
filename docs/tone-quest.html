@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0a0e22">
+<title>Tone Quest</title>
+<style>
+:root{--bg:#0a0e22;--panel:#10173a;--line:#3c78dc;--cyan:#64dcff;--gold:#ffdc3c;--olive:#b4b464;--grey:#5a5a6e;--text:#dfe6ff;
+--mono:"DejaVu Sans Mono",ui-monospace,Menlo,Consolas,"Liberation Mono",monospace}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--mono);overscroll-behavior:none}
+body{min-height:100vh;min-height:100dvh;padding:max(12px,env(safe-area-inset-top)) 12px max(12px,env(safe-area-inset-bottom));display:flex;justify-content:center}
+main{width:100%;max-width:860px}
+h1{font-size:1.5rem;margin:.4rem 0 .3rem;letter-spacing:.04em;font-weight:700}
+h1 i{font-style:normal;color:var(--cyan)}
+.nav{margin:0 0 1rem;font-size:.85rem}.nav a{color:var(--cyan)}
+button{font:inherit;color:var(--text);background:var(--panel);border:2px solid var(--line);border-radius:8px;padding:.7rem 1.1rem;cursor:pointer;touch-action:manipulation}
+button:hover{background:#17214f}
+button:focus-visible,input:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+#play{width:100%;margin:12px 0;background:var(--line);color:#fff;border-color:var(--line);font-weight:700;font-size:1.1rem}
+#play:hover{background:#4d89ea}
+.help{font-size:.85rem;line-height:1.6;color:#9aa6d6;margin:.6rem 0}
+.help kbd{border:1px solid #3a4780;border-radius:4px;padding:0 .35em;color:var(--text)}
+.row{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin:.6rem 0;font-size:.85rem}
+.row button{padding:.45rem .8rem;font-size:.85rem}
+#sensor{color:var(--olive)}
+#tiltLbl{display:flex;align-items:center;gap:10px}
+.seg{display:inline-flex;gap:2px;padding:3px;border:2px solid var(--line);border-radius:999px;background:#070a18}
+.row .seg button{border:0;border-radius:999px;background:transparent;color:#9aa6d6;padding:.4rem 1.1rem;font-size:.85rem}
+.row .seg button:hover{background:#17214f}
+.row .seg button[aria-checked=true]{background:var(--line);color:#fff;font-weight:700}
+details{margin-top:.8rem;border:1px solid #26335f;border-radius:8px;padding:.6rem .8rem}
+summary{cursor:pointer;font-size:.9rem}
+input[type=number]{width:5.5rem;background:#070a18;color:var(--text);border:1px solid #26335f;border-radius:6px;padding:.35rem;font:inherit}
+#wrap{position:relative;margin:0 auto;border:2px solid #26335f;border-radius:8px;overflow:hidden;background:#070a18}
+canvas{display:block;touch-action:none}
+#bar{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;padding:.7rem .2rem;font-size:clamp(.85rem,3.4vw,1.1rem);color:var(--olive)}
+#bar span:last-child{text-align:right}
+#tg{color:var(--cyan);text-align:center}
+#ctl{display:flex;gap:10px;justify-content:space-between}
+#ov{position:absolute;inset:0;background:rgba(7,10,24,.82);display:flex;align-items:center;justify-content:center;padding:12px}
+#ov[hidden]{display:none}
+#ovb{background:var(--bg);border:2px solid var(--line);border-radius:8px;padding:1.1rem 1.4rem;text-align:center;min-width:min(240px,100%)}
+#ovb h2{margin:0 0 .5rem;font-size:1.2rem}#ovb h2.gold{color:var(--gold)}
+#ovb p{margin:.25rem 0;color:#a0c8ff}#ovb p.big{color:#fff;font-size:1.3rem}
+#ovb .b{display:flex;gap:8px;justify-content:center;margin-top:.9rem;flex-wrap:wrap}
+.foot{margin:2rem 0 .5rem;font-size:.75rem;text-align:center;color:#6a72a8}
+.foot a{color:#6a72a8;text-underline-offset:2px}.foot a:hover{color:var(--cyan)}
+[hidden]{display:none!important}
+</style>
+<!-- Browser favicon -->
+<link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png">
+
+<!-- iPhone / iPad Home Screen -->
+<link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon-letters.png">
+
+<!-- Web App Manifest -->
+<link rel="manifest" href="games.webmanifest">
+</head>
+<body>
+<main>
+<h1>Tone <i>Quest</i></h1>
+<p class="nav"><a href="tennis-letters.html">Play Tennis Letters</a> | <a href="snake-letters.html">Snake Letters</a> | <a href="letters-rain.html">Letters Rain</a></p>
+
+<section id="menu">
+  <button id="play">Play</button>
+  <p class="help">Watch the four domes light up and listen to their tones, then repeat the sequence by rolling the ball into the same edges. Every level adds one more move to the end of the same sequence. One wrong edge ends the game. There is no winning, only how far you get: your score is the level you cleared.</p>
+  <p class="help"><b>Tilt (phone):</b> tilt to roll the ball, hold it in the ring until the round starts, and after each move bring the ball back to the middle before the next edge counts. <b>Keyboard:</b> <kbd>←</kbd> <kbd>↑</kbd> <kbd>↓</kbd> <kbd>→</kbd> or <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> answer directly, <kbd>Space</kbd> starts the round. <b>Touch or mouse:</b> tap to start, swipe to answer. <kbd>Esc</kbd> pauses, <kbd>M</kbd> goes to the menu.</p>
+  <div class="row">
+    <div id="tiltLbl" hidden><span>Controls</span><div class="seg" role="radiogroup" aria-label="Mobile controls"><button type="button" role="radio" data-v="1" aria-checked="true">Tilt</button><button type="button" role="radio" data-v="0" aria-checked="false">Touch</button></div></div>
+    <span id="sensor"></span>
+    <label><input type="checkbox" id="snd" checked> Sound</label>
+  </div>
+  <div class="row"><button id="installBtn" type="button" hidden>Add to home screen</button></div>
+  <p class="help" id="installHint" hidden>On iPhone or iPad: tap the Share button in Safari, then choose <b>Add to Home Screen</b>.</p>
+  <details><summary>Settings</summary>
+    <div class="row">
+      <label>Moves at level 1 (1-16) <input type="number" id="c1" min="1" max="16"></label>
+      <label>Flash ms (80-2000) <input type="number" id="c2" min="80" max="2000"></label>
+      <label>Gap ms (20-2000) <input type="number" id="c3" min="20" max="2000"></label>
+      <label>Tilt to reach a wall, % of 1 g (30-100) <input type="number" id="c4" min="30" max="100"></label>
+    </div>
+    <p class="help">Defaults are 4, 420, 220 and 55. A lower tilt percentage means a gentler tilt is enough to reach the edges.</p>
+  </details>
+</section>
+
+<section id="game" hidden>
+  <div id="wrap"><canvas id="cv"></canvas>
+    <div id="ov" hidden><div id="ovb"><h2 id="ot"></h2><p id="o1" class="big"></p><p id="o2"></p><div class="b" id="obtn"></div></div></div>
+  </div>
+  <div id="bar"><span id="sc"></span><span id="tg"></span><span id="lb"></span></div>
+  <div id="ctl"><button id="pb">Pause</button><button id="mb">Menu</button></div>
+</section>
+
+<p class="foot"><a href="https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock" target="_blank" rel="noopener">View project on GitHub</a> &middot; <a href="https://andreimagic.github.io/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/" target="_blank" rel="noopener">Project page</a></p>
+</main>
+
+<script>
+(()=>{
+/* geometry and timing are the sketch's (tq_*): a 320x146 playfield, 14 px ball, 44 px ring, 50 px domes */
+const FW=320,FH=146,CX=160,CY=73,BALL=14,RING=44,DOME=50,TOL=6,HOME=.45,POLL=40,SMOOTH=.35,HOLD=700,LEAD=600,NEXT=1500,MAXM=64;
+const SPX=CX-BALL/2,SPY=CY-BALL/2,D=Math.PI/180;
+const UP=0,DOWN=1,LEFT=2,RIGHT=3,P_LEVEL=0,P_DEMO=1,P_INPUT=2,P_OVER=3;
+const TONE=[294,262,330,349];                                  // D4, C4, E4, F4: the original ToneQuest table
+const HUE=[[255,150,20],[235,60,140],[50,200,110],[50,140,255]]; // amber, rose, green, blue
+const $=s=>document.querySelector(s);
+const store={get(k,d){try{const v=localStorage.getItem(k);return v===null?d:JSON.parse(v)}catch{return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const num=(v,a,b,d)=>{v=Math.round(+v);return Number.isFinite(v)?clamp(v,a,b):d};
+const CFG={moves:num(store.get('tq_moves',4),1,16,4),flash:num(store.get('tq_flash',420),80,2000,420),gap:num(store.get('tq_gap',220),20,2000,220),tilt:num(store.get('tq_tilt',55),30,100,55)};
+let best=store.get('tq_best',0),sound=store.get('lr_sound',true);
+let T=null,screen='menu',tiltOn=false,tiltAsked=false,tiltDenied=false,tiltPref=store.get('lr_tilt',true),cal=null,ori={b:0,g:0},ac=null,lt=0,sw=null;
+const touchDev=('ontouchstart' in window)||navigator.maxTouchPoints>0;
+const cv=$('#cv'),ctx=cv.getContext('2d');
+
+/* ---------- sound ---------- */
+function tone(f,ms,t0=0){if(!sound)return;try{ac=ac||new(window.AudioContext||window.webkitAudioContext)();if(ac.state==='suspended')ac.resume();
+ const o=ac.createOscillator(),g=ac.createGain();o.type='square';o.frequency.value=f;g.gain.value=.04;o.connect(g);g.connect(ac.destination);
+ const s=ac.currentTime+t0;o.start(s);o.stop(s+ms/1000)}catch{}}
+const tuneOK=()=>[523,659,784,1046].forEach((f,i)=>tone(f,120,i*.12));
+const tuneBad=()=>[392,330,262].forEach((f,i)=>tone(f,180,i*.18));
+
+/* ---------- game (ported from tq_* in the sketch) ---------- */
+const useTilt=()=>tiltPref&&tiltOn;
+const at=(ms,fn)=>T.q.push({t:T.now+ms,fn});
+function flash(dir){T.fl[dir]=T.now;if(T.swipe)T.fly={dir,t:T.now}}
+function sayDir(dir){flash(dir);tone(TONE[dir],CFG.flash)}
+function startRound(){
+ if(!T.run)return;
+ T.moves=Math.min(MAXM,CFG.moves+T.level-1);T.demoI=0;T.lit=false;T.phase=P_DEMO;
+ at(LEAD,demoTick)}
+function demoTick(){
+ if(!T.run)return;
+ if(T.lit){
+  T.lit=false;T.demoI++;
+  if(T.demoI>=T.moves){T.phase=P_INPUT;T.step=0;T.armed=T.swipe;return}   // tilt: come home first, then play
+  at(CFG.gap,demoTick)
+ }else{sayDir(T.pat[T.demoI]);T.lit=true;at(CFG.flash,demoTick)}}
+function input(dir){
+ sayDir(dir);
+ const ok=dir===T.pat[T.step];
+ if(ok&&T.step+1<T.moves){T.step++;return}
+ T.phase=P_OVER;                                  // input stops; a deferred beat decides what happens
+ at(CFG.flash+150,ok?win:lose)}
+function win(){
+ if(!T.run)return;
+ tuneOK();T.level++;
+ if(T.level-1>best){best=T.level-1;T.beat=true;store.set('tq_best',best)}
+ at(NEXT,startRound)}
+function lose(){
+ if(!T.run)return;
+ T.run=false;tuneBad();showEnd()}
+function answer(dir){if(T&&T.run&&!T.pause&&T.phase===P_INPUT)input(dir)}
+function tiltAxes(){
+ if(!cal)return[0,0];
+ const db=ori.b-cal.b,dg=ori.g-cal.g,a=(((screen.orientation&&screen.orientation.angle)??window.orientation??0)%360+360)%360;
+ return a===0?[dg,-db]:a===90?[db,dg]:a===180?[-dg,db]:[-db,-dg]}    // [roll right, tilt up] in degrees
+function poll(){
+ if(T.phase===P_LEVEL)T.swipe=!useTilt();
+ if(T.swipe){T.bx=CX;T.by=CY;return}
+ if(T.phase===P_OVER)return;
+ const full=CFG.tilt/100,[r,u]=tiltAxes();
+ const tx=CX+Math.sin(r*D)/full*SPX,ty=CY-Math.sin(u*D)/full*SPY;
+ T.bx+=(tx-T.bx)*SMOOTH;T.by+=(ty-T.by)*SMOOTH;
+ const rr=BALL/2;T.bx=clamp(T.bx,rr,FW-rr);T.by=clamp(T.by,rr,FH-rr);
+ const dx=T.bx-CX,dy=T.by-CY,nx=dx/SPX,ny=dy/SPY;
+ if(T.phase===P_LEVEL){                           // levelling gate
+  const inner=(RING-BALL)/2;
+  if(dx*dx+dy*dy<=inner*inner){
+   if(T.hold===null)T.hold=T.now;T.ring=1;
+   if(T.now-T.hold>=HOLD){T.hold=null;T.ring=0;startRound()}
+  }else{T.hold=null;T.ring=0}
+  return}
+ if(T.phase!==P_INPUT)return;
+ if(!T.armed){T.dim=1;if(nx*nx+ny*ny<=HOME*HOME){T.armed=true;T.dim=0}return}   // spring return
+ T.dim=0;
+ let hit=-1;                                      // dominant axis wins, so a corner resolves to one edge
+ if(Math.abs(ny)>=Math.abs(nx)){if(T.by<=rr+TOL)hit=UP;else if(T.by>=FH-rr-TOL)hit=DOWN}
+ else{if(T.bx<=rr+TOL)hit=LEFT;else if(T.bx>=FW-rr-TOL)hit=RIGHT}
+ if(hit<0)return;
+ T.armed=false;input(hit)}
+function frame(t){
+ requestAnimationFrame(frame);
+ const dt=Math.min(100,t-lt);lt=t;
+ if(!T||screen!=='game')return;
+ if(!T.pause&&(T.run||T.q.length)){
+  T.now+=dt;T.acc+=dt;
+  for(;;){T.q.sort((a,b)=>a.t-b.t);if(!T.q.length||T.q[0].t>T.now)break;T.q.shift().fn()}
+  while(T.acc>=POLL){T.acc-=POLL;if(T.run)poll()}
+ }
+ draw()}
+
+/* ---------- drawing ---------- */
+let sc=1;
+function resize(){
+ const avail=Math.min($('#game').clientWidth||600,860)-4,s=Math.min(avail/FW,innerHeight*.55/FH),dpr=window.devicePixelRatio||1;
+ sc=Math.max(.5,s);cv.style.width=FW*sc+'px';cv.style.height=FH*sc+'px';
+ cv.width=Math.round(FW*sc*dpr);cv.height=Math.round(FH*sc*dpr);ctx.setTransform(dpr*sc,0,0,dpr*sc,0,0)}
+function ballPos(){
+ if(T.fly){const p=(T.now-T.fly.t)/CFG.flash;
+  if(p<1){const a=p<.5?2*p:2*(1-p),d=T.fly.dir;
+   return[CX+(d===RIGHT?a*SPX:d===LEFT?-a*SPX:0),CY+(d===DOWN?a*SPY:d===UP?-a*SPY:0)]}
+  T.fly=null}
+ return[T.bx,T.by]}
+const rgb=(c,a=1)=>`rgba(${c[0]},${c[1]},${c[2]},${a})`;
+function dome(d,alpha,idle){
+ const h=HUE[d],mix=h.map(v=>(v+255)>>1);
+ const[wx,wy,cx2,cy2]=[[CX,0,CX,DOME],[CX,FH,CX,FH-DOME],[0,CY,DOME,CY],[FW,CY,FW-DOME,CY]][d];
+ ctx.save();ctx.beginPath();ctx.rect(0,0,FW,FH);ctx.clip();
+ ctx.beginPath();ctx.arc(wx,wy,DOME,0,7);
+ if(idle){ctx.fillStyle=rgb(h,.07);ctx.fill();ctx.strokeStyle=rgb(h,.35);ctx.lineWidth=1;ctx.stroke()}
+ else{const g=ctx.createLinearGradient(wx,wy,cx2,cy2);g.addColorStop(0,rgb(mix));g.addColorStop(1,rgb(h));
+  ctx.globalAlpha=alpha;ctx.fillStyle=g;ctx.fill()}
+ ctx.restore()}
+function draw(){
+ if(!T)return;
+ ctx.clearRect(0,0,FW,FH);
+ for(let d=0;d<4;d++){dome(d,0,true);const a=1-(T.now-T.fl[d])/CFG.flash;if(a>0)dome(d,a,false)}
+ ctx.lineWidth=2;ctx.strokeStyle=T.ring?'rgb(80,220,120)':'rgb(80,100,180)';
+ ctx.beginPath();ctx.arc(CX,CY,RING/2,0,7);ctx.stroke();
+ const[bx,by]=ballPos();ctx.fillStyle=T.dim?'rgb(110,118,150)':'#fff';
+ ctx.beginPath();ctx.arc(bx,by,BALL/2,0,7);ctx.fill();
+ if(T.phase===P_LEVEL){ctx.fillStyle='#9aa6d6';ctx.font=`10px ${getComputedStyle(document.body).getPropertyValue('--mono')}`;ctx.textAlign='center';
+  ctx.fillText(T.swipe?(touchDev?'Tap to start':'Press Space to start'):'Level the device',CX,CY+RING/2+15)}
+ status()}
+let bar='';
+function status(){
+ const ph=T.phase===P_DEMO?'Watch':T.phase===P_INPUT?`Repeat ${T.step+1}/${T.moves}`:'';
+ const s=`Level: ${T.level}|${ph}|Best: ${best}`;
+ if(s===bar)return;bar=s;const p=s.split('|');$('#sc').textContent=p[0];$('#tg').textContent=p[1];$('#lb').textContent=p[2]}
+
+/* ---------- screens ---------- */
+function show(n){screen=n;$('#menu').hidden=n!=='menu';$('#game').hidden=n!=='game'}
+function overlay(title,l1,l2,gold,btns){
+ $('#ot').textContent=title;$('#ot').className=gold?'gold':'';$('#o1').textContent=l1;$('#o2').textContent=l2;
+ const b=$('#obtn');b.innerHTML='';
+ btns.forEach(([label,fn],i)=>{const x=document.createElement('button');x.textContent=label;x.onclick=fn;if(!i)x.style.borderColor='#64dcff';b.appendChild(x)});
+ T.primary=btns[0][1];$('#ov').hidden=false;b.firstChild.focus()}
+function hideOv(){$('#ov').hidden=true;if(T)T.primary=null}
+function showEnd(){
+ overlay(T.beat?'New high score!':'Game over',`Level ${T.level}  (${T.step}/${T.moves})`,`Best: ${best}`,T.beat,[['Play again',start],['Menu',toMenu]])}
+function pause(){
+ if(!T||!T.run)return;
+ if(T.pause){T.pause=false;cal=null;hideOv();$('#pb').textContent='Pause';return}
+ T.pause=true;$('#pb').textContent='Resume';
+ overlay('Paused',`Level: ${T.level}`,'',false,[['Resume',pause],['Menu',toMenu]])}
+function toMenu(){T=null;bar='';hideOv();show('menu')}
+function start(){
+ if(touchDev)enableTilt();
+ cal=null;
+ T={pat:Array.from({length:MAXM},()=>Math.floor(Math.random()*4)),level:1,moves:Math.min(MAXM,CFG.moves),step:0,demoI:0,lit:false,phase:P_LEVEL,
+  swipe:!useTilt(),armed:false,beat:false,hold:null,ring:0,dim:0,bx:CX,by:CY,now:0,acc:0,q:[],fl:[-1e9,-1e9,-1e9,-1e9],fly:null,run:true,pause:false,primary:null};
+ bar='';show('game');hideOv();$('#pb').textContent='Pause';resize();draw()}
+
+/* ---------- tilt (mobile accelerometer) ---------- */
+function setSensor(s){tiltDenied=s==='denied';$('#sensor').textContent={off:'Touch controls on. Tap to start, swipe to answer.',on:'Tilt controls on',none:touchDev?'No tilt sensor found. Tap to start, swipe to answer.':'',denied:'Tilt blocked. Tap to start and swipe to answer, or allow motion access in browser settings.'}[s]||''}
+function onOri(e){
+ if(e.gamma==null||e.beta==null)return;
+ tiltOn=true;ori={b:e.beta,g:e.gamma};if(!cal)cal={b:e.beta,g:e.gamma}}
+async function enableTilt(){
+ if(!tiltPref||(tiltAsked&&!tiltDenied))return;
+ tiltAsked=true;
+ try{const DO=window.DeviceOrientationEvent;
+  if(DO&&typeof DO.requestPermission==='function'&&await DO.requestPermission()!=='granted'){setSensor('denied');return}
+ }catch{setSensor('denied');return}
+ window.addEventListener('deviceorientation',onOri);
+ setTimeout(()=>setSensor(!tiltPref?'off':tiltOn?'on':'none'),1200)}
+
+/* ---------- input ---------- */
+const KD={ArrowUp:UP,w:UP,W:UP,ArrowDown:DOWN,s:DOWN,S:DOWN,ArrowLeft:LEFT,a:LEFT,A:LEFT,ArrowRight:RIGHT,d:RIGHT,D:RIGHT};
+addEventListener('keydown',e=>{
+ if(e.target.tagName==='INPUT')return;
+ const k=e.key;
+ if(screen==='menu'){if(k==='Enter'&&document.activeElement===document.body)start();return}
+ if(k in KD){e.preventDefault();answer(KD[k])}
+ else if((k===' '||k==='Enter')&&T&&T.run&&!T.pause&&T.phase===P_LEVEL&&T.swipe){e.preventDefault();startRound()}
+ else if(k==='Escape'||k==='p'||k==='P'||k===' '){e.preventDefault();if(T&&T.run)pause();else if(k==='Escape')toMenu()}
+ else if(k==='Enter'&&T&&T.primary&&document.activeElement.tagName!=='BUTTON'){e.preventDefault();T.primary()}
+ else if(k==='m'||k==='M')toMenu()});
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&T&&T.run&&!T.pause)pause()});
+cv.addEventListener('pointerdown',e=>{sw={x:e.clientX,y:e.clientY,done:false}});
+cv.addEventListener('pointermove',e=>{
+ if(!sw||sw.done||!T||!T.swipe)return;
+ const dx=e.clientX-sw.x,dy=e.clientY-sw.y;
+ if(Math.max(Math.abs(dx),Math.abs(dy))<24)return;
+ sw.done=true;answer(Math.abs(dx)>Math.abs(dy)?(dx>0?RIGHT:LEFT):(dy>0?DOWN:UP))});
+cv.addEventListener('pointerup',()=>{
+ if(sw&&!sw.done&&T&&T.run&&!T.pause&&T.phase===P_LEVEL&&T.swipe)startRound();
+ sw=null});
+cv.addEventListener('pointercancel',()=>{sw=null});
+const re=()=>{cal=null;if(screen==='game'){resize();draw()}};
+addEventListener('resize',re);
+addEventListener('orientationchange',()=>setTimeout(re,200));
+
+/* ---------- menu wiring ---------- */
+$('#play').onclick=start;$('#pb').onclick=pause;$('#mb').onclick=toMenu;
+$('#snd').checked=sound;$('#snd').onchange=e=>{sound=e.target.checked;store.set('lr_sound',sound)};
+[['c1','moves',1,16,'tq_moves'],['c2','flash',80,2000,'tq_flash'],['c3','gap',20,2000,'tq_gap'],['c4','tilt',30,100,'tq_tilt']].forEach(([id,key,a,b,k])=>{
+ const el=$('#'+id);el.value=CFG[key];
+ el.onchange=()=>{CFG[key]=num(el.value,a,b,CFG[key]);el.value=CFG[key];store.set(k,CFG[key])}});
+if(touchDev){
+ $('#tiltLbl').hidden=false;
+ const segs=[...document.querySelectorAll('#tiltLbl button')];
+ const sync=()=>segs.forEach(b=>b.setAttribute('aria-checked',(b.dataset.v==='1')===tiltPref));
+ sync();if(!tiltPref)setSensor('off');
+ segs.forEach(b=>b.onclick=()=>{const v=b.dataset.v==='1';if(v===tiltPref)return;
+  tiltPref=v;store.set('lr_tilt',v);sync();
+  if(!v){setSensor('off');return}
+  cal=null;setSensor(tiltAsked&&!tiltDenied?(tiltOn?'on':'none'):'');enableTilt()});
+}
+requestAnimationFrame(t=>{lt=t;frame(t)});
+})();
+</script>
+<script>
+/* Add to home screen: Chromium shows the real install prompt on tap; iOS Safari has no API, so it gets a hint */
+(()=>{
+ const btn=document.getElementById('installBtn'),hint=document.getElementById('installHint');
+ if(!btn||matchMedia('(display-mode: standalone)').matches||navigator.standalone===true)return;
+ const ios=/iphone|ipad|ipod/i.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+ let dp=null;
+ addEventListener('beforeinstallprompt',e=>{e.preventDefault();dp=e;btn.hidden=false});
+ addEventListener('appinstalled',()=>{dp=null;btn.hidden=true;hint.hidden=true});
+ btn.onclick=async()=>{
+  if(dp){const p=dp;dp=null;btn.hidden=true;p.prompt();try{await p.userChoice}catch{}return}
+  hint.hidden=!hint.hidden};
+ if(ios)btn.hidden=false;
+})();
+</script>
+<script>
+/* Offline support: sw.js caches this game so the home-screen app also opens without a connection */
+if('serviceWorker' in navigator)addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+</script>
+</body>
+</html>

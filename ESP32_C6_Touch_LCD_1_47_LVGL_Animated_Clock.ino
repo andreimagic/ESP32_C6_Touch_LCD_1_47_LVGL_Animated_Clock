@@ -188,7 +188,7 @@ struct AppConfig {
   int  fj_health                   = 100;       // [fighterjet] player_health
   int  fj_turn_tilt_percent        = 25;        // [fighterjet] turn_tilt_percent (IMU: % of 1 g that starts a turn)
   int  fj_fire_tilt_percent        = 20;        // [fighterjet] fire_tilt_percent (IMU: forward tilt that fires)
-  bool fj_invert_turn              = false;     // [fighterjet] invert_turn (IMU: flip left/right)
+  bool fj_invert_turn              = true;     // [fighterjet] invert_turn (IMU: flip left/right)
   // [birthdays] dates — up to 8 entries in DD-MM-YYYY format.
   // Only day & month are compared; the year is kept as reference in the file.
   // Default: empty (no birthday greetings).

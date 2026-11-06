@@ -65,7 +65,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v3.9.0"
+#define FW_VERSION      "v3.9.1"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -183,12 +183,18 @@ struct AppConfig {
   int  tq_tilt_percent             = 55;        // [tonequest] tilt_percent (% of 1 g that pins the ball to an edge)
   int  fj_high_score               = 0;         // [fighterjet] high_score (most rounds survived)
   int  fj_start_enemies            = 2;         // [fighterjet] start_enemies (enemies in round 1)
-  int  fj_per_round                = 2;         // [fighterjet] enemies_per_round (added each round)
+  int  fj_per_round                = 1;         // [fighterjet] enemies_per_round (added each round)
   int  fj_max_enemies              = 12;        // [fighterjet] max_enemies (1-12)
   int  fj_health                   = 100;       // [fighterjet] player_health
   int  fj_turn_tilt_percent        = 25;        // [fighterjet] turn_tilt_percent (IMU: % of 1 g that starts a turn)
   int  fj_fire_tilt_percent        = 20;        // [fighterjet] fire_tilt_percent (IMU: forward tilt that fires)
-  bool fj_invert_turn              = true;     // [fighterjet] invert_turn (IMU: flip left/right)
+  bool fj_invert_turn              = false;     // [fighterjet] invert_turn (IMU: flip left/right)
+  int  fj_fast_tilt_percent        = 50;        // [fighterjet] fast_turn_tilt_percent (IMU: tilt for the fast turn)
+  int  fj_enemy_health             = 30;        // [fighterjet] enemy_health (hits to destroy one; 20 hits = 1 s of aimed fire)
+  int  fj_enemy_fire_dist          = 20;        // [fighterjet] enemy_fire_distance (enemies only shoot inside this range)
+  int  fj_enemy_fire_interval      = 4;         // [fighterjet] enemy_fire_interval (frames between enemy hits; 20 frames = 1 s)
+  int  fj_aim_percent              = 200;       // [fighterjet] aim_assist_percent (100 = original hit window)
+  int  fj_speed_percent            = 50;        // [fighterjet] speed_percent (cruise speed; 100 = the Flipper original)
   // [birthdays] dates — up to 8 entries in DD-MM-YYYY format.
   // Only day & month are compared; the year is kept as reference in the file.
   // Default: empty (no birthday greetings).
@@ -1204,13 +1210,27 @@ words = ["box", "cat", "dog", "cactus", "rainbow"]
 # n * enemies_per_round, capped at max_enemies (1-12).
 high_score = 0
 start_enemies = 2
-enemies_per_round = 2
+enemies_per_round = 1
 max_enemies = 12
 player_health = 100
-# ESP32-C6 (IMU) only. Percent of 1 g: tilt past turn_tilt_percent to turn, tilt
-# forward past fire_tilt_percent to fire. Set invert_turn = true if left and
-# right feel swapped on your unit. (The S3 uses the joystick: click fires.)
+# Difficulty. enemy_health = hits to destroy one enemy (the guns land 20 per
+# second). Enemies only shoot inside enemy_fire_distance, and land one hit every
+# enemy_fire_interval frames (20 frames = 1 second). aim_assist_percent widens
+# your hit window: 100 = the Flipper original, 200 = twice as forgiving.
+enemy_health = 30
+enemy_fire_distance = 20
+enemy_fire_interval = 4
+aim_assist_percent = 200
+# Cruise speed: 100 = the Flipper original. Slower is much easier to aim — at the
+# original speed you shoot past the enemies before the guns can finish them.
+speed_percent = 50
+# ESP32-C6 (IMU) only. Percent of 1 g: tilt past turn_tilt_percent for a slow
+# turn, past fast_turn_tilt_percent for a fast one, and forward past
+# fire_tilt_percent to fire. Set invert_turn = true if left and right feel
+# swapped on your unit. (The S3 uses the joystick: click fires, and pushing the
+# stick most of the way over gives the fast turn.)
 turn_tilt_percent = 25
+fast_turn_tilt_percent = 50
 fire_tilt_percent = 20
 invert_turn = false
 
@@ -1941,6 +1961,30 @@ static void load_config()
         cfg.fj_turn_tilt_percent = max(10, min(80, atoi(val)));
         Serial.printf("[CFG]   fighterjet.turn_tilt      = %d%%\n", cfg.fj_turn_tilt_percent);
       }
+      else if (strcmp(key, "fast_turn_tilt_percent") == 0) {
+        cfg.fj_fast_tilt_percent = max(15, min(90, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.fast_turn_tilt = %d%%\n", cfg.fj_fast_tilt_percent);
+      }
+      else if (strcmp(key, "enemy_health") == 0) {
+        cfg.fj_enemy_health = max(5, min(200, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.enemy_health   = %d\n", cfg.fj_enemy_health);
+      }
+      else if (strcmp(key, "enemy_fire_distance") == 0) {
+        cfg.fj_enemy_fire_dist = max(5, min(100, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.enemy_fire_distance = %d\n", cfg.fj_enemy_fire_dist);
+      }
+      else if (strcmp(key, "enemy_fire_interval") == 0) {
+        cfg.fj_enemy_fire_interval = max(1, min(60, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.enemy_fire_interval = %d\n", cfg.fj_enemy_fire_interval);
+      }
+      else if (strcmp(key, "speed_percent") == 0) {
+        cfg.fj_speed_percent = max(20, min(150, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.speed          = %d%%\n", cfg.fj_speed_percent);
+      }
+      else if (strcmp(key, "aim_assist_percent") == 0) {
+        cfg.fj_aim_percent = max(100, min(400, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.aim_assist     = %d%%\n", cfg.fj_aim_percent);
+      }
       else if (strcmp(key, "fire_tilt_percent") == 0) {
         cfg.fj_fire_tilt_percent = max(10, min(80, atoi(val)));
         Serial.printf("[CFG]   fighterjet.fire_tilt      = %d%%\n", cfg.fj_fire_tilt_percent);
@@ -2259,7 +2303,13 @@ static void save_config()
   fw.printf("enemies_per_round = %d\n",    cfg.fj_per_round);
   fw.printf("max_enemies = %d\n",          cfg.fj_max_enemies);
   fw.printf("player_health = %d\n",        cfg.fj_health);
+  fw.printf("enemy_health = %d\n",         cfg.fj_enemy_health);
+  fw.printf("enemy_fire_distance = %d\n",  cfg.fj_enemy_fire_dist);
+  fw.printf("enemy_fire_interval = %d\n",  cfg.fj_enemy_fire_interval);
+  fw.printf("aim_assist_percent = %d\n",   cfg.fj_aim_percent);
+  fw.printf("speed_percent = %d\n",        cfg.fj_speed_percent);
   fw.printf("turn_tilt_percent = %d\n",    cfg.fj_turn_tilt_percent);
+  fw.printf("fast_turn_tilt_percent = %d\n", cfg.fj_fast_tilt_percent);
   fw.printf("fire_tilt_percent = %d\n",    cfg.fj_fire_tilt_percent);
   fw.printf("invert_turn = %s\n",          cfg.fj_invert_turn ? "true" : "false");
 
@@ -2560,7 +2610,13 @@ static void seed_fighterjet_config()
   fa.printf("enemies_per_round = %d\n", cfg.fj_per_round);
   fa.printf("max_enemies = %d\n",       cfg.fj_max_enemies);
   fa.printf("player_health = %d\n",     cfg.fj_health);
+  fa.printf("enemy_health = %d\n",      cfg.fj_enemy_health);
+  fa.printf("enemy_fire_distance = %d\n", cfg.fj_enemy_fire_dist);
+  fa.printf("enemy_fire_interval = %d\n", cfg.fj_enemy_fire_interval);
+  fa.printf("aim_assist_percent = %d\n",  cfg.fj_aim_percent);
+  fa.printf("speed_percent = %d\n",       cfg.fj_speed_percent);
   fa.printf("turn_tilt_percent = %d\n", cfg.fj_turn_tilt_percent);
+  fa.printf("fast_turn_tilt_percent = %d\n", cfg.fj_fast_tilt_percent);
   fa.printf("fire_tilt_percent = %d\n", cfg.fj_fire_tilt_percent);
   fa.printf("invert_turn = %s\n",       cfg.fj_invert_turn ? "true" : "false");
   fa.close();
@@ -11028,13 +11084,14 @@ static void tq_game_start()
 //
 //  Controls — the Flipper's D-pad does not exist here, so:
 //
-//    ESP32-C6 (IMU)        tilt left/right  → turn
+//    ESP32-C6 (IMU)        tilt left/right  → turn: slow past 25% tilt, fast
+//                                             past 50% (both set in config.ini)
 //                          tilt FORWARD     → fire (a quick forward flick holds
 //                                             the guns on for 0.4 s, so a shake
 //                                             is enough; tilting and holding
 //                                             keeps them firing)
 //                          tilt BACK        → brake
-//    ESP32-S3 (KY-023)     stick left/right → turn
+//    ESP32-S3 (KY-023)     stick left/right → turn (most of the way = fast)
 //                          stick down       → brake
 //                          stick click      → fire (held)
 //    Both                  tap the field    → pause / resume
@@ -11081,11 +11138,12 @@ static void tq_game_start()
 #define FJ_MAX_DIST        120.0f
 #define FJ_SPEED           0.5f
 #define FJ_BRAKE_SPEED     0.1f
-#define FJ_TURN_RATE       ((FJ_PI2 / FJ_FPS) / 8.0f)
+// Two turn speeds. The Flipper's single rate (45 deg/s) overshoots badly when
+// aiming by tilt, so: a gentle 15 deg/s for fine aim, 30 deg/s to swing round.
+#define FJ_TURN_SLOW       ((FJ_PI2 / FJ_FPS) / 24.0f)
+#define FJ_TURN_FAST       ((FJ_PI2 / FJ_FPS) / 12.0f)
 #define FJ_ENEMY_SPEED     0.3f
 #define FJ_ENEMY_TURN      ((FJ_PI2 / FJ_FPS) / 12.0f)
-#define FJ_ENEMY_HEALTH    50
-#define FJ_ENEMY_FIRE_DIST 50.0f
 #define FJ_ROUND_TITLE     (3 * FJ_FPS)      // frames the "ROUND n" banner shows
 #define FJ_COMPASS_W       44
 #define FJ_MM_R            10                // minimap radius, logical px
@@ -11106,7 +11164,8 @@ static void tq_game_start()
 #define FJ_FIRE_HOLD_FRAMES  8               // 0.4 s at 20 fps
 #define FJ_BRAKE_FACTOR      1.6f            // back-tilt must beat fire thresh by this
 #define FJ_BRAKE_FRAMES      3               // ...for this many frames in a row
-#define FJ_JOY_TURN          0.15f
+#define FJ_JOY_TURN          0.15f           // stick past this: slow turn
+#define FJ_JOY_TURN_FAST     0.60f           // ...and past this: fast turn
 #define FJ_JOY_BRAKE         0.5f
 
 // Which way is "tilt right" on the Y axis. Every tilt game in this sketch reads
@@ -11215,6 +11274,7 @@ struct FjEnemy {
   float   dist;       // distance from the player
   float   own;        // the enemy's own heading
   int     health;
+  uint8_t cool;       // frames until this enemy's next shot may land
   // Render cache, refreshed once per tick by fj_prepare_render()
   bool    vis;        // on screen this tick
   int16_t sx, sy;     // sprite top-left, logical px (centre-x already removed)
@@ -11227,6 +11287,7 @@ static FjEnemy  fj_en[FJ_MAX_ENEMIES];
 static int      fj_en_n       = 0;
 static float    fj_dir        = FJ_PI2 / 4.0f;   // player heading
 static int      fj_turning    = FJ_T_NONE;
+static bool     fj_turn_fast  = false;           // current turn is the fast one
 static bool     fj_braking    = false;
 static bool     fj_firing     = false;
 static int      fj_health     = 100;
@@ -11308,7 +11369,8 @@ static void fj_init_round(int round)
     fj_en[i].dir    = (float)random(600) / 100.0f;
     fj_en[i].own    = (float)random(600) / 100.0f;
     fj_en[i].dist   = FJ_MAX_DIST;
-    fj_en[i].health = FJ_ENEMY_HEALTH;
+    fj_en[i].health = cfg.fj_enemy_health;
+    fj_en[i].cool   = 0;
     fj_en[i].vis    = false;
     fj_en[i].mm_vis = false;
   }
@@ -11322,14 +11384,14 @@ static void fj_update()
   if (fj_health <= 0) return;
 
   if (fj_turning == FJ_T_LEFT) {
-    fj_dir += FJ_TURN_RATE;
+    fj_dir += fj_turn_fast ? FJ_TURN_FAST : FJ_TURN_SLOW;
     while (fj_dir > FJ_PI2) fj_dir -= FJ_PI2;
   } else if (fj_turning == FJ_T_RIGHT) {
-    fj_dir -= FJ_TURN_RATE;
+    fj_dir -= fj_turn_fast ? FJ_TURN_FAST : FJ_TURN_SLOW;
     while (fj_dir < 0.0f) fj_dir += FJ_PI2;
   }
 
-  const float speed = fj_braking ? FJ_BRAKE_SPEED : FJ_SPEED;
+  const float speed = fj_braking ? FJ_BRAKE_SPEED : FJ_SPEED * (float)cfg.fj_speed_percent / 100.0f;
   const float dX = cosf(fj_dir) * speed;
   const float dY = sinf(fj_dir) * speed;
 
@@ -11363,21 +11425,31 @@ static void fj_update()
     while (e.dir < 0.0f) e.dir += FJ_PI2;
     if (e.dist > FJ_MAX_DIST) e.dist = FJ_MAX_DIST;     // never lose the enemies
 
-    // Enemy shooting at you
-    if (e.dist < FJ_ENEMY_FIRE_DIST) {
+    // Enemy shooting at you: only at close range, and at a gentle rate — one
+    // hit lands, then the enemy must wait fj_enemy_fire_interval frames.
+    if (e.cool > 0) e.cool--;
+    if (e.dist < (float)cfg.fj_enemy_fire_dist) {
       const float aim = e.own - e.dir - FJ_PI2 / 2.0f;
       const float win = FJ_PI2 / (2.0f * (e.dist < 1.0f ? 1.0f : e.dist));
-      if (aim < win && aim > -win) fj_health -= (fj_health > 0) ? 1 : 0;
+      if (aim < win && aim > -win && e.cool == 0) {
+        fj_health -= (fj_health > 0) ? 1 : 0;
+        e.cool = (uint8_t)(cfg.fj_enemy_fire_interval - 1);
+      }
     }
   }
 
   if (fj_firing) {
-    const float corr = (fj_turning == FJ_T_LEFT)  ?  FJ_FOV / 4.0f
+    // The original shifts the aim point toward the bank while turning. Kept for
+    // the fast turn only: a slow turn is for lining up a shot, so it fires
+    // dead ahead.
+    const float corr = !fj_turn_fast ? 0.0f
+                     : (fj_turning == FJ_T_LEFT)  ?  FJ_FOV / 4.0f
                      : (fj_turning == FJ_T_RIGHT) ? -FJ_FOV / 4.0f : 0.0f;
+    const float assist = (float)cfg.fj_aim_percent / 100.0f;
     for (int i = 0; i < fj_en_n; i++) {
       FjEnemy &e = fj_en[i];
       if (e.health <= 0) continue;
-      const float win = FJ_PI2 / (2.0f * (e.dist < 1.0f ? 1.0f : e.dist));
+      const float win = assist * FJ_PI2 / (2.0f * (e.dist < 1.0f ? 1.0f : e.dist));
       if (e.dir > fj_dir + corr - win && e.dir < fj_dir + corr + win) {
         if (--e.health <= 0) fj_kill_pend = true;
       }
@@ -11675,6 +11747,7 @@ static void fj_banner_refresh()
 static void fj_read_input()
 {
   int  turn  = FJ_T_NONE;
+  bool fast  = false;
   bool brake = false;
   bool fire  = false;
 
@@ -11684,6 +11757,7 @@ static void fj_read_input()
     const float x = joy_x(), y = joy_y();
     if      (x >  FJ_JOY_TURN) turn = FJ_T_RIGHT;
     else if (x < -FJ_JOY_TURN) turn = FJ_T_LEFT;
+    fast = fabsf(x) > FJ_JOY_TURN_FAST;
     brake = (y < -FJ_JOY_BRAKE);
     fire  = !joy_sw_stable;                 // debounced, held for as long as pressed
   } else
@@ -11696,10 +11770,13 @@ static void fj_read_input()
     const float dy   = (accelData.accelY - fj_base_y) * sign;
     const float fwd  = (accelData.accelX - fj_base_x) * fj_fwd_sign;
     const float tt   = (float)cfg.fj_turn_tilt_percent / 100.0f;
+    float       tf   = (float)cfg.fj_fast_tilt_percent / 100.0f;
+    if (tf < tt + 0.05f) tf = tt + 0.05f;          // keep the two levels distinct
     const float ft   = (float)cfg.fj_fire_tilt_percent / 100.0f;
 
     if      (dy >  tt) turn = FJ_T_RIGHT;
     else if (dy < -tt) turn = FJ_T_LEFT;
+    fast = fabsf(dy) > tf;                         // slow past tt, fast past tf
 
     // A forward flick latches the guns on for a moment; a held tilt keeps
     // re-arming that latch, so both a shake and a sustained lean fire.
@@ -11714,9 +11791,10 @@ static void fj_read_input()
     brake = fj_brake_cnt >= FJ_BRAKE_FRAMES;
   }
 
-  fj_turning = turn;
-  fj_braking = brake;
-  fj_firing  = fire;
+  fj_turning   = turn;
+  fj_turn_fast = fast && turn != FJ_T_NONE;
+  fj_braking   = brake;
+  fj_firing    = fire;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -11742,7 +11820,7 @@ static void fj_cal_begin()
   fj_cal_sx = fj_cal_sy = 0.0f;
   fj_cal_n     = 0;
   fj_cal_hits  = 0;
-  fj_turning = FJ_T_NONE;  fj_braking = false;  fj_firing = false;
+  fj_turning = FJ_T_NONE;  fj_turn_fast = false;  fj_braking = false;  fj_firing = false;
   fj_fire_hold = 0;        fj_brake_cnt = 0;
 
   if (!fj_cal_card && apps_cont) {
@@ -11862,7 +11940,7 @@ static void fj_over_cb(lv_timer_t *t)
 static void fj_on_death()
 {
   fj_phase   = FJ_P_OVER;
-  fj_turning = FJ_T_NONE;  fj_braking = false;  fj_firing = false;
+  fj_turning = FJ_T_NONE;  fj_turn_fast = false;  fj_braking = false;  fj_firing = false;
 
   // Score is rounds survived — what the original's game-over screen prints
   if (fj_round > cfg.fj_high_score) {
@@ -11966,7 +12044,7 @@ static void fj_pause_game()
 {
   if (!fj_running || fj_phase != FJ_P_PLAY || fj_pause_pop) return;
   fj_phase   = FJ_P_PAUSED;
-  fj_turning = FJ_T_NONE;  fj_braking = false;  fj_firing = false;
+  fj_turning = FJ_T_NONE;  fj_turn_fast = false;  fj_braking = false;  fj_firing = false;
   fj_fire_hold = 0;
 
   fj_pause_pop = fj_make_popup(lv_color_make(120, 160, 220));

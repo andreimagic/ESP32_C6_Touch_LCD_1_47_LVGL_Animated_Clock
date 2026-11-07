@@ -39,6 +39,8 @@ button:focus-visible,summary:focus-visible{outline:2px solid var(--gold);outline
 #hb p{margin:.8rem 0 .5rem;font-size:.8rem;color:#6a72a8}
 #hb button{padding:.5rem 1rem;font-size:.9rem}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.foot{margin:2rem 0 .5rem;font-size:.75rem;text-align:center;color:#6a72a8}
+.foot a{color:#6a72a8;text-underline-offset:2px}.foot a:hover{color:var(--cyan)}
 [hidden]{display:none!important}
 </style>
 <!-- Browser favicon -->
@@ -67,6 +69,7 @@ button:focus-visible,summary:focus-visible{outline:2px solid var(--gold);outline
 </div>
 <div class="row"><button id="tiltBtn" hidden>Enable tilt controls</button><span id="sensor"></span></div>
 <p class="help">The numbers 1 to 90 are shuffled once per game, so none repeats. Click the circle, press <kbd>Space</kbd>, <kbd>Enter</kbd> or <kbd>→</kbd>, or tilt a phone left or right to call the next number. <kbd>H</kbd> shows everything called so far. The game is kept if you reload the page.</p>
+<p class="foot"><a href="https://github.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock" target="_blank" rel="noopener">View project on GitHub</a> &middot; <a href="https://andreimagic.github.io/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/" target="_blank" rel="noopener">Project page</a></p>
 </main>
 
 <div id="hist" role="dialog" aria-modal="true" aria-labelledby="ht" hidden>

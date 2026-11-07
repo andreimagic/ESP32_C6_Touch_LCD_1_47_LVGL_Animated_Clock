@@ -65,7 +65,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v3.9.2"
+#define FW_VERSION      "v3.9.4"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -195,6 +195,10 @@ struct AppConfig {
   int  fj_enemy_fire_interval      = 4;         // [fighterjet] enemy_fire_interval (frames between enemy hits; 20 frames = 1 s)
   int  fj_aim_percent              = 200;       // [fighterjet] aim_assist_percent (100 = original hit window)
   int  fj_speed_percent            = 50;        // [fighterjet] speed_percent (cruise speed; 100 = the Flipper original)
+  int  fj_shield_sec               = 5;         // [fighterjet] shield_seconds (how long the Healing Force Shield lasts)
+  int  fj_shield_heal_pct          = 10;        // [fighterjet] shield_heal_percent (of max health, per second)
+  int  fj_shield_cooldown_sec      = 0;         // [fighterjet] shield_cooldown_seconds (0 = may be re-raised at once)
+  int  fj_shield_block_pct         = 50;        // [fighterjet] shield_damage_reduction_percent (damage the shield absorbs)
   // [birthdays] dates — up to 8 entries in DD-MM-YYYY format.
   // Only day & month are compared; the year is kept as reference in the file.
   // Default: empty (no birthday greetings).
@@ -1224,12 +1228,22 @@ aim_assist_percent = 200
 # Cruise speed: 100 = the Flipper original. Slower is much easier to aim — at the
 # original speed you shoot past the enemies before the guns can finish them.
 speed_percent = 50
+# Healing Force Shield (tap the left or right quarter of the screen, or click the
+# joystick): a bubble for shield_seconds that heals shield_heal_percent of max
+# health per second AND absorbs shield_damage_reduction_percent of the damage
+# the enemies land (50 = half). While it is up the jet cannot fire and flies at
+# 25% speed. shield_cooldown_seconds is the wait before it can be raised again;
+# 0 = none.
+shield_seconds = 5
+shield_heal_percent = 10
+shield_damage_reduction_percent = 50
+shield_cooldown_seconds = 0
 # ESP32-C6 (IMU) only. Percent of 1 g: tilt past turn_tilt_percent for a slow
 # turn, past fast_turn_tilt_percent for a fast one, and forward past
 # fire_tilt_percent to fire. Set invert_turn = true if left and right feel
 # swapped on your unit. (The S3 uses the joystick: push forward to fire, pull
-# back to brake, and push the stick most of the way over for the fast turn. The
-# stick click is unused.)
+# back to brake, push the stick most of the way over for the fast turn, and click
+# for the shield.)
 turn_tilt_percent = 25
 fast_turn_tilt_percent = 50
 fire_tilt_percent = 20
@@ -1978,6 +1992,22 @@ static void load_config()
         cfg.fj_enemy_fire_interval = max(1, min(60, atoi(val)));
         Serial.printf("[CFG]   fighterjet.enemy_fire_interval = %d\n", cfg.fj_enemy_fire_interval);
       }
+      else if (strcmp(key, "shield_seconds") == 0) {
+        cfg.fj_shield_sec = max(1, min(30, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.shield_seconds = %d\n", cfg.fj_shield_sec);
+      }
+      else if (strcmp(key, "shield_heal_percent") == 0) {
+        cfg.fj_shield_heal_pct = max(1, min(100, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.shield_heal    = %d%%/s\n", cfg.fj_shield_heal_pct);
+      }
+      else if (strcmp(key, "shield_damage_reduction_percent") == 0) {
+        cfg.fj_shield_block_pct = max(0, min(100, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.shield_block   = %d%%\n", cfg.fj_shield_block_pct);
+      }
+      else if (strcmp(key, "shield_cooldown_seconds") == 0) {
+        cfg.fj_shield_cooldown_sec = max(0, min(120, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.shield_cooldown = %d\n", cfg.fj_shield_cooldown_sec);
+      }
       else if (strcmp(key, "speed_percent") == 0) {
         cfg.fj_speed_percent = max(20, min(150, atoi(val)));
         Serial.printf("[CFG]   fighterjet.speed          = %d%%\n", cfg.fj_speed_percent);
@@ -2309,6 +2339,10 @@ static void save_config()
   fw.printf("enemy_fire_interval = %d\n",  cfg.fj_enemy_fire_interval);
   fw.printf("aim_assist_percent = %d\n",   cfg.fj_aim_percent);
   fw.printf("speed_percent = %d\n",        cfg.fj_speed_percent);
+  fw.printf("shield_seconds = %d\n",       cfg.fj_shield_sec);
+  fw.printf("shield_heal_percent = %d\n",  cfg.fj_shield_heal_pct);
+  fw.printf("shield_damage_reduction_percent = %d\n", cfg.fj_shield_block_pct);
+  fw.printf("shield_cooldown_seconds = %d\n", cfg.fj_shield_cooldown_sec);
   fw.printf("turn_tilt_percent = %d\n",    cfg.fj_turn_tilt_percent);
   fw.printf("fast_turn_tilt_percent = %d\n", cfg.fj_fast_tilt_percent);
   fw.printf("fire_tilt_percent = %d\n",    cfg.fj_fire_tilt_percent);
@@ -2616,6 +2650,10 @@ static void seed_fighterjet_config()
   fa.printf("enemy_fire_interval = %d\n", cfg.fj_enemy_fire_interval);
   fa.printf("aim_assist_percent = %d\n",  cfg.fj_aim_percent);
   fa.printf("speed_percent = %d\n",       cfg.fj_speed_percent);
+  fa.printf("shield_seconds = %d\n",      cfg.fj_shield_sec);
+  fa.printf("shield_heal_percent = %d\n", cfg.fj_shield_heal_pct);
+  fa.printf("shield_damage_reduction_percent = %d\n", cfg.fj_shield_block_pct);
+  fa.printf("shield_cooldown_seconds = %d\n", cfg.fj_shield_cooldown_sec);
   fa.printf("turn_tilt_percent = %d\n", cfg.fj_turn_tilt_percent);
   fa.printf("fast_turn_tilt_percent = %d\n", cfg.fj_fast_tilt_percent);
   fa.printf("fire_tilt_percent = %d\n", cfg.fj_fire_tilt_percent);
@@ -11096,9 +11134,20 @@ static void tq_game_start()
 //                          stick FORWARD    → fire (the joystick twin of the IMU's
 //                                             forward tilt, with the same 0.4 s latch)
 //                          stick back       → brake
-//                          stick click      → unused
-//    Both                  tap the field    → pause / resume
-//                          hold             → exit
+//                          stick click      → Healing Force Shield
+//    Both                  tap centre 50%   → pause / resume
+//                          hold centre 50%  → exit
+//                          tap left/right   → Healing Force Shield (a press on
+//                          25% of the screen  either side raises it, tap or hold;
+//                                             the sides never pause or exit)
+//
+//  Healing Force Shield. A bubble around the jet for 5 s (config.ini:
+//  shield_seconds) that heals 10% of max health per second and is also a
+//  defence field: it absorbs half (shield_damage_reduction_percent) of the
+//  damage the enemies land. While it is up the guns are off and the jet flies
+//  at 25% speed; turning still works. It can be re-raised once it drops (an optional
+//  shield_cooldown_seconds, default 0, can space that out). It freezes with the
+//  game on pause, and ends on death.
 //
 //  Forward calibration (IMU only). Everyone holds a device differently, so
 //  "level" and "forward" cannot be assumed. On every game start and on every
@@ -11168,6 +11217,9 @@ static void tq_game_start()
 #define FJ_FIRE_HOLD_FRAMES  8               // 0.4 s at 20 fps
 #define FJ_BRAKE_FACTOR      1.6f            // back-tilt must beat fire thresh by this
 #define FJ_BRAKE_FRAMES      3               // ...for this many frames in a row
+#define FJ_SHIELD_SPEED      0.25f           // shield up: fraction of cruise speed
+#define FJ_SHIELD_R          36              // bubble radius, px
+#define FJ_SHIELD_CY         112             // bubble centre y in the field, px
 #define FJ_JOY_TURN          0.15f           // stick past this: slow turn
 #define FJ_JOY_TURN_FAST     0.60f           // ...and past this: fast turn
 #define FJ_JOY_BRAKE         0.5f            // stick pulled back past this: brake
@@ -11305,6 +11357,10 @@ static bool     fj_running    = false;
 static bool     fj_beat_high  = false;
 static bool     fj_kill_pend  = false;           // an enemy died this frame
 static bool     fj_round_pend = false;           // a round was cleared this frame
+static int      fj_shield_left = 0;              // frames of Healing Force Shield remaining
+static int      fj_shield_cool = 0;              // frames until it may be raised again
+static float    fj_heal_acc   = 0.0f;            // fractional health carried between frames
+static float    fj_dmg_acc    = 0.0f;            // fractional damage carried between enemy hits
 
 // IMU control state
 static float    fj_base_x     = 0.0f, fj_base_y = 0.0f;   // calibrated rest pose
@@ -11323,6 +11379,8 @@ static lv_obj_t   *fj_hp_lbl    = nullptr;   // status bar — left
 static lv_obj_t   *fj_rd_lbl    = nullptr;   // status bar — right
 static lv_obj_t   *fj_banner    = nullptr;   // "ROUND n"
 static lv_obj_t   *fj_hint      = nullptr;   // controls, first round only
+static lv_obj_t   *fj_sh_lbl    = nullptr;   // "SHIELD 4s"
+static int         fj_last_sh   = -1;
 static lv_obj_t   *fj_cal_card  = nullptr;   // calibration card
 static lv_obj_t   *fj_cal_title = nullptr;
 static lv_obj_t   *fj_cal_sub   = nullptr;
@@ -11345,8 +11403,9 @@ static void fj_show_popup(void);
 static const Note FJ_KILL_TUNE[]  = { {NOTE_E5, 50}, {NOTE_A5, 70} };
 static const Note FJ_ROUND_TUNE[] = { {NOTE_C5, 80}, {NOTE_E5, 80}, {NOTE_A5, 160} };
 static const Note FJ_CAL_TUNE[]   = { {NOTE_A4, 50} };
+static const Note FJ_SHIELD_TUNE[] = { {NOTE_C5, 60}, {NOTE_A5, 120} };
 
-// which: 0 = enemy down, 1 = round cleared, 2 = calibration step.
+// which: 0 = enemy down, 1 = round cleared, 2 = calibration step, 3 = shield up.
 // Rides the shared async tune player, so the game keeps ticking while it plays.
 static void fj_sfx(int which)
 {
@@ -11355,6 +11414,7 @@ static void fj_sfx(int which)
   switch (which) {
     case 0:  tune_notes = FJ_KILL_TUNE;  tune_total = 2; break;
     case 1:  tune_notes = FJ_ROUND_TUNE; tune_total = 3; break;
+    case 3:  tune_notes = FJ_SHIELD_TUNE; tune_total = 2; break;
     default: tune_notes = FJ_CAL_TUNE;   tune_total = 1; break;
   }
   tune_step  = 0;
@@ -11389,6 +11449,21 @@ static void fj_update()
   fj_tick++;
   if (fj_health <= 0) return;
 
+  // Healing Force Shield: heal a slice of max health every frame, count down,
+  // and start the cooldown (if any) when it drops.
+  if (fj_shield_left > 0) {
+    fj_heal_acc += (float)cfg.fj_health * (float)cfg.fj_shield_heal_pct / 100.0f / (float)FJ_FPS;
+    const int add = (int)fj_heal_acc;
+    if (add > 0) {
+      fj_heal_acc -= (float)add;
+      fj_health += add;
+      if (fj_health > cfg.fj_health) fj_health = cfg.fj_health;
+    }
+    if (--fj_shield_left == 0) fj_shield_cool = cfg.fj_shield_cooldown_sec * FJ_FPS;
+  } else if (fj_shield_cool > 0) {
+    fj_shield_cool--;
+  }
+
   if (fj_turning == FJ_T_LEFT) {
     fj_dir += fj_turn_fast ? FJ_TURN_FAST : FJ_TURN_SLOW;
     while (fj_dir > FJ_PI2) fj_dir -= FJ_PI2;
@@ -11397,7 +11472,9 @@ static void fj_update()
     while (fj_dir < 0.0f) fj_dir += FJ_PI2;
   }
 
-  const float speed = fj_braking ? FJ_BRAKE_SPEED : FJ_SPEED * (float)cfg.fj_speed_percent / 100.0f;
+  const float cruise = FJ_SPEED * (float)cfg.fj_speed_percent / 100.0f;
+  float speed = fj_braking ? FJ_BRAKE_SPEED : cruise;
+  if (fj_shield_left > 0 && speed > cruise * FJ_SHIELD_SPEED) speed = cruise * FJ_SHIELD_SPEED;
   const float dX = cosf(fj_dir) * speed;
   const float dY = sinf(fj_dir) * speed;
 
@@ -11438,13 +11515,23 @@ static void fj_update()
       const float aim = e.own - e.dir - FJ_PI2 / 2.0f;
       const float win = FJ_PI2 / (2.0f * (e.dist < 1.0f ? 1.0f : e.dist));
       if (aim < win && aim > -win && e.cool == 0) {
-        fj_health -= (fj_health > 0) ? 1 : 0;
+        // One hit is 1 health. Behind the shield only the unabsorbed share of it
+        // gets through; the fraction is carried so 50% means every other hit
+        // lands, rather than every hit rounding to 0 or 1.
+        float dmg = 1.0f;
+        if (fj_shield_left > 0) dmg = 1.0f - (float)cfg.fj_shield_block_pct / 100.0f;
+        fj_dmg_acc += dmg;
+        const int hit = (int)fj_dmg_acc;
+        if (hit > 0) {
+          fj_dmg_acc -= (float)hit;
+          fj_health  -= (fj_health > 0) ? hit : 0;
+        }
         e.cool = (uint8_t)(cfg.fj_enemy_fire_interval - 1);
       }
     }
   }
 
-  if (fj_firing) {
+  if (fj_firing && fj_shield_left == 0) {
     // The original shifts the aim point toward the bank while turning. Kept for
     // the fast turn only: a slow turn is for lining up a shot, so it fires
     // dead ahead.
@@ -11673,6 +11760,42 @@ static void fj_draw_jet(lv_layer_t *layer)
   }
 }
 
+// The Healing Force Shield: a translucent bubble around the jet. It breathes
+// gently, and flickers through its last second so the player sees it ending.
+static void fj_draw_shield(lv_layer_t *layer)
+{
+  if (fj_shield_left <= 0 || fj_health <= 0) return;
+  if (fj_shield_left <= FJ_FPS && ((fj_tick / 3) & 1)) return;      // last-second flicker
+
+  const int r = FJ_SHIELD_R + (int)((fj_tick / 4) % 3) - 1;         // breathe: r-1 .. r+1
+  const int cx = FJ_FIELD_W / 2, cy = FJ_SHIELD_CY;
+  lv_area_t a;
+  a.x1 = fj_ox + cx - r;  a.y1 = fj_oy + cy - r;
+  a.x2 = fj_ox + cx + r;  a.y2 = fj_oy + cy + r;
+  if (a.y2 < fj_clip.y1 || a.y1 > fj_clip.y2) return;
+
+  lv_draw_rect_dsc_t b;
+  lv_draw_rect_dsc_init(&b);
+  b.radius       = LV_RADIUS_CIRCLE;
+  b.bg_color     = lv_color_make(90, 210, 255);
+  b.bg_opa       = LV_OPA_20;
+  b.border_color = lv_color_make(170, 240, 255);
+  b.border_width = 3;
+  b.border_opa   = LV_OPA_COVER;
+  lv_draw_rect(layer, &b, &a);
+
+  // A small specular highlight, top-left, so it reads as a bubble and not a ring
+  lv_area_t h;
+  h.x1 = a.x1 + r / 3;      h.y1 = a.y1 + r / 4;
+  h.x2 = h.x1 + r / 3;      h.y2 = h.y1 + 3;
+  lv_draw_rect_dsc_t hd;
+  lv_draw_rect_dsc_init(&hd);
+  hd.radius   = 2;
+  hd.bg_color = lv_color_white();
+  hd.bg_opa   = LV_OPA_60;
+  if (!(h.y2 < fj_clip.y1 || h.y1 > fj_clip.y2)) lv_draw_rect(layer, &hd, &h);
+}
+
 static void fj_draw_cb(lv_event_t *e)
 {
   lv_layer_t *layer = lv_event_get_layer(e);
@@ -11710,6 +11833,7 @@ static void fj_draw_cb(lv_event_t *e)
   }
 
   fj_draw_jet(layer);
+  fj_draw_shield(layer);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -11730,6 +11854,16 @@ static void fj_status_refresh()
     fj_last_best  = cfg.fj_high_score;
     lv_label_set_text_fmt(fj_rd_lbl, "Round: %d   Best: %d", fj_round + 1, cfg.fj_high_score);
   }
+}
+
+static void fj_shield_label_refresh()
+{
+  if (!fj_sh_lbl) return;
+  const int secs = (fj_shield_left + FJ_FPS - 1) / FJ_FPS;       // 0 when down
+  if (secs == fj_last_sh) return;
+  fj_last_sh = secs;
+  if (secs > 0) lv_label_set_text_fmt(fj_sh_lbl, "SHIELD  %ds", secs);
+  lv_obj_set_hidden(fj_sh_lbl, secs == 0);
 }
 
 static void fj_banner_refresh()
@@ -11808,7 +11942,7 @@ static void fj_read_input()
   fj_turning   = turn;
   fj_turn_fast = fast && turn != FJ_T_NONE;
   fj_braking   = brake;
-  fj_firing    = fire;
+  fj_firing    = fire && fj_shield_left == 0;   // no guns behind a shield
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -11954,6 +12088,7 @@ static void fj_over_cb(lv_timer_t *t)
 static void fj_on_death()
 {
   fj_phase   = FJ_P_OVER;
+  fj_shield_left = 0;
   fj_turning = FJ_T_NONE;  fj_turn_fast = false;  fj_braking = false;  fj_firing = false;
 
   // Score is rounds survived — what the original's game-over screen prints
@@ -11984,6 +12119,7 @@ static void fj_tick_cb(lv_timer_t * /*t*/)
     fj_prepare_render();
     fj_status_refresh();
     fj_banner_refresh();
+    fj_shield_label_refresh();
   } else {
     return;                         // paused / over: nothing moves, nothing redraws
   }
@@ -12007,19 +12143,53 @@ static void fj_stop()
   fj_stop_timers();
   // Same reasoning as tq_stop(): a tune on the shared timer outlives the game
   if (was_running) tune_stop();
-  fj_view = fj_hp_lbl = fj_rd_lbl = fj_banner = fj_hint = nullptr;
+  fj_view = fj_hp_lbl = fj_rd_lbl = fj_banner = fj_hint = fj_sh_lbl = nullptr;
   fj_cal_card = fj_cal_title = fj_cal_sub = nullptr;
   fj_pause_pop = fj_pop = nullptr;
+}
+
+// Raise the Healing Force Shield. Only while actually flying: not during
+// calibration, pause or game over, not when already up, not on cooldown.
+static void fj_shield_activate()
+{
+  if (!fj_running || fj_phase != FJ_P_PLAY || fj_health <= 0) return;
+  if (fj_shield_left > 0 || fj_shield_cool > 0) return;
+  fj_shield_left = cfg.fj_shield_sec * FJ_FPS;
+  fj_heal_acc    = 0.0f;
+  fj_firing      = false;
+  fj_fire_hold   = 0;
+  fj_sfx(3);
+}
+
+// Was the press that just fired this event on the left or right quarter?
+static bool fj_press_on_side()
+{
+  lv_point_t p;
+  lv_indev_get_point(lv_indev_get_act(), &p);
+  return (p.x < FJ_FIELD_W / 4) || (p.x >= FJ_FIELD_W - FJ_FIELD_W / 4);
 }
 
 static void fj_tap_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
   if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_NONE) return;   // a swipe
-  fj_pause_game();
+  if (fj_press_on_side()) fj_shield_activate();     // left / right 25%
+  else                    fj_pause_game();          // centre 50%
 }
 
+// The touch layer's hold: centre exits, as everywhere else. A hold on either
+// side raises the shield too, so a slow tap there is never lost and the sides
+// can never exit by accident.
 static void fj_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_NONE) return;
+  if (fj_press_on_side()) { fj_shield_activate(); return; }
+  apps_longpress_cb(e);
+}
+
+// Hold on a popup always exits, wherever on the popup it lands.
+static void fj_popup_exit_cb(lv_event_t *e)
 {
   if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
   if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_NONE) return;
@@ -12050,7 +12220,7 @@ static lv_obj_t *fj_make_popup(lv_color_t border)
   lv_obj_set_style_radius(pop, 8, 0);
   lv_obj_set_style_pad_all(pop, 0, 0);
   lv_obj_set_scrollable(pop, false);
-  lv_obj_add_event_cb(pop, fj_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+  lv_obj_add_event_cb(pop, fj_popup_exit_cb, LV_EVENT_LONG_PRESSED, nullptr);
   return pop;
 }
 
@@ -12154,13 +12324,15 @@ static void fj_game_start()
   fj_kill_pend = fj_round_pend = false;
   fj_fire_hold = 0;
   fj_brake_cnt = 0;
+  fj_shield_left = 0;  fj_shield_cool = 0;  fj_heal_acc = 0.0f;  fj_dmg_acc = 0.0f;
   fj_last_hp = fj_last_round = fj_last_best = fj_banner_round = -1;
+  fj_last_sh = -1;
   fj_init_round(0);
   fj_prepare_render();
 
   lv_obj_clean(apps_cont);
   app_subphase = 1;
-  fj_view = fj_hp_lbl = fj_rd_lbl = fj_banner = fj_hint = nullptr;
+  fj_view = fj_hp_lbl = fj_rd_lbl = fj_banner = fj_hint = fj_sh_lbl = nullptr;
   fj_cal_card = fj_cal_title = fj_cal_sub = nullptr;
   fj_pause_pop = fj_pop = nullptr;
 
@@ -12196,9 +12368,14 @@ static void fj_game_start()
 
   fj_hint = fj_label(apps_cont, &dejavu_mono_14, lv_color_make(255, 235, 140));
   lv_obj_set_style_text_align(fj_hint, LV_TEXT_ALIGN_CENTER, 0);
-  lv_label_set_text(fj_hint, joy_active() ? "stick: steer  .  push up: fire"
-                                          : "tilt: steer  .  forward: fire");
-  lv_obj_align(fj_hint, LV_ALIGN_TOP_MID, 0, 66);
+  lv_label_set_text(fj_hint, joy_active() ? "stick: steer . push up: fire\nclick / tap sides: shield"
+                                          : "tilt: steer . forward: fire\ntap sides: shield");
+  lv_obj_align(fj_hint, LV_ALIGN_TOP_MID, 0, 58);
+
+  fj_sh_lbl = fj_label(apps_cont, &dejavu_mono_14, lv_color_make(150, 235, 255));
+  lv_label_set_text(fj_sh_lbl, "");
+  lv_obj_align(fj_sh_lbl, LV_ALIGN_TOP_MID, 0, 18);
+  lv_obj_set_hidden(fj_sh_lbl, true);
 
   // Status bar: Health (left) / Round + Best (right)
   fj_hp_lbl = fj_label(apps_cont, &dejavu_mono_14, lv_color_make(90, 210, 120));
@@ -12215,6 +12392,7 @@ static void fj_game_start()
   fj_phase   = FJ_P_PLAY;
   fj_status_refresh();
   fj_banner_refresh();
+  fj_shield_label_refresh();
   fj_timer = lv_timer_create(fj_tick_cb, FJ_TICK_MS, nullptr);
 
   if (imuReady && !joy_active()) fj_cal_begin();     // calibrate before the first frame of play
@@ -12355,10 +12533,9 @@ static void joy_click_dispatch()
       else                 sn_pause_game();
       break;
     case 8: if (tq_pop)    tq_game_start(); break;
-    // Fighter Jet: the stick click is deliberately unused for now. Fire is a
-    // forward push, steering and braking are the stick, pause/resume/restart
-    // are taps on the touchscreen.
-    case 9: break;
+    // Fighter Jet: the click raises the Healing Force Shield. Fire is a forward
+    // push of the stick; pause / resume / restart are taps on the touchscreen.
+    case 9: fj_shield_activate(); break;
     default: break;
   }
 }

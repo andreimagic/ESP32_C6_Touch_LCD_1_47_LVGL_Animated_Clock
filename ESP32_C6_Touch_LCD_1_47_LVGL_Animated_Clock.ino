@@ -65,7 +65,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v3.9.1"
+#define FW_VERSION      "v3.9.2"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -1227,8 +1227,9 @@ speed_percent = 50
 # ESP32-C6 (IMU) only. Percent of 1 g: tilt past turn_tilt_percent for a slow
 # turn, past fast_turn_tilt_percent for a fast one, and forward past
 # fire_tilt_percent to fire. Set invert_turn = true if left and right feel
-# swapped on your unit. (The S3 uses the joystick: click fires, and pushing the
-# stick most of the way over gives the fast turn.)
+# swapped on your unit. (The S3 uses the joystick: push forward to fire, pull
+# back to brake, and push the stick most of the way over for the fast turn. The
+# stick click is unused.)
 turn_tilt_percent = 25
 fast_turn_tilt_percent = 50
 fire_tilt_percent = 20
@@ -11092,8 +11093,10 @@ static void tq_game_start()
 //                                             keeps them firing)
 //                          tilt BACK        → brake
 //    ESP32-S3 (KY-023)     stick left/right → turn (most of the way = fast)
-//                          stick down       → brake
-//                          stick click      → fire (held)
+//                          stick FORWARD    → fire (the joystick twin of the IMU's
+//                                             forward tilt, with the same 0.4 s latch)
+//                          stick back       → brake
+//                          stick click      → unused
 //    Both                  tap the field    → pause / resume
 //                          hold             → exit
 //
@@ -11115,7 +11118,7 @@ static void tq_game_start()
 //      enemies[1] in both windows, which looks like a typo for enemies[i] and
 //      made every enemy's hit window depend on an unrelated enemy.
 //    * The guns are on only while firing, as in the original, but "firing" is
-//      the forward tilt / joystick click described above.
+//      the forward tilt / forward stick push described above.
 //    * Pause exists (tap), and the best score — rounds survived — persists in
 //      config.ini under [fighterjet].
 //
@@ -11139,9 +11142,10 @@ static void tq_game_start()
 #define FJ_SPEED           0.5f
 #define FJ_BRAKE_SPEED     0.1f
 // Two turn speeds. The Flipper's single rate (45 deg/s) overshoots badly when
-// aiming by tilt, so: a gentle 15 deg/s for fine aim, 30 deg/s to swing round.
+// aiming by tilt, so: a gentle 15 deg/s for fine aim, and 60 deg/s — faster than
+// the original — to swing round (a full circle in 6 s). Divisors of 2*pi/FPS.
 #define FJ_TURN_SLOW       ((FJ_PI2 / FJ_FPS) / 24.0f)
-#define FJ_TURN_FAST       ((FJ_PI2 / FJ_FPS) / 12.0f)
+#define FJ_TURN_FAST       ((FJ_PI2 / FJ_FPS) / 6.0f)
 #define FJ_ENEMY_SPEED     0.3f
 #define FJ_ENEMY_TURN      ((FJ_PI2 / FJ_FPS) / 12.0f)
 #define FJ_ROUND_TITLE     (3 * FJ_FPS)      // frames the "ROUND n" banner shows
@@ -11166,7 +11170,9 @@ static void tq_game_start()
 #define FJ_BRAKE_FRAMES      3               // ...for this many frames in a row
 #define FJ_JOY_TURN          0.15f           // stick past this: slow turn
 #define FJ_JOY_TURN_FAST     0.60f           // ...and past this: fast turn
-#define FJ_JOY_BRAKE         0.5f
+#define FJ_JOY_BRAKE         0.5f            // stick pulled back past this: brake
+#define FJ_JOY_FIRE          0.5f            // stick pushed forward past this: fire
+#define FJ_JOY_TURN_FIRING   0.35f           // while firing, a wobble of the thumb must not turn
 
 // Which way is "tilt right" on the Y axis. Every tilt game in this sketch reads
 // accelY > 0 as the device being tipped to the right; the plane banks the same
@@ -11755,11 +11761,19 @@ static void fj_read_input()
   if (joy_active()) {
     // joy_x()/joy_y() are on-screen axes, already dead-zoned: +x right, +y up.
     const float x = joy_x(), y = joy_y();
-    if      (x >  FJ_JOY_TURN) turn = FJ_T_RIGHT;
-    else if (x < -FJ_JOY_TURN) turn = FJ_T_LEFT;
-    fast = fabsf(x) > FJ_JOY_TURN_FAST;
+    // Forward fires, exactly like the IMU's forward tilt: crossing the threshold
+    // latches the guns on for a few frames, holding it keeps re-arming them.
+    if (y > FJ_JOY_FIRE)       fj_fire_hold = FJ_FIRE_HOLD_FRAMES;
+    else if (fj_fire_hold > 0) fj_fire_hold--;
+    fire = fj_fire_hold > 0;
+
+    // Pushing straight up, the thumb drifts sideways a little; while the guns are
+    // on, ask for a more deliberate sideways push before turning.
+    const float tx = fire ? FJ_JOY_TURN_FIRING : FJ_JOY_TURN;
+    if      (x >  tx) turn = FJ_T_RIGHT;
+    else if (x < -tx) turn = FJ_T_LEFT;
+    fast  = fabsf(x) > FJ_JOY_TURN_FAST;
     brake = (y < -FJ_JOY_BRAKE);
-    fire  = !joy_sw_stable;                 // debounced, held for as long as pressed
   } else
 #endif
   if (imuReady) {
@@ -12182,7 +12196,7 @@ static void fj_game_start()
 
   fj_hint = fj_label(apps_cont, &dejavu_mono_14, lv_color_make(255, 235, 140));
   lv_obj_set_style_text_align(fj_hint, LV_TEXT_ALIGN_CENTER, 0);
-  lv_label_set_text(fj_hint, joy_active() ? "stick: steer  .  click: fire"
+  lv_label_set_text(fj_hint, joy_active() ? "stick: steer  .  push up: fire"
                                           : "tilt: steer  .  forward: fire");
   lv_obj_align(fj_hint, LV_ALIGN_TOP_MID, 0, 66);
 
@@ -12341,13 +12355,10 @@ static void joy_click_dispatch()
       else                 sn_pause_game();
       break;
     case 8: if (tq_pop)    tq_game_start(); break;
-    // Fighter Jet: the click is the trigger, read straight off the debounced
-    // button state by the game tick, so mid-play it is deliberately NOT a
-    // pause. It only acts at the two stopped states.
-    case 9:
-      if (fj_pop)             fj_game_start();     // game over → play again
-      else if (fj_pause_pop)  fj_resume_game();    // paused → resume
-      break;
+    // Fighter Jet: the stick click is deliberately unused for now. Fire is a
+    // forward push, steering and braking are the stick, pause/resume/restart
+    // are taps on the touchscreen.
+    case 9: break;
     default: break;
   }
 }

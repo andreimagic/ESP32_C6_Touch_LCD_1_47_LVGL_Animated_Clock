@@ -115,7 +115,8 @@
                         <tr><td><strong>macroPad — ASCII art over USB</strong></td><td>The clock introduces itself to a computer as a USB keyboard and <em>types</em> a stored text file into whatever window has focus, one keystroke at a time. Open an editor, tap a picture, and watch a penguin get drawn by keypresses — the same trick every keyboard performs, made visible. Write a new <code>.art</code> file, drop it in <code>/scripts</code>, and it appears in the menu; no toolchain, nothing to install. <strong>ESP32-S3 only</strong> — needs the USB-OTG peripheral the C6 does not have. Note that art lives on whichever storage is active and is <em>not</em> copied from card to internal flash at boot, unlike the GIFs.</td></tr>
                         <tr><td><strong>Battery monitor</strong></td><td>Live percentage, voltage, ADC raw — with LiPo discharge curve</td></tr>
                         <tr><td><strong>Low-power gate</strong></td><td>Refuses to boot if battery ≤ 10%, shows empty battery icon and deep sleeps.</td></tr>
-                        <tr><td><strong>Apps menu</strong></td><td>Math challenge gate, Rock Paper Scissors, Rolling Dice, Coin Flip, Metronome, Tennis Letters (Easy/Hard), Letters Rain, Snake Letters, Bingo!, ToneQuest</td></tr>
+                        <tr><td><strong>Apps menu</strong></td><td>Math challenge gate, Rock Paper Scissors, Rolling Dice, Coin Flip, Metronome, Tennis Letters (Easy/Hard), Letters Rain, Snake Letters, Bingo!, ToneQuest, Fighter Jet</td></tr>
+                        <tr><td><strong>Fighter Jet</strong></td><td>Tilt- or joystick-controlled aerial combat with escalating enemy rounds, a healing and damage-absorbing shield, and a saved rounds-survived record. Requires the C6 IMU or an enabled S3 KY-023 joystick.</td></tr>
                         <tr><td><strong>Metronome</strong></td><td>60–240 BPM with hardware-timer accuracy, beat dot indicators, 2/4 3/4 4/4 time signatures, distinct hi/lo tones</td></tr>
                         <tr><td><strong>Bingo!</strong></td><td>On-device 1–90 number caller with cycle-and-reveal animation, tilt-to-draw, and a call-history popup — no repeats, ever</td></tr>
                         <tr><td><strong>Printable Bingo tickets</strong></td><td>Web Configuration links to <code>/bingo</code> — an in-browser generator for UK/housie-style ticket sheets, fresh set every load</td></tr>
@@ -216,7 +217,7 @@
                 <li><strong>Status (LL):</strong> Shows WiFi, NTP, and Brightness. Tilt left/right to adjust brightness.</li>
                 <li><strong>Battery (LR):</strong> Live %, voltage. Long-press for software power-off.</li>
                 <li><strong>Emotion Tilt:</strong> Tap UL (Smile). While playing, tilt the device to change emotions (sad, joy, sleep) in real-time via IMU.</li>
-                <li><strong>Apps Menu:</strong> Long-press the smile GIF → pass Math Gate → access Rock Paper Scissors, Dice, Coin Flip, Metronome, Tennis Letters, Letters Rain, Snake Letters, Bingo!, and ToneQuest.</li>
+                <li><strong>Apps Menu:</strong> Long-press the smile GIF → pass Math Gate → access Rock Paper Scissors, Dice, Coin Flip, Metronome, Tennis Letters, Letters Rain, Snake Letters, Bingo!, ToneQuest, and Fighter Jet. Fighter Jet requires an IMU or enabled joystick.</li>
                 <li><strong>Gyro shake/tilt:</strong> While playing RPS or Dice, physically shake the device or tilt it hard sideways to restart the game — no tap needed.</li>
             </ul>
 
@@ -258,6 +259,11 @@
             <p>A clean sequence plays the success melody, adds one move and starts the next level; the pattern is drawn once per game and only ever revealed a prefix at a time, so level N is always level N&minus;1 plus one new move. A wrong wall plays the failure tune and opens a popup with the level reached and the best ever &mdash; tap it to play again, long-press to exit. There is no win state: the score <em>is</em> the level you reach. Best is persisted to <code class="code-inline">config.ini</code> under <code class="code-inline">[tonequest] high_score</code>, with <code class="code-inline">start_moves</code>, <code class="code-inline">flash_ms</code>, <code class="code-inline">gap_ms</code> and <code class="code-inline">tilt_percent</code> to tune the difficulty.</p>
             <p><strong>Without an IMU</strong> &mdash; every S3, or a C6 whose sensor did not answer at boot &mdash; ToneQuest is the one carousel app that changes input method instead of disappearing. A tap opens the round in place of the levelling gate, and you answer with four-way <strong>swipes</strong> rather than by rolling the ball; the ball still flies to the wall it was sent to, on playback and on input, so the screen reads the same. LVGL delivers at most one gesture per press, which makes a swipe inherently one move and removes the spring-return step entirely. Scores are not comparable between the two: swiping is quicker than tilting, with no return leg.</p>
 
+            <h3>✈ Fighter Jet</h3>
+            <p>Turn to line up enemy jets, fire while they are ahead, and survive rounds that add more enemies. Your best score is the number of rounds survived and is saved to <code class="code-inline">config.ini</code> as <code class="code-inline">[fighterjet] high_score</code>.</p>
+            <p><strong>ESP32-C6:</strong> Each start and resume calibrates the IMU: hold steady, tilt forward when prompted to set the fire direction, then level the device again. Tilt left/right to turn, tilt farther for a faster turn, tilt forward to fire and backward to brake. <strong>ESP32-S3:</strong> Enable the optional KY-023 joystick under <strong>Extra Games</strong>; push left/right to turn, farther to turn faster, forward to fire and back to brake. Click the stick to activate the shield. Without an IMU or enabled joystick, Fighter Jet is hidden from the carousel.</p>
+            <p>On either board, tapping the centre half pauses or resumes; long-pressing the centre exits. Tap or hold either outer quarter to activate the <strong>Healing Force Shield</strong>. It lasts five seconds by default, restores 10% of maximum health per second and absorbs half of incoming damage. While active, firing is disabled and the jet moves at one-quarter speed, but it can still turn. The shield freezes while paused and can be raised again immediately by default. Tap a game-over popup to restart, or long-press to exit.</p>
+
             <h3>Config.ini Reference</h3>
 <pre><code>[wifi]
 mode = wifi   # wifi | ap | off
@@ -275,6 +281,26 @@ time = 07:10
 [animation]
 schedule = true
 duration = 10
+
+[fighterjet]
+high_score = 0
+start_enemies = 2
+enemies_per_round = 1
+max_enemies = 12
+player_health = 100
+enemy_health = 30
+enemy_fire_distance = 20
+enemy_fire_interval = 4
+aim_assist_percent = 200
+speed_percent = 50
+shield_seconds = 5
+shield_heal_percent = 10
+shield_damage_reduction_percent = 50
+shield_cooldown_seconds = 0
+turn_tilt_percent = 25
+fast_turn_tilt_percent = 50
+fire_tilt_percent = 20
+invert_turn = false
 </code></pre>
         </section>
 
@@ -415,7 +441,9 @@ duration = 10
                         <tr><td>v3.6.1</td><td>✅ released</td><td><strong>Fix: GIFs fail with &ldquo;Not enough RAM&rdquo; when an SD card is inserted.</strong> On boards with internal flash, FFat stayed mounted next to the card and held enough memory that the ESP32-C6 could show one GIF and then no more. It is now mounted only while the card is mirrored at boot. <code>config.ini</code> is also copied to internal flash only when it has changed, not on every boot.</td></tr>
                         <tr><td>v3.6.2</td><td>✅ released</td><td><strong>Letters Rain: scattered waves and continuous rain.</strong> Decoys now enter on staggered rows, and another decoy drops every three fall ticks. Decoys keep falling after the target is caught, so each new wave overlaps the existing rain. A larger entity pool handles the busier field, while target selection and simultaneous catches are resolved consistently so wrong-letter catches still count as wrong.</td></tr>
                         <tr><td>v3.7.0</td><td>✅ released</td><td><strong>Tennis Letters: Easy and Hard modes.</strong> Tennis now opens with a mode carousel. Easy keeps its fixed bounce; Hard steers the ball from its landing point on the paddle and adds spin from paddle movement. Each mode saves a separate high score; the Apps carousel shows the better record. Older config files remain compatible, and shared paddle and speed settings are unchanged.</td></tr>
-                        <tr><td>v3.8.0</td><td>🚀 new</td><td><strong>Joystick mouse control (ESP32-S3 only).</strong> With a KY-023 joystick enabled and a USB HID persona active, the stick moves the host pointer while the smile GIF is open; its button left-clicks or drags. Manual movement and clicks postpone the automatic jiggler so it does not interrupt pointer control. Configure with <code>[joystick] mouse</code> and <code>mouse_speed</code> (1–40, default 8). The ESP32-C6 has no USB HID.</td></tr>
+                        <tr><td>v3.8.0</td><td>✅ released</td><td><strong>Joystick mouse control (ESP32-S3 only).</strong> With a KY-023 joystick enabled and a USB HID persona active, the stick moves the host pointer while the smile GIF is open; its button left-clicks or drags. Manual movement and clicks postpone the automatic jiggler so it does not interrupt pointer control. Configure with <code>[joystick] mouse</code> and <code>mouse_speed</code> (1–40, default 8). The ESP32-C6 has no USB HID.</td></tr>
+                        <tr><td>v3.8.1</td><td>✅ released</td><td><strong>Joystick gamepad control (ESP32-S3 only).</strong> Swipe left or right on the jiggler overlay to switch between mouse mode and USB gamepad mode. In gamepad mode, the KY-023 stick controls the host's left analog stick and its button maps to gamepad button A; the existing mouse mode remains available.</td></tr>
+                        <tr><td>v3.9.0</td><td>🚀 new</td><td><strong>Fighter Jet.</strong> Tilt- or joystick-controlled aerial combat with calibrated C6 controls, escalating enemy rounds, saved rounds-survived high score and the Healing Force Shield. The shield heals and absorbs damage, at the cost of firing and speed while active; tune it and the game's difficulty in <code>[fighterjet]</code>.</td></tr>
                     </tbody>
                 </table>
             </div>

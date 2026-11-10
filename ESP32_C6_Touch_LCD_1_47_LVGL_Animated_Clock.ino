@@ -65,7 +65,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v3.9.0"
+#define FW_VERSION      "v3.9.1"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -204,6 +204,11 @@ struct AppConfig {
   // Default: empty (no birthday greetings).
   char birthday_dates[8][16]  = {"01-01-1970","06-08-2017"};   // [birthdays] dates (comma-separated)
   int  birthday_count         = 2;   // number of parsed birthday entries
+
+  // [christmas] enabled — December GIF + Christmas tunes on alarm/timer.
+  // Default true; set false for households that do not celebrate Christmas.
+  // Birthdays are unaffected either way.
+  bool christmas_enabled      = true;
 } cfg;
 
 // ─── Board configuration ─────────────────────────────────────────────────────
@@ -255,6 +260,7 @@ struct AppConfig {
 #define GIF_ALARM_PATH    "S:/cruzr_emotions/alarm_animation.gif"
 #define GIF_TIMER_PATH    "S:/cruzr_emotions/timer_animation.gif"
 #define GIF_BIRTHDAY_PATH "S:/cruzr_emotions/happybirthday.gif"
+#define GIF_CHRISTMAS_PATH "S:/cruzr_emotions/christmas.gif"   // all of December; birthdays override
 
 // Same directory as the paths above, without the LVGL drive letter — filesystem
 // calls (SD./FFat./STORAGE->) never take one.
@@ -288,6 +294,7 @@ static bool wifi_ntp_possible(void);
 static const char *wifi_cfg_mode_name(void);
 static void show_wifi_detail_popup(void);
 static void buzzer_start_birthday(int sequences);
+static void buzzer_start_christmas(int sequences);
 static void generate_ap_pin(void);
 static void ensure_dir(void);
 #if BOARD_HAS_USB_HID
@@ -977,6 +984,8 @@ static void buzzer_start_alarm()
   buzzer_fade_after = (cfg.alarm_beep_sequences > 0); // only when finite
   if (is_birthday_today()) {
     buzzer_start_birthday(cfg.alarm_beep_sequences);
+  } else if (is_christmas_season()) {
+    buzzer_start_christmas(cfg.alarm_beep_sequences);
   } else {
     buzzer_start(cfg.alarm_beep_sequences);
   }
@@ -991,6 +1000,8 @@ static void buzzer_start_timer()
   buzzer_fade_after = (cfg.timer_beep_sequences > 0);
   if (is_birthday_today()) {
     buzzer_start_birthday(cfg.timer_beep_sequences);
+  } else if (is_christmas_season()) {
+    buzzer_start_christmas(cfg.timer_beep_sequences);
   } else {
     buzzer_start(cfg.timer_beep_sequences);
   }
@@ -1060,12 +1071,42 @@ static bool is_birthday_today()
   return false;
 }
 
-// Returns the correct alarm/timer GIF path — birthday GIF takes priority
+// ══════════════════════════════════════════════════════════════════════════════
+//  CHRISTMAS SEASON
+//  True for the whole of December (local time) unless [christmas] enabled = false.
+//  Birthdays always win over it — every caller checks is_birthday_today() first.
+// ══════════════════════════════════════════════════════════════════════════════
+static bool is_christmas_season()
+{
+  if (!cfg.christmas_enabled) return false;   // [christmas] enabled = false
+  time_t now = time(nullptr);
+  if (now < 1735689600UL) return false; // RTC not yet valid
+  struct tm t;
+  localtime_r(&now, &t);
+  return (t.tm_mon == 11);              // tm_mon is 0-based: 11 = December
+}
+
+// Seasonal GIF if it is actually on the storage, otherwise the normal one.
+// lv_gif_set_src() fails silently on a missing file and leaves a blank overlay,
+// so a card without christmas.gif must fall back rather than show nothing.
+static const char *gif_or_fallback(const char *preferred, const char *fallback)
+{
+  if (STORAGE && STORAGE->exists(storage_path(preferred))) return preferred;
+  Serial.printf("[GIF] %s not found — falling back to %s\n", preferred, fallback);
+  return fallback;
+}
+
+// Returns the correct alarm/timer GIF path.
+// Priority: birthday  >  Christmas (December)  >  normal animation.
 static const char *alarm_gif_path() {
-  return is_birthday_today() ? GIF_BIRTHDAY_PATH : GIF_ALARM_PATH;
+  if (is_birthday_today())    return GIF_BIRTHDAY_PATH;
+  if (is_christmas_season())  return gif_or_fallback(GIF_CHRISTMAS_PATH, GIF_ALARM_PATH);
+  return GIF_ALARM_PATH;
 }
 static const char *timer_gif_path() {
-  return is_birthday_today() ? GIF_BIRTHDAY_PATH : GIF_TIMER_PATH;
+  if (is_birthday_today())    return GIF_BIRTHDAY_PATH;
+  if (is_christmas_season())  return gif_or_fallback(GIF_CHRISTMAS_PATH, GIF_TIMER_PATH);
+  return GIF_TIMER_PATH;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1168,6 +1209,12 @@ R"INI(
 [birthdays]
 # Up to 8 entries, DD-MM-YYYY, comma separated. Only day and month are matched.
 dates = 01-01-1970,06-08-2017
+
+[christmas]
+# true = in December the alarm and timer show christmas.gif and play random
+# Christmas tunes (birthdays still take priority). false = never, for
+# households that do not celebrate Christmas.
+enabled = true
 
 [tennis]
 high_score = 0
@@ -2052,6 +2099,16 @@ static void load_config()
       }
     }
 
+    // ── [christmas] ──────────────────────────────────────────────────────────
+    // enabled = true | false   (default true)
+    else if (strcmp(section, "christmas") == 0) {
+      if (strcmp(key, "enabled") == 0) {
+        cfg.christmas_enabled = !(strcmp(val,"false")==0 || strcmp(val,"0")==0 ||
+                                  strcmp(val,"no")==0    || strcmp(val,"off")==0);
+        Serial.printf("[CFG]   christmas.enabled   = %s\n", cfg.christmas_enabled ? "true" : "false");
+      }
+    }
+
     // ── [birthdays] ──────────────────────────────────────────────────────────
     // dates = DD-MM-YYYY,DD-MM-YYYY,...   (up to 8 entries)
     // Only the day and month are used for comparison; the year is stored for
@@ -2185,7 +2242,7 @@ static void log_last_seen() {
 static void save_config()
 {
   // Re-read existing config, preserve [clock], [animation], [birthdays] and
-  // any comments. [wifi], [alarm], [timer], [menu], [tennis] are rewritten
+  // any comments. [wifi], [alarm], [timer], [menu], [christmas], [tennis] are rewritten
   // fresh from cfg on every call.
   //
   // Blank lines in the preserved block are intentionally dropped — we add
@@ -2217,6 +2274,7 @@ static void save_config()
           strncmp(trimmed,"[alarm]",       7)==0 ||
           strncmp(trimmed,"[timer]",       7)==0 ||
           strncmp(trimmed,"[menu]",        6)==0 ||
+          strncmp(trimmed,"[christmas]",  11)==0 ||
           strncmp(trimmed,"[usb]",         5)==0 ||
           strncmp(trimmed,"[joystick]",   10)==0 ||
           strncmp(trimmed,"[tennis]",      8)==0 ||
@@ -2269,6 +2327,9 @@ static void save_config()
 
   fw.print("\n[menu]\n");
   fw.printf("sounds = %s\n", cfg.menu_sounds ? "true" : "false");
+
+  fw.print("\n[christmas]\n");
+  fw.printf("enabled = %s\n", cfg.christmas_enabled ? "true" : "false");
 
 #if BOARD_HAS_USB_HID
   fw.print("\n[usb]\n");
@@ -6195,6 +6256,166 @@ static void buzzer_start_birthday(int sequences)
   // buzzer_fade_after must already be set by the caller (same as normal alarm)
   buzzer_timer = lv_timer_create(hb_tick_cb, 1, nullptr); // fires immediately
   Serial.printf("[BUZZ] Birthday melody started (%s sequences)\n",
+                sequences == 0 ? "∞" : String(sequences).c_str());
+}
+
+// ── Christmas tunes (non-blocking, LVGL-timer-driven) ────────────────────────
+// Played in December instead of the standard beep pattern (birthdays still win).
+// One tune is picked at random per pass, never the same one twice in a row, so
+// an alarm with several beep sequences — or "until touch" — keeps changing.
+//   0 Jingle Bells · 1 We Wish You a Merry Christmas · 2 Deck the Halls
+// Stored as flat {freq_hz, duration_ms} pairs; freq 0 = rest. A short silent
+// gap is inserted after every sounding note by the player, so repeated notes
+// ("E E E") stay distinct without cluttering the data.
+#define XM_E   140   // eighth
+#define XM_Q   280   // quarter
+#define XM_DQ  420   // dotted quarter
+#define XM_H   560   // half
+#define XM_W  1120   // whole
+#define XM_GAP  30   // articulation gap after each note (ms)
+
+#define XM_C4  262
+#define XM_D4  294
+#define XM_E4  330
+#define XM_F4  349
+#define XM_G4  392
+#define XM_A4  440
+#define XM_B4  494
+#define XM_C5  523
+#define XM_D5  587
+#define XM_E5  659
+#define XM_F5  698
+#define XM_G5  784
+
+// Jingle Bells (chorus, C major)
+static const uint16_t XM_JINGLE[] = {
+  XM_E4,XM_Q, XM_E4,XM_Q, XM_E4,XM_H,
+  XM_E4,XM_Q, XM_E4,XM_Q, XM_E4,XM_H,
+  XM_E4,XM_Q, XM_G4,XM_Q, XM_C4,XM_DQ, XM_D4,XM_E,
+  XM_E4,XM_W,
+  XM_F4,XM_Q, XM_F4,XM_Q, XM_F4,XM_Q, XM_F4,XM_Q,
+  XM_F4,XM_Q, XM_E4,XM_Q, XM_E4,XM_Q, XM_E4,XM_E, XM_E4,XM_E,
+  XM_E4,XM_Q, XM_D4,XM_Q, XM_D4,XM_Q, XM_E4,XM_Q,
+  XM_D4,XM_H, XM_G4,XM_H
+};
+
+// We Wish You a Merry Christmas (3/4, transposed to C major)
+static const uint16_t XM_WISH[] = {
+  XM_G4,XM_Q,
+  XM_C5,XM_Q, XM_C5,XM_E, XM_D5,XM_E, XM_C5,XM_E, XM_B4,XM_E,
+  XM_A4,XM_Q, XM_A4,XM_Q, XM_A4,XM_Q,
+  XM_D5,XM_Q, XM_D5,XM_E, XM_E5,XM_E, XM_D5,XM_E, XM_C5,XM_E,
+  XM_B4,XM_Q, XM_G4,XM_Q, XM_G4,XM_Q,
+  XM_E5,XM_Q, XM_E5,XM_E, XM_F5,XM_E, XM_E5,XM_E, XM_D5,XM_E,
+  XM_C5,XM_Q, XM_A4,XM_Q, XM_G4,XM_E, XM_G4,XM_E,
+  XM_A4,XM_Q, XM_D5,XM_Q, XM_B4,XM_Q,
+  XM_C5,XM_H
+};
+
+// Deck the Halls (C major)
+static const uint16_t XM_DECK[] = {
+  XM_G5,XM_DQ, XM_F5,XM_E, XM_E5,XM_Q, XM_D5,XM_Q,
+  XM_C5,XM_Q, XM_D5,XM_Q, XM_E5,XM_Q, XM_C5,XM_Q,
+  XM_D5,XM_E, XM_E5,XM_E, XM_F5,XM_E, XM_D5,XM_E, XM_E5,XM_DQ, XM_D5,XM_E,
+  XM_C5,XM_Q, XM_B4,XM_Q, XM_C5,XM_H
+};
+
+#define XM_TUNE_COUNT 3
+static const uint16_t *const XM_TUNES[XM_TUNE_COUNT] = { XM_JINGLE, XM_WISH, XM_DECK };
+static const uint16_t XM_LENS[XM_TUNE_COUNT] = {               // in uint16_t entries
+  (uint16_t)(sizeof(XM_JINGLE) / sizeof(XM_JINGLE[0])),
+  (uint16_t)(sizeof(XM_WISH)   / sizeof(XM_WISH[0])),
+  (uint16_t)(sizeof(XM_DECK)   / sizeof(XM_DECK[0]))
+};
+static const char *const XM_NAMES[XM_TUNE_COUNT] = {
+  "Jingle Bells", "We Wish You a Merry Christmas", "Deck the Halls"
+};
+
+static int  xm_tune      = 0;     // tune playing now
+static int  xm_last      = -1;    // tune of the previous pass (-1 = none yet)
+static int  xm_pos       = 0;     // index into the flat array (steps of 2)
+static bool xm_gap_phase = false; // true while the post-note silence is running
+static int  xm_seq_total = 0;     // 0 = repeat until buzzer_stop() (touch to dismiss)
+static int  xm_seq_done  = 0;
+
+// Random tune, never the one that just played.
+static int xm_pick_tune()
+{
+  int idx = (int)(esp_random() % XM_TUNE_COUNT);
+  if (idx == xm_last) idx = (idx + 1 + (int)(esp_random() % (XM_TUNE_COUNT - 1))) % XM_TUNE_COUNT;
+  xm_last = idx;
+  Serial.printf("[BUZZ] Christmas tune: %s\n", XM_NAMES[idx]);
+  return idx;
+}
+
+static void xm_tick_cb(lv_timer_t *t)
+{
+  // Silence after a sounding note, then fall through to the next note.
+  if (xm_gap_phase) {
+    ledcWrite(BUZZER_PIN, 0);
+    xm_gap_phase = false;
+    lv_timer_set_period(t, XM_GAP);
+    return;
+  }
+
+  if (xm_pos >= (int)XM_LENS[xm_tune]) {
+    // One full pass of the tune just finished
+    xm_seq_done++;
+    Serial.printf("[BUZZ] Christmas pass %d/%s done\n",
+                  xm_seq_done, xm_seq_total == 0 ? "∞" : String(xm_seq_total).c_str());
+
+    if (xm_seq_total > 0 && xm_seq_done >= xm_seq_total) {
+      // Same teardown path as the birthday melody / buzzer_stop()
+      lv_timer_del(t);
+      buzzer_timer  = nullptr;
+      ledcWrite(BUZZER_PIN, 0);
+      ledcChangeFrequency(BUZZER_PIN, 2000, 8); // restore alarm freq
+      buzzer_active = false;
+      xm_pos        = 0;
+      xm_seq_done   = 0;
+      Serial.println("[BUZZ] Christmas tunes finished (all sequences done)");
+      if (buzzer_fade_after) {
+        buzzer_fade_after = false;
+        overlay_fade_and_close();
+      }
+    } else {
+      // More passes to go: breathe for 1.5 s, then a different random tune.
+      ledcWrite(BUZZER_PIN, 0);
+      xm_tune = xm_pick_tune();
+      xm_pos  = 0;
+      lv_timer_set_period(t, 1500);
+    }
+    return;
+  }
+
+  const uint16_t freq = XM_TUNES[xm_tune][xm_pos];
+  const uint16_t dur  = XM_TUNES[xm_tune][xm_pos + 1];
+  xm_pos += 2;
+
+  if (freq == 0) {                       // rest
+    ledcWrite(BUZZER_PIN, 0);
+    lv_timer_set_period(t, dur);
+  } else {
+    ledcChangeFrequency(BUZZER_PIN, freq, 8);
+    ledcWrite(BUZZER_PIN, 128);
+    lv_timer_set_period(t, dur > XM_GAP ? dur - XM_GAP : dur);
+    xm_gap_phase = true;                 // next tick = short silence
+  }
+}
+
+static void buzzer_start_christmas(int sequences)
+{
+  // Plays random Christmas tunes `sequences` times (0 = until touch).
+  if (buzzer_active) buzzer_stop();
+  xm_seq_total = sequences;
+  xm_seq_done  = 0;
+  xm_pos       = 0;
+  xm_gap_phase = false;
+  xm_tune      = xm_pick_tune();
+  buzzer_active = true;
+  // buzzer_fade_after must already be set by the caller (same as normal alarm)
+  buzzer_timer = lv_timer_create(xm_tick_cb, 1, nullptr); // fires immediately
+  Serial.printf("[BUZZ] Christmas tunes started (%s sequences)\n",
                 sequences == 0 ? "∞" : String(sequences).c_str());
 }
 

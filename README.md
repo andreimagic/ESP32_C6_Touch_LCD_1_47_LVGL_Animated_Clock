@@ -446,7 +446,8 @@ SD root/
     ├── cruzr_joy.gif            ← 160 × 86 px  (emotion: tilt left or right)
     ├── alarm_animation.gif      ← 160 × 86 px  (plays when alarm fires)
     ├── timer_animation.gif      ← 160 × 86 px  (plays when countdown reaches zero)
-    └── happybirthday.gif        ← 160 × 86 px  (Easter egg — replaces alarm/timer GIF on birthdays)
+    ├── happybirthday.gif        ← 160 × 86 px  (Easter egg — replaces alarm/timer GIF on birthdays)
+    └── christmas.gif            ← 160 × 86 px  (seasonal alarm/timer GIF — used in December)
 ```
 
 ### Storage backends
@@ -591,6 +592,11 @@ mouse_speed = 8
 # happybirthday.gif and play the Happy Birthday melody instead of the usual beeps.
 # Remove this section (or leave it empty) to disable the Easter egg entirely.
 dates = 01-01-1970,06-08-2017
+
+[christmas]
+# Use Christmas GIFs and random Christmas tunes for alarms and timers in December.
+# Birthdays still take priority. Set false to disable the seasonal feature.
+enabled = true
 
 [tennis]
 high_score = 0
@@ -1449,6 +1455,25 @@ dates = 06-08-2017,20-08-1989,07-09-2017,21-03-1989
 /cruzr_emotions/happybirthday.gif
 ```
 
+## Christmas Season 🎄
+
+By default, alarms and timers use a seasonal animation and randomly selected
+Christmas tune throughout December, based on the device's local time. Birthday
+greetings always take priority. If `christmas.gif` is missing, the usual alarm
+or timer animation is used instead.
+
+Disable the seasonal feature in `config.ini` if you prefer:
+
+```ini
+[christmas]
+enabled = false
+```
+
+To use the seasonal animation, place a 160 × 86 px GIF at:
+```
+/cruzr_emotions/christmas.gif
+```
+
 ---
 
 ## Build & Flash
@@ -1939,7 +1964,8 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v3.7.0 | ✅ released | **Tennis Letters: Easy and Hard modes** — Tennis now opens with a mode carousel. Easy keeps its fixed bounce; Hard aims the ball according to where it hits the paddle and adds spin from paddle movement, so the ball cannot be safely parked straight above the paddle. Each mode has its own persisted high score (`[tennis] high_score` and `hard_high_score`); the Apps carousel shows the better record. Existing config files remain compatible, and the shared paddle and speed settings are unchanged. |
 | v3.8.0 | ✅ released | **Joystick mouse control (ESP32-S3 only)** — when a KY-023 joystick is enabled and a USB HID persona is active, the stick moves the host pointer while the smile GIF is open and its button left-clicks or drags. Pointer movement and clicks defer the automatic jiggler so it does not interrupt manual use. Configure it with `[joystick] mouse` and `mouse_speed` (1–40, default 8); C6 builds do not include USB HID. |
 | v3.8.1 | ✅ released | **Joystick gamepad control (ESP32-S3 only)** — swipe left or right on the jiggler overlay to switch between mouse mode and USB gamepad mode. In gamepad mode, the KY-023 stick controls the host's left analog stick and its button maps to gamepad button A; the existing mouse mode remains available. |
-| v3.9.0 | 🚀 new | **Fighter Jet.** Tilt- or joystick-controlled aerial combat with IMU calibration, escalating enemy rounds, a persisted rounds-survived score and the Healing Force Shield. The shield restores health and absorbs damage while disabling fire and reducing speed; configure the game under `[fighterjet]`. |
+| v3.9.0 | ✅ released | **Fighter Jet.** Tilt- or joystick-controlled aerial combat with IMU calibration, escalating enemy rounds, a persisted rounds-survived score and the Healing Force Shield. The shield restores health and absorbs damage while disabling fire and reducing speed; configure the game under `[fighterjet]`. |
+| v3.9.1 | 🚀 new | **Christmas Season.** December alarms and timers use `christmas.gif` and randomly selected Christmas tunes; birthday greetings take priority, and a missing seasonal GIF falls back to the regular alarm/timer animation. Set `[christmas] enabled = false` to disable it. |
 
 ## License
 

@@ -181,6 +181,24 @@ struct AppConfig {
   int  tq_flash_ms                 = 420;       // [tonequest] flash_ms (dome lit + tone, per playback step)
   int  tq_gap_ms                   = 220;       // [tonequest] gap_ms (silence between playback steps)
   int  tq_tilt_percent             = 55;        // [tonequest] tilt_percent (% of 1 g that pins the ball to an edge)
+  int  fj_high_score               = 0;         // [fighterjet] high_score (most rounds survived)
+  int  fj_start_enemies            = 2;         // [fighterjet] start_enemies (enemies in round 1)
+  int  fj_per_round                = 1;         // [fighterjet] enemies_per_round (added each round)
+  int  fj_max_enemies              = 12;        // [fighterjet] max_enemies (1-12)
+  int  fj_health                   = 100;       // [fighterjet] player_health
+  int  fj_turn_tilt_percent        = 25;        // [fighterjet] turn_tilt_percent (IMU: % of 1 g that starts a turn)
+  int  fj_fire_tilt_percent        = 20;        // [fighterjet] fire_tilt_percent (IMU: forward tilt that fires)
+  bool fj_invert_turn              = false;     // [fighterjet] invert_turn (IMU: flip left/right)
+  int  fj_fast_tilt_percent        = 50;        // [fighterjet] fast_turn_tilt_percent (IMU: tilt for the fast turn)
+  int  fj_enemy_health             = 30;        // [fighterjet] enemy_health (hits to destroy one; 20 hits = 1 s of aimed fire)
+  int  fj_enemy_fire_dist          = 20;        // [fighterjet] enemy_fire_distance (enemies only shoot inside this range)
+  int  fj_enemy_fire_interval      = 4;         // [fighterjet] enemy_fire_interval (frames between enemy hits; 20 frames = 1 s)
+  int  fj_aim_percent              = 200;       // [fighterjet] aim_assist_percent (100 = original hit window)
+  int  fj_speed_percent            = 50;        // [fighterjet] speed_percent (cruise speed; 100 = the Flipper original)
+  int  fj_shield_sec               = 5;         // [fighterjet] shield_seconds (how long the Healing Force Shield lasts)
+  int  fj_shield_heal_pct          = 10;        // [fighterjet] shield_heal_percent (of max health, per second)
+  int  fj_shield_cooldown_sec      = 0;         // [fighterjet] shield_cooldown_seconds (0 = may be re-raised at once)
+  int  fj_shield_block_pct         = 50;        // [fighterjet] shield_damage_reduction_percent (damage the shield absorbs)
   // [birthdays] dates — up to 8 entries in DD-MM-YYYY format.
   // Only day & month are compared; the year is kept as reference in the file.
   // Default: empty (no birthday greetings).
@@ -1162,10 +1180,11 @@ sounds = true
 R"INI(
 [joystick]
 # External KY-023 on the expansion header — this board has no IMU, so it is the
-# only way to steer Tennis Letters, Letters Rain, Snake Letters and ToneQuest.
+# only way to steer Tennis Letters, Letters Rain, Snake Letters, Fighter Jet and
+# ToneQuest.
 # Wiring: SW=GPIO8 (P1.20), VRy=GPIO9 (P1.18), VRx=GPIO10 (P1.16),
 #         power from 3V3 (P1.6) and GND (P1.3) — never from 5V.
-# extra_games: false hides those four games and claims no pins at all.
+# extra_games: false hides those games and claims no pins at all.
 extra_games = false
 # Percent of full deflection. Below dead_zone_percent the stick reads as
 # centred; at edge_percent it reads as fully deflected.
@@ -1236,6 +1255,46 @@ next_level_score = 10
 # looped. Up to 24 words of up to 15 letters.
 words_high_score = 0
 words = ["box", "cat", "dog", "cactus", "rainbow"]
+
+[fighterjet]
+# high_score = most rounds survived. Enemies in round n = start_enemies +
+# n * enemies_per_round, capped at max_enemies (1-12).
+high_score = 0
+start_enemies = 2
+enemies_per_round = 1
+max_enemies = 12
+player_health = 100
+# Difficulty. enemy_health = hits to destroy one enemy (the guns land 20 per
+# second). Enemies only shoot inside enemy_fire_distance, and land one hit every
+# enemy_fire_interval frames (20 frames = 1 second). aim_assist_percent widens
+# your hit window: 100 = the Flipper original, 200 = twice as forgiving.
+enemy_health = 30
+enemy_fire_distance = 20
+enemy_fire_interval = 4
+aim_assist_percent = 200
+# Cruise speed: 100 = the Flipper original. Slower is much easier to aim — at the
+# original speed you shoot past the enemies before the guns can finish them.
+speed_percent = 50
+# Healing Force Shield (tap the left or right quarter of the screen, or click the
+# joystick): a bubble for shield_seconds that heals shield_heal_percent of max
+# health per second AND absorbs shield_damage_reduction_percent of the damage
+# the enemies land (50 = half). While it is up the jet cannot fire and flies at
+# 25% speed. shield_cooldown_seconds is the wait before it can be raised again;
+# 0 = none.
+shield_seconds = 5
+shield_heal_percent = 10
+shield_damage_reduction_percent = 50
+shield_cooldown_seconds = 0
+# ESP32-C6 (IMU) only. Percent of 1 g: tilt past turn_tilt_percent for a slow
+# turn, past fast_turn_tilt_percent for a fast one, and forward past
+# fire_tilt_percent to fire. Set invert_turn = true if left and right feel
+# swapped on your unit. (The S3 uses the joystick: push forward to fire, pull
+# back to brake, push the stick most of the way over for the fast turn, and click
+# for the shield.)
+turn_tilt_percent = 25
+fast_turn_tilt_percent = 50
+fire_tilt_percent = 20
+invert_turn = false
 
 [tonequest]
 high_score = 0
@@ -1937,6 +1996,83 @@ static void load_config()
       }
     }
 
+    // ── [fighterjet] ─────────────────────────────────────────────────────────
+    else if (strcmp(section, "fighterjet") == 0) {
+      if (strcmp(key, "high_score") == 0) {
+        cfg.fj_high_score = max(0, atoi(val));
+        Serial.printf("[CFG]   fighterjet.high_score     = %d\n", cfg.fj_high_score);
+      }
+      else if (strcmp(key, "start_enemies") == 0) {
+        cfg.fj_start_enemies = max(1, min(12, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.start_enemies  = %d\n", cfg.fj_start_enemies);
+      }
+      else if (strcmp(key, "enemies_per_round") == 0) {
+        cfg.fj_per_round = max(0, min(6, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.enemies_per_round = %d\n", cfg.fj_per_round);
+      }
+      else if (strcmp(key, "max_enemies") == 0) {
+        cfg.fj_max_enemies = max(1, min(12, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.max_enemies    = %d\n", cfg.fj_max_enemies);
+      }
+      else if (strcmp(key, "player_health") == 0) {
+        cfg.fj_health = max(10, min(500, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.player_health  = %d\n", cfg.fj_health);
+      }
+      else if (strcmp(key, "turn_tilt_percent") == 0) {
+        // Under ~10% a hand's own tremor turns the jet; past 80% it needs a wrist-breaking lean.
+        cfg.fj_turn_tilt_percent = max(10, min(80, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.turn_tilt      = %d%%\n", cfg.fj_turn_tilt_percent);
+      }
+      else if (strcmp(key, "fast_turn_tilt_percent") == 0) {
+        cfg.fj_fast_tilt_percent = max(15, min(90, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.fast_turn_tilt = %d%%\n", cfg.fj_fast_tilt_percent);
+      }
+      else if (strcmp(key, "enemy_health") == 0) {
+        cfg.fj_enemy_health = max(5, min(200, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.enemy_health   = %d\n", cfg.fj_enemy_health);
+      }
+      else if (strcmp(key, "enemy_fire_distance") == 0) {
+        cfg.fj_enemy_fire_dist = max(5, min(100, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.enemy_fire_distance = %d\n", cfg.fj_enemy_fire_dist);
+      }
+      else if (strcmp(key, "enemy_fire_interval") == 0) {
+        cfg.fj_enemy_fire_interval = max(1, min(60, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.enemy_fire_interval = %d\n", cfg.fj_enemy_fire_interval);
+      }
+      else if (strcmp(key, "shield_seconds") == 0) {
+        cfg.fj_shield_sec = max(1, min(30, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.shield_seconds = %d\n", cfg.fj_shield_sec);
+      }
+      else if (strcmp(key, "shield_heal_percent") == 0) {
+        cfg.fj_shield_heal_pct = max(1, min(100, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.shield_heal    = %d%%/s\n", cfg.fj_shield_heal_pct);
+      }
+      else if (strcmp(key, "shield_damage_reduction_percent") == 0) {
+        cfg.fj_shield_block_pct = max(0, min(100, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.shield_block   = %d%%\n", cfg.fj_shield_block_pct);
+      }
+      else if (strcmp(key, "shield_cooldown_seconds") == 0) {
+        cfg.fj_shield_cooldown_sec = max(0, min(120, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.shield_cooldown = %d\n", cfg.fj_shield_cooldown_sec);
+      }
+      else if (strcmp(key, "speed_percent") == 0) {
+        cfg.fj_speed_percent = max(20, min(150, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.speed          = %d%%\n", cfg.fj_speed_percent);
+      }
+      else if (strcmp(key, "aim_assist_percent") == 0) {
+        cfg.fj_aim_percent = max(100, min(400, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.aim_assist     = %d%%\n", cfg.fj_aim_percent);
+      }
+      else if (strcmp(key, "fire_tilt_percent") == 0) {
+        cfg.fj_fire_tilt_percent = max(10, min(80, atoi(val)));
+        Serial.printf("[CFG]   fighterjet.fire_tilt      = %d%%\n", cfg.fj_fire_tilt_percent);
+      }
+      else if (strcmp(key, "invert_turn") == 0) {
+        cfg.fj_invert_turn = (strcmp(val,"true")==0 || strcmp(val,"1")==0);
+        Serial.printf("[CFG]   fighterjet.invert_turn    = %s\n", cfg.fj_invert_turn?"true":"false");
+      }
+    }
+
     // ── [tonequest] ──────────────────────────────────────────────────────────
     else if (strcmp(section, "tonequest") == 0) {
       if (strcmp(key, "high_score") == 0) {
@@ -2144,6 +2280,7 @@ static void save_config()
           strncmp(trimmed,"[tennis]",      8)==0 ||
           strncmp(trimmed,"[letter_rain]",13)==0 ||
           strncmp(trimmed,"[snake]",       7)==0 ||
+          strncmp(trimmed,"[fighterjet]", 12)==0 ||
           strncmp(trimmed,"[tonequest]",  11)==0) { inManaged=true;  continue; }
       if (*trimmed == '[')                    { inManaged=false; }
       if (inManaged)                            continue;
@@ -2252,6 +2389,26 @@ static void save_config()
   fw.printf("words_high_score = %d\n",     cfg.sn_words_high_score);
   fw.print("words = ");                    words_print(fw, cfg.sn_words, cfg.sn_word_count);
 
+  fw.print("\n[fighterjet]\n");
+  fw.printf("high_score = %d\n",           cfg.fj_high_score);
+  fw.printf("start_enemies = %d\n",        cfg.fj_start_enemies);
+  fw.printf("enemies_per_round = %d\n",    cfg.fj_per_round);
+  fw.printf("max_enemies = %d\n",          cfg.fj_max_enemies);
+  fw.printf("player_health = %d\n",        cfg.fj_health);
+  fw.printf("enemy_health = %d\n",         cfg.fj_enemy_health);
+  fw.printf("enemy_fire_distance = %d\n",  cfg.fj_enemy_fire_dist);
+  fw.printf("enemy_fire_interval = %d\n",  cfg.fj_enemy_fire_interval);
+  fw.printf("aim_assist_percent = %d\n",   cfg.fj_aim_percent);
+  fw.printf("speed_percent = %d\n",        cfg.fj_speed_percent);
+  fw.printf("shield_seconds = %d\n",       cfg.fj_shield_sec);
+  fw.printf("shield_heal_percent = %d\n",  cfg.fj_shield_heal_pct);
+  fw.printf("shield_damage_reduction_percent = %d\n", cfg.fj_shield_block_pct);
+  fw.printf("shield_cooldown_seconds = %d\n", cfg.fj_shield_cooldown_sec);
+  fw.printf("turn_tilt_percent = %d\n",    cfg.fj_turn_tilt_percent);
+  fw.printf("fast_turn_tilt_percent = %d\n", cfg.fj_fast_tilt_percent);
+  fw.printf("fire_tilt_percent = %d\n",    cfg.fj_fire_tilt_percent);
+  fw.printf("invert_turn = %s\n",          cfg.fj_invert_turn ? "true" : "false");
+
   fw.print("\n[tonequest]\n");
   fw.printf("high_score = %d\n",           cfg.tq_high_score);
   fw.printf("start_moves = %d\n",          cfg.tq_start_moves);
@@ -2299,7 +2456,7 @@ static void save_config()
   }
 
   Serial.printf("[CFG] Saved to %s (wifi/alarm/timer/menu/tennis/letter_rain/"
-                "snake/tonequest).\n", storage_label());
+                "snake/fighterjet/tonequest).\n", storage_label());
   
   // Save the current timestamp to the log file as well
   log_last_seen();
@@ -2505,6 +2662,65 @@ static void seed_tonequest_config()
   fa.printf("tilt_percent = %d\n",         cfg.tq_tilt_percent);
   fa.close();
   Serial.println("[CFG] [tonequest] section seeded into config.ini.");
+}
+
+// ── Ensure [fighterjet] section exists in config.ini ──────────────────────────
+// Called once at boot after load_config(). Same contract as the other seeders:
+// a config.ini written before Fighter Jet shipped gets the block appended with
+// the current (default) values, so every tunable is visible in the web editor
+// from the very first power-on.
+static void seed_fighterjet_config()
+{
+  if (!storageAvailable || !STORAGE) return;
+
+  File fr = STORAGE->open("/config.ini", FILE_READ);
+  if (!fr) return;  // no file at all — save_config() will create it later
+  bool found = false;
+  char line[64];
+  while (fr.available() && !found) {
+    int len = 0;
+    while (fr.available() && len < (int)sizeof(line) - 1) {
+      char ch = fr.read();
+      if (ch == '\n') break;
+      if (ch == '\r') continue;  // strip CR
+      line[len++] = ch;
+    }
+    line[len] = '\0';
+    char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, "[fighterjet]", 12) == 0) { found = true; }
+  }
+  fr.close();
+
+  if (found) {
+    Serial.println("[CFG] [fighterjet] section already present.");
+    return;
+  }
+
+  File fa = STORAGE->open("/config.ini", FILE_APPEND);
+  if (!fa) { Serial.println("[CFG] seed_fighterjet_config: cannot open for append"); return; }
+  fa.println();
+  fa.println("[fighterjet]");
+  fa.printf("high_score = %d\n",        cfg.fj_high_score);
+  fa.printf("start_enemies = %d\n",     cfg.fj_start_enemies);
+  fa.printf("enemies_per_round = %d\n", cfg.fj_per_round);
+  fa.printf("max_enemies = %d\n",       cfg.fj_max_enemies);
+  fa.printf("player_health = %d\n",     cfg.fj_health);
+  fa.printf("enemy_health = %d\n",      cfg.fj_enemy_health);
+  fa.printf("enemy_fire_distance = %d\n", cfg.fj_enemy_fire_dist);
+  fa.printf("enemy_fire_interval = %d\n", cfg.fj_enemy_fire_interval);
+  fa.printf("aim_assist_percent = %d\n",  cfg.fj_aim_percent);
+  fa.printf("speed_percent = %d\n",       cfg.fj_speed_percent);
+  fa.printf("shield_seconds = %d\n",      cfg.fj_shield_sec);
+  fa.printf("shield_heal_percent = %d\n", cfg.fj_shield_heal_pct);
+  fa.printf("shield_damage_reduction_percent = %d\n", cfg.fj_shield_block_pct);
+  fa.printf("shield_cooldown_seconds = %d\n", cfg.fj_shield_cooldown_sec);
+  fa.printf("turn_tilt_percent = %d\n", cfg.fj_turn_tilt_percent);
+  fa.printf("fast_turn_tilt_percent = %d\n", cfg.fj_fast_tilt_percent);
+  fa.printf("fire_tilt_percent = %d\n", cfg.fj_fire_tilt_percent);
+  fa.printf("invert_turn = %s\n",       cfg.fj_invert_turn ? "true" : "false");
+  fa.close();
+  Serial.println("[CFG] [fighterjet] section seeded into config.ini.");
 }
 
 #if BOARD_HAS_JOYSTICK
@@ -6355,18 +6571,21 @@ static void menu_tone_hi()   { menu_tone(NOTE_HI, 80); }
 // ── Apps state ────────────────────────────────────────────────────────────────
 // apps_cont declared globally above wifi_poll_cb
 static int         apps_idx       = 0;   // 0=RPS 1=Dice 2=Coin 3=Metro 4=Tennis 5=Rain
-                                         // 6=Snake 7=Bingo 8=ToneQuest 9=Sound
-#define APPS_COUNT 10
+                                         // 6=Snake 7=Bingo 8=ToneQuest 9=Fighter Jet
+                                         // 10=Sound
+#define APPS_COUNT 11
 
 // ── Gyro-dependent apps ──────────────────────────────────────────────────────
-// Tennis Letters (4), Letters Rain (5) and Snake Letters (6) steer entirely by
-// tilt: their field tap opens the pause popup, it does not move anything. With
+// Tennis Letters (4), Letters Rain (5), Snake Letters (6) and Fighter Jet (9)
+// steer entirely by tilt: their field tap opens the pause popup, it does not move anything. With
 // no accelerometer they are unplayable, so they are dropped from the carousel
 // rather than shipped as dead entries.
 //
 // Deliberately NOT hidden:
 //   RPS (0) / Dice (1) — tap-driven; the gyro is only a shake-to-reroll extra.
 //   Bingo (7)          — bn_tap_cb calls numbers on tap; tilt is the alternate.
+//   Fighter Jet (9)    — IS hidden: it steers by tilt (C6) or joystick (S3) and
+//                        has no touch fallback, so it needs a steering device.
 //   ToneQuest (8)      — the only app that swaps input method rather than
 //                        hiding. With an IMU the ball is a bubble level; with
 //                        none it takes four-way swipes instead, which answer a
@@ -6381,7 +6600,7 @@ static int         apps_idx       = 0;   // 0=RPS 1=Dice 2=Coin 3=Metro 4=Tennis
 // hidden games come back. joy_active() is a compile-time false on the C6, so
 // nothing about that board's carousel changes.
 static inline bool app_needs_imu(int idx)
-{ return idx == 4 || idx == 5 || idx == 6; }
+{ return idx == 4 || idx == 5 || idx == 6 || idx == 9; }
 
 // Something can steer a tilt game right now — an IMU, or a joystick standing
 // in for one. The games read the two apart; the menu does not need to.
@@ -6426,6 +6645,8 @@ static void bn_game_start(void);
 static void bn_stop(void);
 static void tq_game_start(void);
 static void tq_stop(void);
+static void fj_game_start(void);
+static void fj_stop(void);
 
 // ── Math problem generator ────────────────────────────────────────────────────
 static void math_generate(char *buf, int blen, int opts[4])
@@ -6590,6 +6811,7 @@ static void apps_close()
   sn_stop();
   bn_stop();
   tq_stop();
+  fj_stop();
   if (apps_cont) { lv_obj_del(apps_cont); apps_cont = nullptr; }
   app_subphase = 0;
 }
@@ -6607,6 +6829,7 @@ static void apps_longpress_cb(lv_event_t *e)
     sn_stop();
     bn_stop();
     tq_stop();
+    fj_stop();
     app_subphase = 0;
     apps_carousel_build();
   } else {
@@ -11089,6 +11312,1318 @@ static void tq_game_start()
 //  END TONEQUEST
 // ══════════════════════════════════════════════════════════════════════════════
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  FIGHTER JET  (apps_idx == 9)
+//
+//  A port of "Fighter Jet" for the Flipper Zero by Eero Prittinen
+//  (github.com/Erbonator3000/flipper-fighter-jet): fly around, shoot the
+//  enemies, and don't lose your health. The flight model, enemy autopilot,
+//  damage rules, round progression and the 1-bit sprites are the original's,
+//  carried over unchanged — the sprites are drawn 2x on the 320x172 panel,
+//  in colour, in place of the Flipper's 128x64 mono canvas.
+//
+//  The original is MIT licensed; its notice, which that licence requires to
+//  travel with the code, is reproduced here:
+//
+//    Copyright (c) 2025 Eero Prittinen
+//    Permission is hereby granted, free of charge, to any person obtaining a
+//    copy of this software and associated documentation files (the
+//    "Software"), to deal in the Software without restriction, including
+//    without limitation the rights to use, copy, modify, merge, publish,
+//    distribute, sublicense, and/or sell copies of the Software, and to
+//    permit persons to whom the Software is furnished to do so, subject to
+//    the following conditions: The above copyright notice and this permission
+//    notice shall be included in all copies or substantial portions of the
+//    Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+//    KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+//    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+//    IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+//    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+//    TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+//    SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+//
+//  Controls — the Flipper's D-pad does not exist here, so:
+//
+//    ESP32-C6 (IMU)        tilt left/right  → turn: slow past 25% tilt, fast
+//                                             past 50% (both set in config.ini)
+//                          tilt FORWARD     → fire (a quick forward flick holds
+//                                             the guns on for 0.4 s, so a shake
+//                                             is enough; tilting and holding
+//                                             keeps them firing)
+//                          tilt BACK        → brake
+//    ESP32-S3 (KY-023)     stick left/right → turn (most of the way = fast)
+//                          stick FORWARD    → fire (the joystick twin of the IMU's
+//                                             forward tilt, with the same 0.4 s latch)
+//                          stick back       → brake
+//                          stick click      → Healing Force Shield
+//    Both                  tap centre 50%   → pause / resume
+//                          hold centre 50%  → exit
+//                          tap left/right   → Healing Force Shield (a press on
+//                          25% of the screen  either side raises it, tap or hold;
+//                                             the sides never pause or exit)
+//
+//  Healing Force Shield. A bubble around the jet for 5 s (config.ini:
+//  shield_seconds) that heals 10% of max health per second and is also a
+//  defence field: it absorbs half (shield_damage_reduction_percent) of the
+//  damage the enemies land. While it is up the guns are off and the jet flies
+//  at 25% speed; turning still works. It can be re-raised once it drops (an optional
+//  shield_cooldown_seconds, default 0, can space that out). It freezes with the
+//  game on pause, and ends on death.
+//
+//  Forward calibration (IMU only). Everyone holds a device differently, so
+//  "level" and "forward" cannot be assumed. On every game start and on every
+//  resume from pause the game runs a short three-step calibration:
+//    1. HOLD STEADY   — averages the resting pose into a baseline (restarts if
+//                       the device moves), so all tilts are measured from how
+//                       you are actually holding it right now;
+//    2. TILT FORWARD  — the direction you tilt becomes "forward", i.e. the
+//                       fire direction (and its opposite the brake). If nothing
+//                       is seen for 5 s, +X is used;
+//    3. LEVEL AGAIN   — wait for the device to come back to rest, re-take the
+//                       baseline there, and fly.
+//  Turning is always measured on the other axis, from the same baseline.
+//
+//  Differences from the Flipper original, all deliberate:
+//    * The hit windows use the target's own distance. The original indexed
+//      enemies[1] in both windows, which looks like a typo for enemies[i] and
+//      made every enemy's hit window depend on an unrelated enemy.
+//    * The guns are on only while firing, as in the original, but "firing" is
+//      the forward tilt / forward stick push described above.
+//    * Pause exists (tap), and the best score — rounds survived — persists in
+//      config.ini under [fighterjet].
+//
+//  Rendering: one object with a custom LV_EVENT_DRAW_MAIN handler draws the sky,
+//  ground, compass, minimap, enemies, jet and tracers with filled rectangles and
+//  lines. Everything per-enemy that needs trigonometry is computed ONCE per game
+//  tick in fj_prepare_render(): the panel is flushed in 20-line strips, so the
+//  draw handler runs ~8 times per frame, and must stay arithmetic-only.
+//
+//  Note on signatures: nothing below takes a custom struct/enum by value or
+//  pointer, because the Arduino prototype injector would forward-declare it
+//  above the type's definition (see the note above struct Note).
+// ══════════════════════════════════════════════════════════════════════════════
+
+#define FJ_FPS             20
+#define FJ_TICK_MS         (1000 / FJ_FPS)
+#define FJ_PI2             6.28318530718f
+#define FJ_FOV             (FJ_PI2 / 8.0f)
+#define FJ_MAX_ENEMIES     12
+#define FJ_MAX_DIST        120.0f
+#define FJ_SPEED           0.5f
+#define FJ_BRAKE_SPEED     0.1f
+// Two turn speeds. The Flipper's single rate (45 deg/s) overshoots badly when
+// aiming by tilt, so: a gentle 15 deg/s for fine aim, and 60 deg/s — faster than
+// the original — to swing round (a full circle in 6 s). Divisors of 2*pi/FPS.
+#define FJ_TURN_SLOW       ((FJ_PI2 / FJ_FPS) / 24.0f)
+#define FJ_TURN_FAST       ((FJ_PI2 / FJ_FPS) / 6.0f)
+#define FJ_ENEMY_SPEED     0.3f
+#define FJ_ENEMY_TURN      ((FJ_PI2 / FJ_FPS) / 12.0f)
+#define FJ_ROUND_TITLE     (3 * FJ_FPS)      // frames the "ROUND n" banner shows
+#define FJ_COMPASS_W       44
+#define FJ_MM_R            10                // minimap radius, logical px
+
+// Layout. The field is 320x146 px (status bar below, as in the other games);
+// game art lives on a 160x73 logical grid drawn at 2x.
+#define FJ_FIELD_W         320
+#define FJ_FIELD_H         146
+#define FJ_STATUS_Y        148
+#define FJ_S               2                 // px per logical pixel
+#define FJ_LW              160               // logical width
+#define FJ_HORIZON         46                // logical row of the horizon
+#define FJ_JX              16                // original 128-wide x  → 160-wide
+#define FJ_JY              6                 // original 64-tall y  → 73-tall
+
+// Tilt feel (IMU). Thresholds are configurable (config.ini); these are the
+// fixed parts. A forward flick keeps the guns on this many frames.
+#define FJ_FIRE_HOLD_FRAMES  8               // 0.4 s at 20 fps
+#define FJ_BRAKE_FACTOR      1.6f            // back-tilt must beat fire thresh by this
+#define FJ_BRAKE_FRAMES      3               // ...for this many frames in a row
+#define FJ_SHIELD_SPEED      0.25f           // shield up: fraction of cruise speed
+#define FJ_SHIELD_R          36              // bubble radius, px
+#define FJ_SHIELD_CY         112             // bubble centre y in the field, px
+#define FJ_JOY_TURN          0.15f           // stick past this: slow turn
+#define FJ_JOY_TURN_FAST     0.60f           // ...and past this: fast turn
+#define FJ_JOY_BRAKE         0.5f            // stick pulled back past this: brake
+#define FJ_JOY_FIRE          0.5f            // stick pushed forward past this: fire
+#define FJ_JOY_TURN_FIRING   0.35f           // while firing, a wobble of the thumb must not turn
+
+// Which way is "tilt right" on the Y axis. Every tilt game in this sketch reads
+// accelY > 0 as the device being tipped to the right; the plane banks the same
+// way. If it feels mirrored on your unit, set [fighterjet] invert_turn = true.
+#define FJ_TURN_SIGN         1.0f
+
+enum { FJ_T_NONE = 0, FJ_T_LEFT, FJ_T_RIGHT };
+enum { FJ_P_CAL = 0, FJ_P_PLAY, FJ_P_PAUSED, FJ_P_OVER };
+enum { FJ_C_REST = 0, FJ_C_FWD, FJ_C_LEVEL };
+
+// ── Sprites (generated 1:1 from the original graphics.c) ─────────────────────
+static const uint8_t fj_compass_n_bits[] = { 0xf1, 0xf3, 0xf5, 0xf9, 0xf1 };
+#define FJ_COMPASS_N_W 5
+#define FJ_COMPASS_N_H 5
+static const uint8_t fj_compass_e_bits[] = { 0xee, 0xe2, 0xe6, 0xe2, 0xee };
+#define FJ_COMPASS_E_W 5
+#define FJ_COMPASS_E_H 5
+static const uint8_t fj_compass_s_bits[] = { 0xee, 0xe2, 0xe4, 0xe8, 0xee };
+#define FJ_COMPASS_S_W 5
+#define FJ_COMPASS_S_H 5
+static const uint8_t fj_compass_w_bits[] = { 0xf1, 0xf1, 0xf5, 0xf5, 0xea };
+#define FJ_COMPASS_W_W 5
+#define FJ_COMPASS_W_H 5
+static const uint8_t fj_explosion_bits[] = { 0x80, 0x00, 0x02, 0xf8, 0x20, 0x20, 0x21, 0xf8, 0x00, 0x25, 0x10, 0xfa, 0x21, 0x02, 0x89, 0xf9, 0x06, 0xb0, 0x60, 0xf8, 0x18, 0x81, 0x10, 0xf8, 0x60, 0x4e, 0xec, 0xfb, 0xa0, 0x50, 0x00, 0xf8, 0x46, 0x92, 0x72, 0xf9, 0x00, 0x9c, 0x00, 0xf8, 0x00, 0x13, 0x1d, 0xf8, 0x40, 0x88, 0x60, 0xf8, 0x18, 0x8c, 0xc0, 0xf9 };
+#define FJ_EXPLOSION_W 27
+#define FJ_EXPLOSION_H 13
+static const uint8_t fj_fighter_jet_straight_bits[] = { 0x00, 0x20, 0x00, 0xf8, 0x00, 0x50, 0x00, 0xf8, 0x00, 0xa8, 0x00, 0xf8, 0x00, 0x74, 0x01, 0xf8, 0x00, 0x72, 0x03, 0xf8, 0x00, 0x01, 0x04, 0xf8, 0xc0, 0x24, 0x19, 0xf8, 0x30, 0x54, 0x61, 0xf8, 0x0c, 0x04, 0x81, 0xf9, 0x02, 0x8e, 0x03, 0xfa, 0xff, 0x71, 0xfc, 0xff, 0x00, 0x51, 0x04, 0xf8, 0x00, 0x8e, 0x03, 0xf8 };
+#define FJ_FIGHTER_JET_STRAIGHT_W 27
+#define FJ_FIGHTER_JET_STRAIGHT_H 13
+static const uint8_t fj_turn_right_bits[] = { 0x07, 0x00, 0xfc, 0x3b, 0x00, 0xfc, 0xe2, 0x00, 0xfc, 0x84, 0xff, 0xfd, 0x08, 0x00, 0xfd, 0x10, 0x72, 0xfd, 0x70, 0x61, 0xfd, 0x90, 0x40, 0xfd, 0x10, 0x0d, 0xfd, 0x20, 0x09, 0xfd, 0xc0, 0xa1, 0xfc, 0x00, 0x97, 0xfc, 0x00, 0x89, 0xfc, 0x00, 0x91, 0xfd, 0x00, 0x92, 0xfd, 0x00, 0x2c, 0xfd, 0x00, 0x40, 0xff, 0x00, 0x80, 0xfe, 0x00, 0x00, 0xff, 0x00, 0x00, 0xfe };
+#define FJ_TURN_RIGHT_W 18
+#define FJ_TURN_RIGHT_H 20
+static const uint8_t fj_turn_left_bits[] = { 0x00, 0x80, 0x03, 0x00, 0x70, 0x03, 0x00, 0x1c, 0x01, 0xfe, 0x87, 0x00, 0x02, 0x40, 0x00, 0x3a, 0x21, 0x00, 0x1a, 0x3a, 0x00, 0x0a, 0x24, 0x00, 0xc2, 0x22, 0x00, 0x42, 0x12, 0x00, 0x14, 0x0e, 0x00, 0xa4, 0x03, 0x00, 0x44, 0x02, 0x00, 0x26, 0x02, 0x00, 0x26, 0x01, 0x00, 0xd2, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x05, 0x00, 0x00, 0x03, 0x00, 0x00, 0x01, 0x00, 0x00 };
+#define FJ_TURN_LEFT_W 18
+#define FJ_TURN_LEFT_H 20
+static const uint8_t fj_enemy_left_0_bits[] = { 0xfc, 0xff };
+#define FJ_ENEMY_LEFT_0_W 3
+#define FJ_ENEMY_LEFT_0_H 2
+static const uint8_t fj_enemy_left_1_bits[] = { 0xa0, 0xbe, 0xff };
+#define FJ_ENEMY_LEFT_1_W 7
+#define FJ_ENEMY_LEFT_1_H 3
+static const uint8_t fj_enemy_left_2_bits[] = { 0x00, 0xfd, 0x80, 0xfd, 0x7c, 0xfd, 0x02, 0xfe, 0xff, 0xff };
+#define FJ_ENEMY_LEFT_2_W 10
+#define FJ_ENEMY_LEFT_2_H 5
+static const uint8_t fj_enemy_left_3_bits[] = { 0x00, 0xb0, 0xf8, 0xaf, 0x3c, 0xa0, 0x82, 0xca, 0x7f, 0xe0, 0x80, 0xa3, 0x00, 0xbc };
+#define FJ_ENEMY_LEFT_3_W 15
+#define FJ_ENEMY_LEFT_3_H 7
+static const uint8_t fj_enemy_right_0_bits[] = { 0xf9, 0xff };
+#define FJ_ENEMY_RIGHT_0_W 3
+#define FJ_ENEMY_RIGHT_0_H 2
+static const uint8_t fj_enemy_right_1_bits[] = { 0x82, 0xbe, 0xff };
+#define FJ_ENEMY_RIGHT_1_W 7
+#define FJ_ENEMY_RIGHT_1_H 3
+static const uint8_t fj_enemy_right_2_bits[] = { 0x02, 0xfc, 0x06, 0xfc, 0xfe, 0xfc, 0x03, 0xfd, 0xff, 0xff };
+#define FJ_ENEMY_RIGHT_2_W 10
+#define FJ_ENEMY_RIGHT_2_H 5
+static const uint8_t fj_enemy_right_3_bits[] = { 0x06, 0x80, 0xfa, 0x8f, 0x02, 0x9e, 0xa9, 0xa0, 0x03, 0xff, 0xe2, 0x80, 0x1e, 0x80 };
+#define FJ_ENEMY_RIGHT_3_W 15
+#define FJ_ENEMY_RIGHT_3_H 7
+static const uint8_t fj_enemy_back_0_bits[] = { 0xfa, 0xff };
+#define FJ_ENEMY_BACK_0_W 3
+#define FJ_ENEMY_BACK_0_H 2
+static const uint8_t fj_enemy_back_1_bits[] = { 0xea, 0xff };
+#define FJ_ENEMY_BACK_1_W 5
+#define FJ_ENEMY_BACK_1_H 2
+static const uint8_t fj_enemy_back_2_bits[] = { 0x44, 0xfe, 0x7c, 0xfe, 0xd7, 0xff, 0x28, 0xfe };
+#define FJ_ENEMY_BACK_2_W 9
+#define FJ_ENEMY_BACK_2_H 4
+static const uint8_t fj_enemy_back_3_bits[] = { 0x10, 0xe1, 0x50, 0xe1, 0xfc, 0xe7, 0x4f, 0xfe, 0xb0, 0xe1 };
+#define FJ_ENEMY_BACK_3_W 13
+#define FJ_ENEMY_BACK_3_H 5
+static const uint8_t fj_enemy_back_4_bits[] = { 0x20, 0x82, 0xe0, 0x83, 0xf0, 0x87, 0xcf, 0xf9, 0xc8, 0x89, 0x30, 0x86 };
+#define FJ_ENEMY_BACK_4_W 15
+#define FJ_ENEMY_BACK_4_H 6
+static const uint8_t fj_enemy_front_2_bits[] = { 0x44, 0xfe, 0x7c, 0xfe, 0xff, 0xff, 0x10, 0xfe };
+#define FJ_ENEMY_FRONT_2_W 9
+#define FJ_ENEMY_FRONT_2_H 4
+static const uint8_t fj_enemy_front_3_bits[] = { 0x10, 0xe1, 0x50, 0xe1, 0xf8, 0xe3, 0xff, 0xff, 0xe0, 0xe0 };
+#define FJ_ENEMY_FRONT_3_W 13
+#define FJ_ENEMY_FRONT_3_H 5
+static const uint8_t fj_enemy_front_4_bits[] = { 0x20, 0x82, 0xa0, 0x82, 0xe0, 0x83, 0xff, 0xff, 0xf0, 0x87, 0xc0, 0x81 };
+#define FJ_ENEMY_FRONT_4_W 15
+#define FJ_ENEMY_FRONT_4_H 6
+static const uint8_t fj_enemy_dot_bits[] = { 0xff };
+#define FJ_ENEMY_DOT_W 1
+#define FJ_ENEMY_DOT_H 1
+
+
+struct FjXbm { uint8_t w, h; const uint8_t *bits; };
+
+#define FJ_SPR(U, l) { FJ_##U##_W, FJ_##U##_H, fj_##l##_bits }
+
+// [orientation: back, left, front, right][distance: nearest .. farthest]
+static const FjXbm FJ_ENEMY_SPR[4][6] = {
+  { FJ_SPR(ENEMY_BACK_4, enemy_back_4),  FJ_SPR(ENEMY_BACK_3, enemy_back_3),  FJ_SPR(ENEMY_BACK_2, enemy_back_2),  FJ_SPR(ENEMY_BACK_1, enemy_back_1),  FJ_SPR(ENEMY_BACK_0, enemy_back_0), FJ_SPR(ENEMY_DOT, enemy_dot) },
+  { FJ_SPR(ENEMY_LEFT_3, enemy_left_3),  FJ_SPR(ENEMY_LEFT_3, enemy_left_3),  FJ_SPR(ENEMY_LEFT_2, enemy_left_2),  FJ_SPR(ENEMY_LEFT_1, enemy_left_1),  FJ_SPR(ENEMY_LEFT_0, enemy_left_0), FJ_SPR(ENEMY_DOT, enemy_dot) },
+  { FJ_SPR(ENEMY_FRONT_4, enemy_front_4), FJ_SPR(ENEMY_FRONT_3, enemy_front_3), FJ_SPR(ENEMY_FRONT_2, enemy_front_2), FJ_SPR(ENEMY_BACK_1, enemy_back_1),  FJ_SPR(ENEMY_BACK_0, enemy_back_0), FJ_SPR(ENEMY_DOT, enemy_dot) },
+  { FJ_SPR(ENEMY_RIGHT_3, enemy_right_3), FJ_SPR(ENEMY_RIGHT_3, enemy_right_3), FJ_SPR(ENEMY_RIGHT_2, enemy_right_2), FJ_SPR(ENEMY_RIGHT_1, enemy_right_1), FJ_SPR(ENEMY_RIGHT_0, enemy_right_0), FJ_SPR(ENEMY_DOT, enemy_dot) },
+};
+static const int FJ_RENDER_DIST[6] = { 10, 20, 30, 50, 100, (int)FJ_MAX_DIST };
+
+// ── State ────────────────────────────────────────────────────────────────────
+struct FjEnemy {
+  float   dir;        // bearing from the player, radians
+  float   dist;       // distance from the player
+  float   own;        // the enemy's own heading
+  int     health;
+  uint8_t cool;       // frames until this enemy's next shot may land
+  // Render cache, refreshed once per tick by fj_prepare_render()
+  bool    vis;        // on screen this tick
+  int16_t sx, sy;     // sprite top-left, logical px (centre-x already removed)
+  uint8_t spr_d, spr_o;   // indices into FJ_ENEMY_SPR
+  bool    mm_vis;     // inside minimap range
+  int16_t mmx, mmy;   // minimap dot, logical px relative to the view origin
+};
+
+static FjEnemy  fj_en[FJ_MAX_ENEMIES];
+static int      fj_en_n       = 0;
+static float    fj_dir        = FJ_PI2 / 4.0f;   // player heading
+static int      fj_turning    = FJ_T_NONE;
+static bool     fj_turn_fast  = false;           // current turn is the fast one
+static bool     fj_braking    = false;
+static bool     fj_firing     = false;
+static int      fj_health     = 100;
+static int      fj_round      = 0;               // rounds cleared == score
+static uint32_t fj_tick       = 0;               // frames of actual play
+static uint32_t fj_round_t0   = 0;
+static int      fj_phase      = FJ_P_PLAY;
+static bool     fj_running    = false;
+static bool     fj_beat_high  = false;
+static bool     fj_kill_pend  = false;           // an enemy died this frame
+static bool     fj_round_pend = false;           // a round was cleared this frame
+static int      fj_shield_left = 0;              // frames of Healing Force Shield remaining
+static int      fj_shield_cool = 0;              // frames until it may be raised again
+static float    fj_heal_acc   = 0.0f;            // fractional health carried between frames
+static float    fj_dmg_acc    = 0.0f;            // fractional damage carried between enemy hits
+
+// IMU control state
+static float    fj_base_x     = 0.0f, fj_base_y = 0.0f;   // calibrated rest pose
+static float    fj_fwd_sign   = 1.0f;                     // which way "forward" is on X
+static int      fj_fire_hold  = 0;                        // frames of fire left
+static int      fj_brake_cnt  = 0;
+static int      fj_cal_stage  = FJ_C_REST;
+static uint32_t fj_cal_t0     = 0;
+static float    fj_cal_sx = 0, fj_cal_sy = 0;
+static int      fj_cal_n      = 0;
+static int      fj_cal_hits   = 0;
+
+// UI handles
+static lv_obj_t   *fj_view      = nullptr;   // the custom-drawn field
+static lv_obj_t   *fj_hp_lbl    = nullptr;   // status bar — left
+static lv_obj_t   *fj_rd_lbl    = nullptr;   // status bar — right
+static lv_obj_t   *fj_banner    = nullptr;   // "ROUND n"
+static lv_obj_t   *fj_hint      = nullptr;   // controls, first round only
+static lv_obj_t   *fj_sh_lbl    = nullptr;   // "SHIELD 4s"
+static int         fj_last_sh   = -1;
+static lv_obj_t   *fj_cal_card  = nullptr;   // calibration card
+static lv_obj_t   *fj_cal_title = nullptr;
+static lv_obj_t   *fj_cal_sub   = nullptr;
+static lv_obj_t   *fj_pause_pop = nullptr;
+static lv_obj_t   *fj_pop       = nullptr;   // game-over popup
+static lv_timer_t *fj_timer      = nullptr;  // the game tick
+static lv_timer_t *fj_over_timer = nullptr;  // one-shot: explosion → popup
+static int         fj_last_hp    = -1;       // status-bar caches
+static int         fj_last_round = -1;
+static int         fj_last_best  = -1;
+static int         fj_banner_round = -1;
+
+static void fj_game_start(void);
+static void fj_pause_game(void);
+static void fj_resume_game(void);
+static void fj_cal_begin(void);
+static void fj_show_popup(void);
+
+// ── Sound ────────────────────────────────────────────────────────────────────
+static const Note FJ_KILL_TUNE[]  = { {NOTE_E5, 50}, {NOTE_A5, 70} };
+static const Note FJ_ROUND_TUNE[] = { {NOTE_C5, 80}, {NOTE_E5, 80}, {NOTE_A5, 160} };
+static const Note FJ_CAL_TUNE[]   = { {NOTE_A4, 50} };
+static const Note FJ_SHIELD_TUNE[] = { {NOTE_C5, 60}, {NOTE_A5, 120} };
+
+// which: 0 = enemy down, 1 = round cleared, 2 = calibration step, 3 = shield up.
+// Rides the shared async tune player, so the game keeps ticking while it plays.
+static void fj_sfx(int which)
+{
+  if (!cfg.menu_sounds) return;
+  tune_stop();
+  switch (which) {
+    case 0:  tune_notes = FJ_KILL_TUNE;  tune_total = 2; break;
+    case 1:  tune_notes = FJ_ROUND_TUNE; tune_total = 3; break;
+    case 3:  tune_notes = FJ_SHIELD_TUNE; tune_total = 2; break;
+    default: tune_notes = FJ_CAL_TUNE;   tune_total = 1; break;
+  }
+  tune_step  = 0;
+  tune_timer = lv_timer_create(tune_tick_cb, 1, nullptr);
+  lv_timer_set_repeat_count(tune_timer, -1);
+}
+
+// ── Round setup (initRound in the original) ─────────────────────────────────
+static void fj_init_round(int round)
+{
+  fj_round = round;
+  int n = cfg.fj_start_enemies + round * cfg.fj_per_round;
+  if (n > cfg.fj_max_enemies) n = cfg.fj_max_enemies;
+  if (n > FJ_MAX_ENEMIES)     n = FJ_MAX_ENEMIES;
+  if (n < 1)                  n = 1;
+  fj_en_n = n;
+  for (int i = 0; i < n; i++) {
+    fj_en[i].dir    = (float)random(600) / 100.0f;
+    fj_en[i].own    = (float)random(600) / 100.0f;
+    fj_en[i].dist   = FJ_MAX_DIST;
+    fj_en[i].health = cfg.fj_enemy_health;
+    fj_en[i].cool   = 0;
+    fj_en[i].vis    = false;
+    fj_en[i].mm_vis = false;
+  }
+  fj_round_t0 = fj_tick;
+}
+
+// ── One step of the simulation (updateGameState in the original) ────────────
+static void fj_update()
+{
+  fj_tick++;
+  if (fj_health <= 0) return;
+
+  // Healing Force Shield: heal a slice of max health every frame, count down,
+  // and start the cooldown (if any) when it drops.
+  if (fj_shield_left > 0) {
+    fj_heal_acc += (float)cfg.fj_health * (float)cfg.fj_shield_heal_pct / 100.0f / (float)FJ_FPS;
+    const int add = (int)fj_heal_acc;
+    if (add > 0) {
+      fj_heal_acc -= (float)add;
+      fj_health += add;
+      if (fj_health > cfg.fj_health) fj_health = cfg.fj_health;
+    }
+    if (--fj_shield_left == 0) fj_shield_cool = cfg.fj_shield_cooldown_sec * FJ_FPS;
+  } else if (fj_shield_cool > 0) {
+    fj_shield_cool--;
+  }
+
+  if (fj_turning == FJ_T_LEFT) {
+    fj_dir += fj_turn_fast ? FJ_TURN_FAST : FJ_TURN_SLOW;
+    while (fj_dir > FJ_PI2) fj_dir -= FJ_PI2;
+  } else if (fj_turning == FJ_T_RIGHT) {
+    fj_dir -= fj_turn_fast ? FJ_TURN_FAST : FJ_TURN_SLOW;
+    while (fj_dir < 0.0f) fj_dir += FJ_PI2;
+  }
+
+  const float cruise = FJ_SPEED * (float)cfg.fj_speed_percent / 100.0f;
+  float speed = fj_braking ? FJ_BRAKE_SPEED : cruise;
+  if (fj_shield_left > 0 && speed > cruise * FJ_SHIELD_SPEED) speed = cruise * FJ_SHIELD_SPEED;
+  const float dX = cosf(fj_dir) * speed;
+  const float dY = sinf(fj_dir) * speed;
+
+  for (int i = 0; i < fj_en_n; i++) {
+    FjEnemy &e = fj_en[i];
+    if (e.dist < 1.0f) {
+      e.dir  += FJ_PI2 / 2.0f;
+      e.dist  = 1.0f;
+    }
+    if (e.health <= 0) continue;
+
+    // autopilotFollower(): the enemy turns toward the player
+    const float rel = e.own - e.dir;
+    if (cosf(rel) > 0.0f || sinf(rel) > 0.0f) {
+      e.own += FJ_ENEMY_TURN;
+      while (e.own > FJ_PI2) e.own -= FJ_PI2;
+    } else {
+      e.own -= FJ_ENEMY_TURN;
+      while (e.own < 0.0f) e.own += FJ_PI2;
+    }
+
+    const float dEX = cosf(e.own) * FJ_ENEMY_SPEED;
+    const float dEY = sinf(e.own) * FJ_ENEMY_SPEED;
+    const float eX  = cosf(e.dir) * e.dist;
+    const float eY  = sinf(e.dir) * e.dist;
+    const float nX  = eX - dX + dEX;
+    const float nY  = eY - dY + dEY;
+
+    e.dist = sqrtf(nX * nX + nY * nY);
+    e.dir  = atan2f(nY, nX);
+    while (e.dir < 0.0f) e.dir += FJ_PI2;
+    if (e.dist > FJ_MAX_DIST) e.dist = FJ_MAX_DIST;     // never lose the enemies
+
+    // Enemy shooting at you: only at close range, and at a gentle rate — one
+    // hit lands, then the enemy must wait fj_enemy_fire_interval frames.
+    if (e.cool > 0) e.cool--;
+    if (e.dist < (float)cfg.fj_enemy_fire_dist) {
+      const float aim = e.own - e.dir - FJ_PI2 / 2.0f;
+      const float win = FJ_PI2 / (2.0f * (e.dist < 1.0f ? 1.0f : e.dist));
+      if (aim < win && aim > -win && e.cool == 0) {
+        // One hit is 1 health. Behind the shield only the unabsorbed share of it
+        // gets through; the fraction is carried so 50% means every other hit
+        // lands, rather than every hit rounding to 0 or 1.
+        float dmg = 1.0f;
+        if (fj_shield_left > 0) dmg = 1.0f - (float)cfg.fj_shield_block_pct / 100.0f;
+        fj_dmg_acc += dmg;
+        const int hit = (int)fj_dmg_acc;
+        if (hit > 0) {
+          fj_dmg_acc -= (float)hit;
+          fj_health  -= (fj_health > 0) ? hit : 0;
+        }
+        e.cool = (uint8_t)(cfg.fj_enemy_fire_interval - 1);
+      }
+    }
+  }
+
+  if (fj_firing && fj_shield_left == 0) {
+    // The original shifts the aim point toward the bank while turning. Kept for
+    // the fast turn only: a slow turn is for lining up a shot, so it fires
+    // dead ahead.
+    const float corr = !fj_turn_fast ? 0.0f
+                     : (fj_turning == FJ_T_LEFT)  ?  FJ_FOV / 4.0f
+                     : (fj_turning == FJ_T_RIGHT) ? -FJ_FOV / 4.0f : 0.0f;
+    const float assist = (float)cfg.fj_aim_percent / 100.0f;
+    for (int i = 0; i < fj_en_n; i++) {
+      FjEnemy &e = fj_en[i];
+      if (e.health <= 0) continue;
+      const float win = assist * FJ_PI2 / (2.0f * (e.dist < 1.0f ? 1.0f : e.dist));
+      if (e.dir > fj_dir + corr - win && e.dir < fj_dir + corr + win) {
+        if (--e.health <= 0) fj_kill_pend = true;
+      }
+    }
+  }
+
+  bool left = false;
+  for (int i = 0; i < fj_en_n; i++) if (fj_en[i].health > 0) { left = true; break; }
+  if (!left) {
+    fj_init_round(fj_round + 1);
+    fj_round_pend = true;
+  }
+}
+
+// ── Render cache: everything trigonometric, once per tick ───────────────────
+static void fj_prepare_render()
+{
+  for (int i = 0; i < fj_en_n; i++) {
+    FjEnemy &e = fj_en[i];
+    e.vis = false;
+    e.mm_vis = false;
+    if (e.health <= 0) continue;
+
+    // Minimap dot
+    if (e.dist < FJ_MAX_DIST) {
+      const float a  = fj_dir - e.dir - FJ_PI2 / 4.0f;
+      const float eX = cosf(a) * e.dist;
+      const float eY = sinf(a) * e.dist;
+      e.mmx = (int16_t)(1 + FJ_MM_R + (eX / FJ_MAX_DIST * FJ_MM_R));
+      e.mmy = (int16_t)(1 + FJ_MM_R + (eY / FJ_MAX_DIST * FJ_MM_R));
+      e.mm_vis = true;
+    }
+
+    // Bearing relative to our nose, folded into -pi..pi
+    float ed = fj_dir - e.dir;
+    while (ed >  FJ_PI2 / 2.0f) ed -= FJ_PI2;
+    while (ed < -FJ_PI2 / 2.0f) ed += FJ_PI2;
+
+    const int drawX = (int)((ed + FJ_FOV) / (FJ_FOV * 2.0f) * (float)FJ_LW);
+    if (drawX < -24 || drawX > FJ_LW + 24) continue;       // well off-screen
+
+    int di = 0;
+    for (int k = 0; k < 6; k++) {
+      di = k;
+      if (e.dist <= (float)FJ_RENDER_DIST[k]) break;
+    }
+
+    float o = e.own - e.dir + FJ_PI2 / 8.0f;
+    while (o < 0.0f)     o += FJ_PI2;
+    while (o > FJ_PI2)   o -= FJ_PI2;
+    const int oi = (o > 0.0f && o < FJ_PI2 / 4.0f)            ? 0
+                 : (o > FJ_PI2 / 4.0f && o < FJ_PI2 / 2.0f)   ? 1
+                 : (o > FJ_PI2 / 2.0f && o < 3.0f * FJ_PI2 / 4.0f) ? 2 : 3;
+
+    const FjXbm &s = FJ_ENEMY_SPR[oi][di];
+    e.spr_d = (uint8_t)di;
+    e.spr_o = (uint8_t)oi;
+    e.sx    = (int16_t)(drawX - s.w / 2);
+    e.sy    = (int16_t)(FJ_JY + (e.dist < 3.0f ? (int)(10.0f * e.dist) : 35));
+    e.vis   = true;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Drawing
+// ══════════════════════════════════════════════════════════════════════════════
+static lv_area_t           fj_clip;      // the strip being drawn right now
+static int                 fj_ox, fj_oy; // view origin on screen
+static lv_draw_rect_dsc_t  fj_rd;
+
+// Filled rectangle, view-relative px, inclusive. Culled against the strip
+// before a draw task is ever created — most of a frame's rectangles lie in
+// the other seven strips.
+static inline void fj_fill(lv_layer_t *layer, int x1, int y1, int x2, int y2, lv_color_t c)
+{
+  lv_area_t a;
+  a.x1 = fj_ox + x1;  a.y1 = fj_oy + y1;
+  a.x2 = fj_ox + x2;  a.y2 = fj_oy + y2;
+  if (a.y2 < fj_clip.y1 || a.y1 > fj_clip.y2 || a.x2 < fj_clip.x1 || a.x1 > fj_clip.x2) return;
+  fj_rd.bg_color = c;
+  lv_draw_rect(layer, &fj_rd, &a);
+}
+
+// An XBM (LSB-first, rows padded to a byte) at a logical position, 2x, with
+// horizontal runs of set bits merged into one rectangle each.
+static void fj_xbm(lv_layer_t *layer, int lx, int ly, int w, int h,
+                   const uint8_t *bits, lv_color_t c)
+{
+  if (fj_oy + (ly + h) * FJ_S < fj_clip.y1 || fj_oy + ly * FJ_S > fj_clip.y2) return;
+  const int stride = (w + 7) / 8;
+  for (int y = 0; y < h; y++) {
+    const int py = (ly + y) * FJ_S;
+    if (fj_oy + py + 1 < fj_clip.y1 || fj_oy + py > fj_clip.y2) continue;
+    int x = 0;
+    while (x < w) {
+      if ((bits[y * stride + (x >> 3)] >> (x & 7)) & 1) {
+        const int xs = x;
+        while (x < w && ((bits[y * stride + (x >> 3)] >> (x & 7)) & 1)) x++;
+        fj_fill(layer, (lx + xs) * FJ_S, py, (lx + x) * FJ_S - 1, py + FJ_S - 1, c);
+      } else {
+        x++;
+      }
+    }
+  }
+}
+
+// Tracer line between two logical points (original coordinates + the jet offset)
+static void fj_tracer(lv_layer_t *layer, int x1, int y1, int x2, int y2, lv_color_t c)
+{
+  lv_draw_line_dsc_t l;
+  lv_draw_line_dsc_init(&l);
+  l.color = c;
+  l.width = 2;
+  l.opa   = LV_OPA_COVER;
+  l.p1.x  = fj_ox + (x1 + FJ_JX) * FJ_S;
+  l.p1.y  = fj_oy + (y1 + FJ_JY) * FJ_S;
+  l.p2.x  = fj_ox + (x2 + FJ_JX) * FJ_S;
+  l.p2.y  = fj_oy + (y2 + FJ_JY) * FJ_S;
+  lv_draw_line(layer, &l);
+}
+
+static void fj_draw_compass(lv_layer_t *layer)
+{
+  const lv_color_t tick = lv_color_make(200, 205, 225);
+  const lv_color_t ltr  = lv_color_make(255, 220, 80);
+  const int cx = FJ_LW / 2;
+  const int x0 = cx - FJ_COMPASS_W / 2;
+
+  fj_fill(layer, x0 * FJ_S, 0, x0 * FJ_S + 1, 6 * FJ_S - 1, tick);
+  fj_fill(layer, (x0 + FJ_COMPASS_W) * FJ_S, 0, (x0 + FJ_COMPASS_W) * FJ_S + 1, 6 * FJ_S - 1, tick);
+
+  const int base = (int)((fj_dir * (float)FJ_COMPASS_W) / FJ_PI2);
+  for (int i = 0; i < FJ_COMPASS_W; i++) {
+    if ((base + i) % 3 == 0)
+      fj_fill(layer, (x0 + i) * FJ_S, 3 * FJ_S, (x0 + i) * FJ_S + 1, 3 * FJ_S + 1, tick);
+  }
+
+  // The cardinal letter slides along the bar as the heading sweeps its quadrant
+  const float q  = FJ_PI2 / 4.0f;
+  const float e8 = FJ_PI2 / 8.0f;
+  const float span = (float)(FJ_COMPASS_W - 5) / q;
+  const uint8_t *bits;
+  float          from;
+  if      (fj_dir >= e8        && fj_dir <= 3 * e8) { bits = fj_compass_n_bits; from = fj_dir - e8; }
+  else if (fj_dir >= 3 * e8    && fj_dir <= 5 * e8) { bits = fj_compass_w_bits; from = fj_dir - 3 * e8; }
+  else if (fj_dir >= 5 * e8    && fj_dir <= 7 * e8) { bits = fj_compass_s_bits; from = fj_dir - 5 * e8; }
+  else if (fj_dir >= 7 * e8)                        { bits = fj_compass_e_bits; from = fj_dir - 7 * e8; }
+  else                                              { bits = fj_compass_e_bits; from = fj_dir + e8; }
+  fj_xbm(layer, x0 + (int)(from * span), 0, 5, 5, bits, ltr);
+}
+
+static void fj_draw_minimap(lv_layer_t *layer)
+{
+  const int mx = 2, my = 4;                           // logical top-left
+  const int d  = (FJ_MM_R * 2 + 1) * FJ_S;
+  lv_area_t a;
+  a.x1 = fj_ox + mx * FJ_S;  a.y1 = fj_oy + my * FJ_S;
+  a.x2 = a.x1 + d - 1;       a.y2 = a.y1 + d - 1;
+  if (!(a.y2 < fj_clip.y1 || a.y1 > fj_clip.y2)) {
+    lv_draw_rect_dsc_t c;
+    lv_draw_rect_dsc_init(&c);
+    c.radius       = LV_RADIUS_CIRCLE;
+    c.bg_color     = lv_color_make(10, 30, 20);
+    c.bg_opa       = LV_OPA_60;
+    c.border_color = lv_color_make(130, 200, 150);
+    c.border_width = 2;
+    c.border_opa   = LV_OPA_COVER;
+    lv_draw_rect(layer, &c, &a);
+  }
+  const lv_color_t cross = lv_color_make(130, 200, 150);
+  const int ccx = mx + FJ_MM_R, ccy = my + FJ_MM_R;
+  fj_fill(layer, (ccx - 1) * FJ_S, ccy * FJ_S, (ccx + 1) * FJ_S + 1, ccy * FJ_S + 1, cross);
+  fj_fill(layer, ccx * FJ_S, (ccy - 1) * FJ_S, ccx * FJ_S + 1, (ccy + 1) * FJ_S + 1, cross);
+
+  const lv_color_t red = lv_color_make(255, 70, 70);
+  for (int i = 0; i < fj_en_n; i++) {
+    const FjEnemy &e = fj_en[i];
+    if (!e.mm_vis) continue;
+    fj_fill(layer, (mx + e.mmx - 1) * FJ_S, (my + e.mmy - 1) * FJ_S,
+                   (mx + e.mmx - 1) * FJ_S + 1, (my + e.mmy - 1) * FJ_S + 1, red);
+  }
+}
+
+static void fj_draw_jet(lv_layer_t *layer)
+{
+  const int cx = FJ_LW / 2;
+  const int jy = 43 + FJ_JY;
+  if (fj_health <= 0) {
+    fj_xbm(layer, cx - FJ_EXPLOSION_W / 2, jy, FJ_EXPLOSION_W, FJ_EXPLOSION_H,
+           fj_explosion_bits, lv_color_make(255, 150, 30));
+    return;
+  }
+  const lv_color_t body = lv_color_make(225, 230, 240);
+  const lv_color_t fire = lv_color_make(255, 235, 90);
+
+  if (fj_turning == FJ_T_LEFT) {
+    fj_xbm(layer, cx - FJ_TURN_LEFT_W / 2, jy, FJ_TURN_LEFT_W, FJ_TURN_LEFT_H, fj_turn_left_bits, body);
+    if (fj_firing) {
+      fj_tracer(layer, 68, 45, 51, 38, fire);
+      fj_tracer(layer, 55, 55, 51, 39, fire);
+    }
+  } else if (fj_turning == FJ_T_RIGHT) {
+    fj_xbm(layer, cx - FJ_TURN_RIGHT_W / 2, jy, FJ_TURN_RIGHT_W, FJ_TURN_RIGHT_H, fj_turn_right_bits, body);
+    if (fj_firing) {
+      fj_tracer(layer, 60, 45, 75, 38, fire);
+      fj_tracer(layer, 73, 55, 75, 39, fire);
+    }
+  } else {
+    fj_xbm(layer, cx - FJ_FIGHTER_JET_STRAIGHT_W / 2, jy, FJ_FIGHTER_JET_STRAIGHT_W,
+           FJ_FIGHTER_JET_STRAIGHT_H, fj_fighter_jet_straight_bits, body);
+    if (fj_firing) {
+      fj_tracer(layer, 56, 48, 64, 39, fire);
+      fj_tracer(layer, 72, 48, 64, 39, fire);
+    }
+  }
+}
+
+// The Healing Force Shield: a translucent bubble around the jet. It breathes
+// gently, and flickers through its last second so the player sees it ending.
+static void fj_draw_shield(lv_layer_t *layer)
+{
+  if (fj_shield_left <= 0 || fj_health <= 0) return;
+  if (fj_shield_left <= FJ_FPS && ((fj_tick / 3) & 1)) return;      // last-second flicker
+
+  const int r = FJ_SHIELD_R + (int)((fj_tick / 4) % 3) - 1;         // breathe: r-1 .. r+1
+  const int cx = FJ_FIELD_W / 2, cy = FJ_SHIELD_CY;
+  lv_area_t a;
+  a.x1 = fj_ox + cx - r;  a.y1 = fj_oy + cy - r;
+  a.x2 = fj_ox + cx + r;  a.y2 = fj_oy + cy + r;
+  if (a.y2 < fj_clip.y1 || a.y1 > fj_clip.y2) return;
+
+  lv_draw_rect_dsc_t b;
+  lv_draw_rect_dsc_init(&b);
+  b.radius       = LV_RADIUS_CIRCLE;
+  b.bg_color     = lv_color_make(90, 210, 255);
+  b.bg_opa       = LV_OPA_20;
+  b.border_color = lv_color_make(170, 240, 255);
+  b.border_width = 3;
+  b.border_opa   = LV_OPA_COVER;
+  lv_draw_rect(layer, &b, &a);
+
+  // A small specular highlight, top-left, so it reads as a bubble and not a ring
+  lv_area_t h;
+  h.x1 = a.x1 + r / 3;      h.y1 = a.y1 + r / 4;
+  h.x2 = h.x1 + r / 3;      h.y2 = h.y1 + 3;
+  lv_draw_rect_dsc_t hd;
+  lv_draw_rect_dsc_init(&hd);
+  hd.radius   = 2;
+  hd.bg_color = lv_color_white();
+  hd.bg_opa   = LV_OPA_60;
+  if (!(h.y2 < fj_clip.y1 || h.y1 > fj_clip.y2)) lv_draw_rect(layer, &hd, &h);
+}
+
+static void fj_draw_cb(lv_event_t *e)
+{
+  lv_layer_t *layer = lv_event_get_layer(e);
+  lv_obj_t   *obj   = lv_event_get_target_obj(e);
+  lv_area_t   oa;
+  lv_obj_get_coords(obj, &oa);
+  fj_ox   = oa.x1;
+  fj_oy   = oa.y1;
+  fj_clip = layer->_clip_area;
+
+  lv_draw_rect_dsc_init(&fj_rd);
+  fj_rd.bg_opa = LV_OPA_COVER;
+
+  // Sky in four bands, ground below the horizon
+  const int hz = FJ_HORIZON * FJ_S;
+  const lv_color_t sky[4] = { lv_color_make(8, 14, 46),  lv_color_make(16, 30, 82),
+                              lv_color_make(30, 56, 122), lv_color_make(54, 96, 156) };
+  const int band = hz / 4;
+  for (int i = 0; i < 4; i++)
+    fj_fill(layer, 0, i * band, FJ_FIELD_W - 1, (i == 3 ? hz : (i + 1) * band) - 1, sky[i]);
+  fj_fill(layer, 0, hz,      FJ_FIELD_W - 1, hz + 7,            lv_color_make(34, 74, 40));
+  fj_fill(layer, 0, hz + 8,  FJ_FIELD_W - 1, FJ_FIELD_H - 1,    lv_color_make(20, 46, 26));
+  fj_fill(layer, 0, hz - 1,  FJ_FIELD_W - 1, hz,                lv_color_make(150, 180, 205));
+
+  fj_draw_compass(layer);
+  fj_draw_minimap(layer);
+
+  // Enemies, in index order as in the original
+  const lv_color_t foe = lv_color_make(255, 85, 60);
+  for (int i = 0; i < fj_en_n; i++) {
+    const FjEnemy &en = fj_en[i];
+    if (!en.vis) continue;
+    const FjXbm &s = FJ_ENEMY_SPR[en.spr_o][en.spr_d];
+    fj_xbm(layer, en.sx, en.sy, s.w, s.h, s.bits, foe);
+  }
+
+  fj_draw_jet(layer);
+  fj_draw_shield(layer);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Status bar, banner
+// ══════════════════════════════════════════════════════════════════════════════
+static void fj_status_refresh()
+{
+  const int pct = (fj_health > 0 ? fj_health : 0) * 100 / (cfg.fj_health > 0 ? cfg.fj_health : 100);
+  if (fj_hp_lbl && pct != fj_last_hp) {
+    fj_last_hp = pct;
+    lv_label_set_text_fmt(fj_hp_lbl, "Health: %d%%", pct);
+    lv_obj_set_style_text_color(fj_hp_lbl,
+      pct > 50 ? lv_color_make(90, 210, 120)
+    : pct > 25 ? lv_color_make(255, 200, 60) : lv_color_make(240, 80, 80), 0);
+  }
+  if (fj_rd_lbl && (fj_round != fj_last_round || cfg.fj_high_score != fj_last_best)) {
+    fj_last_round = fj_round;
+    fj_last_best  = cfg.fj_high_score;
+    lv_label_set_text_fmt(fj_rd_lbl, "Round: %d   Best: %d", fj_round + 1, cfg.fj_high_score);
+  }
+}
+
+static void fj_shield_label_refresh()
+{
+  if (!fj_sh_lbl) return;
+  const int secs = (fj_shield_left + FJ_FPS - 1) / FJ_FPS;       // 0 when down
+  if (secs == fj_last_sh) return;
+  fj_last_sh = secs;
+  if (secs > 0) lv_label_set_text_fmt(fj_sh_lbl, "SHIELD  %ds", secs);
+  lv_obj_set_hidden(fj_sh_lbl, secs == 0);
+}
+
+static void fj_banner_refresh()
+{
+  const bool show = (fj_phase == FJ_P_PLAY) && (fj_tick - fj_round_t0 < FJ_ROUND_TITLE) && fj_health > 0;
+  if (fj_banner) {
+    if (fj_banner_round != fj_round) {
+      fj_banner_round = fj_round;
+      lv_label_set_text_fmt(fj_banner, "ROUND %d", fj_round + 1);
+    }
+    lv_obj_set_hidden(fj_banner, !show);
+  }
+  if (fj_hint) {
+    lv_obj_set_hidden(fj_hint, !(show && fj_round == 0));
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Input
+// ══════════════════════════════════════════════════════════════════════════════
+static void fj_read_input()
+{
+  int  turn  = FJ_T_NONE;
+  bool fast  = false;
+  bool brake = false;
+  bool fire  = false;
+
+#if BOARD_HAS_JOYSTICK
+  if (joy_active()) {
+    // joy_x()/joy_y() are on-screen axes, already dead-zoned: +x right, +y up.
+    const float x = joy_x(), y = joy_y();
+    // Forward fires, exactly like the IMU's forward tilt: crossing the threshold
+    // latches the guns on for a few frames, holding it keeps re-arming them.
+    if (y > FJ_JOY_FIRE)       fj_fire_hold = FJ_FIRE_HOLD_FRAMES;
+    else if (fj_fire_hold > 0) fj_fire_hold--;
+    fire = fj_fire_hold > 0;
+
+    // Pushing straight up, the thumb drifts sideways a little; while the guns are
+    // on, ask for a more deliberate sideways push before turning.
+    const float tx = fire ? FJ_JOY_TURN_FIRING : FJ_JOY_TURN;
+    if      (x >  tx) turn = FJ_T_RIGHT;
+    else if (x < -tx) turn = FJ_T_LEFT;
+    fast  = fabsf(x) > FJ_JOY_TURN_FAST;
+    brake = (y < -FJ_JOY_BRAKE);
+  } else
+#endif
+  if (imuReady) {
+    imu.update();
+    imu.getAccel(&accelData);
+
+    const float sign = (cfg.fj_invert_turn ? -1.0f : 1.0f) * FJ_TURN_SIGN;
+    const float dy   = (accelData.accelY - fj_base_y) * sign;
+    const float fwd  = (accelData.accelX - fj_base_x) * fj_fwd_sign;
+    const float tt   = (float)cfg.fj_turn_tilt_percent / 100.0f;
+    float       tf   = (float)cfg.fj_fast_tilt_percent / 100.0f;
+    if (tf < tt + 0.05f) tf = tt + 0.05f;          // keep the two levels distinct
+    const float ft   = (float)cfg.fj_fire_tilt_percent / 100.0f;
+
+    if      (dy >  tt) turn = FJ_T_RIGHT;
+    else if (dy < -tt) turn = FJ_T_LEFT;
+    fast = fabsf(dy) > tf;                         // slow past tt, fast past tf
+
+    // A forward flick latches the guns on for a moment; a held tilt keeps
+    // re-arming that latch, so both a shake and a sustained lean fire.
+    if (fwd > ft)             fj_fire_hold = FJ_FIRE_HOLD_FRAMES;
+    else if (fj_fire_hold > 0) fj_fire_hold--;
+    fire = fj_fire_hold > 0;
+
+    // Braking wants a deliberate lean back, well past the fire threshold: the
+    // recoil after a forward flick must not slam the brakes on.
+    if (fwd < -ft * FJ_BRAKE_FACTOR) { if (fj_brake_cnt < 99) fj_brake_cnt++; }
+    else                             fj_brake_cnt = 0;
+    brake = fj_brake_cnt >= FJ_BRAKE_FRAMES;
+  }
+
+  fj_turning   = turn;
+  fj_turn_fast = fast && turn != FJ_T_NONE;
+  fj_braking   = brake;
+  fj_firing    = fire && fj_shield_left == 0;   // no guns behind a shield
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  IMU calibration — runs at game start and on every resume
+// ══════════════════════════════════════════════════════════════════════════════
+static void fj_cal_texts(const char *title, const char *sub)
+{
+  if (fj_cal_title) lv_label_set_text(fj_cal_title, title);
+  if (fj_cal_sub)   lv_label_set_text(fj_cal_sub, sub);
+}
+
+static void fj_cal_close()
+{
+  if (fj_cal_card) { lv_obj_del(fj_cal_card); fj_cal_card = nullptr; }
+  fj_cal_title = fj_cal_sub = nullptr;
+}
+
+static void fj_cal_begin()
+{
+  fj_phase     = FJ_P_CAL;
+  fj_cal_stage = FJ_C_REST;
+  fj_cal_t0    = millis();
+  fj_cal_sx = fj_cal_sy = 0.0f;
+  fj_cal_n     = 0;
+  fj_cal_hits  = 0;
+  fj_turning = FJ_T_NONE;  fj_turn_fast = false;  fj_braking = false;  fj_firing = false;
+  fj_fire_hold = 0;        fj_brake_cnt = 0;
+
+  if (!fj_cal_card && apps_cont) {
+    fj_cal_card = lv_obj_create(apps_cont);
+    lv_obj_set_size(fj_cal_card, 250, 84);
+    lv_obj_align(fj_cal_card, LV_ALIGN_CENTER, 0, -6);
+    lv_obj_set_style_bg_color(fj_cal_card, lv_color_make(10, 14, 34), 0);
+    lv_obj_set_style_bg_opa(fj_cal_card, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(fj_cal_card, lv_color_make(120, 160, 220), 0);
+    lv_obj_set_style_border_width(fj_cal_card, 2, 0);
+    lv_obj_set_style_radius(fj_cal_card, 8, 0);
+    lv_obj_set_style_pad_all(fj_cal_card, 0, 0);
+    lv_obj_set_scrollable(fj_cal_card, false);
+    lv_obj_set_clickable(fj_cal_card, false);     // taps fall through to the field
+
+    fj_cal_title = lv_label_create(fj_cal_card);
+    lv_obj_set_style_text_font(fj_cal_title, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(fj_cal_title, lv_color_white(), 0);
+    lv_obj_align(fj_cal_title, LV_ALIGN_CENTER, 0, -14);
+
+    fj_cal_sub = lv_label_create(fj_cal_card);
+    lv_obj_set_style_text_font(fj_cal_sub, &dejavu_mono_14, 0);
+    lv_obj_set_style_text_color(fj_cal_sub, lv_color_make(120, 200, 140), 0);
+    lv_obj_align(fj_cal_sub, LV_ALIGN_CENTER, 0, 22);
+  }
+  fj_cal_texts("Hold steady", "calibrating...");
+}
+
+static void fj_cal_finish()
+{
+  fj_cal_close();
+  fj_phase = FJ_P_PLAY;
+  fj_fire_hold = 0;
+  fj_brake_cnt = 0;
+  fj_sfx(2);
+}
+
+// One calibration tick (called from the game tick, ~20 Hz)
+static void fj_cal_step()
+{
+  if (!imuReady) { fj_cal_finish(); return; }
+  imu.update();
+  imu.getAccel(&accelData);
+  const float ax = accelData.accelX, ay = accelData.accelY;
+  const uint32_t now = millis();
+
+  switch (fj_cal_stage) {
+    case FJ_C_REST: {
+      if (fj_cal_n > 0) {
+        const float mx = fj_cal_sx / (float)fj_cal_n, my = fj_cal_sy / (float)fj_cal_n;
+        if (fabsf(ax - mx) > 0.12f || fabsf(ay - my) > 0.12f) {   // moved — start over
+          fj_cal_n = 0;  fj_cal_sx = fj_cal_sy = 0.0f;  fj_cal_t0 = now;
+        }
+      }
+      fj_cal_sx += ax;  fj_cal_sy += ay;  fj_cal_n++;
+      if (now - fj_cal_t0 >= 700 && fj_cal_n >= 8) {
+        fj_base_x = fj_cal_sx / (float)fj_cal_n;
+        fj_base_y = fj_cal_sy / (float)fj_cal_n;
+        fj_cal_stage = FJ_C_FWD;
+        fj_cal_t0 = now;  fj_cal_hits = 0;
+        fj_cal_texts("Tilt FORWARD", "this is your fire direction");
+        fj_sfx(2);
+      }
+      break;
+    }
+    case FJ_C_FWD: {
+      const float d = ax - fj_base_x;
+      if (fabsf(d) > 0.25f) {
+        if (++fj_cal_hits >= 2) {
+          fj_fwd_sign  = (d > 0.0f) ? 1.0f : -1.0f;
+          fj_cal_stage = FJ_C_LEVEL;
+          fj_cal_t0 = now;  fj_cal_hits = 0;
+          fj_cal_sx = fj_cal_sy = 0.0f;  fj_cal_n = 0;
+          fj_cal_texts("Level again", "bring it back to rest");
+          fj_sfx(2);
+        }
+      } else {
+        fj_cal_hits = 0;
+        if (now - fj_cal_t0 > 5000) {                 // nothing seen — keep the default
+          fj_fwd_sign  = 1.0f;
+          fj_cal_stage = FJ_C_LEVEL;
+          fj_cal_t0 = now;  fj_cal_hits = 0;
+          fj_cal_sx = fj_cal_sy = 0.0f;  fj_cal_n = 0;
+          fj_cal_texts("Level again", "bring it back to rest");
+        }
+      }
+      break;
+    }
+    default: {   // FJ_C_LEVEL — wait for rest, then re-take the baseline there
+      if (fabsf(ax - fj_base_x) < 0.12f && fabsf(ay - fj_base_y) < 0.2f) {
+        fj_cal_sx += ax;  fj_cal_sy += ay;  fj_cal_n++;
+        if (++fj_cal_hits >= 6) {
+          fj_base_x = fj_cal_sx / (float)fj_cal_n;
+          fj_base_y = fj_cal_sy / (float)fj_cal_n;
+          fj_cal_finish();
+        }
+      } else {
+        fj_cal_hits = 0;  fj_cal_sx = fj_cal_sy = 0.0f;  fj_cal_n = 0;
+        if (now - fj_cal_t0 > 3500) fj_cal_finish();  // never trap the player here
+      }
+      break;
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Game tick
+// ══════════════════════════════════════════════════════════════════════════════
+static void fj_over_cb(lv_timer_t *t)
+{
+  lv_timer_del(t);
+  fj_over_timer = nullptr;
+  if (!fj_running) return;
+  fj_show_popup();
+}
+
+static void fj_on_death()
+{
+  fj_phase   = FJ_P_OVER;
+  fj_shield_left = 0;
+  fj_turning = FJ_T_NONE;  fj_turn_fast = false;  fj_braking = false;  fj_firing = false;
+
+  // Score is rounds survived — what the original's game-over screen prints
+  if (fj_round > cfg.fj_high_score) {
+    cfg.fj_high_score = fj_round;
+    fj_beat_high      = true;
+    save_config();
+  }
+  if (fj_beat_high) tune_play_success(); else tune_play_failure();
+
+  // Leave the explosion on screen for a beat before the popup covers it
+  fj_over_timer = lv_timer_create(fj_over_cb, 1200, nullptr);
+  lv_timer_set_repeat_count(fj_over_timer, 1);
+}
+
+static void fj_tick_cb(lv_timer_t * /*t*/)
+{
+  if (!fj_running || !apps_cont || !fj_view) return;
+
+  if (fj_phase == FJ_P_CAL) {
+    fj_cal_step();
+  } else if (fj_phase == FJ_P_PLAY) {
+    fj_read_input();
+    fj_update();
+    if (fj_kill_pend)  { fj_kill_pend = false;  if (!fj_round_pend) fj_sfx(0); }
+    if (fj_round_pend) { fj_round_pend = false; fj_sfx(1); }
+    if (fj_health <= 0) fj_on_death();
+    fj_prepare_render();
+    fj_status_refresh();
+    fj_banner_refresh();
+    fj_shield_label_refresh();
+  } else {
+    return;                         // paused / over: nothing moves, nothing redraws
+  }
+  lv_obj_invalidate(fj_view);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Pause, popups, input callbacks
+// ══════════════════════════════════════════════════════════════════════════════
+static void fj_stop_timers()
+{
+  if (fj_timer)      { lv_timer_del(fj_timer);      fj_timer      = nullptr; }
+  if (fj_over_timer) { lv_timer_del(fj_over_timer); fj_over_timer = nullptr; }
+}
+
+static void fj_stop()
+{
+  const bool was_running = fj_running;
+  fj_running = false;
+  fj_phase   = FJ_P_PLAY;
+  fj_stop_timers();
+  // Same reasoning as tq_stop(): a tune on the shared timer outlives the game
+  if (was_running) tune_stop();
+  fj_view = fj_hp_lbl = fj_rd_lbl = fj_banner = fj_hint = fj_sh_lbl = nullptr;
+  fj_cal_card = fj_cal_title = fj_cal_sub = nullptr;
+  fj_pause_pop = fj_pop = nullptr;
+}
+
+// Raise the Healing Force Shield. Only while actually flying: not during
+// calibration, pause or game over, not when already up, not on cooldown.
+static void fj_shield_activate()
+{
+  if (!fj_running || fj_phase != FJ_P_PLAY || fj_health <= 0) return;
+  if (fj_shield_left > 0 || fj_shield_cool > 0) return;
+  fj_shield_left = cfg.fj_shield_sec * FJ_FPS;
+  fj_heal_acc    = 0.0f;
+  fj_firing      = false;
+  fj_fire_hold   = 0;
+  fj_sfx(3);
+}
+
+// Was the press that just fired this event on the left or right quarter?
+static bool fj_press_on_side()
+{
+  lv_point_t p;
+  lv_indev_get_point(lv_indev_get_act(), &p);
+  return (p.x < FJ_FIELD_W / 4) || (p.x >= FJ_FIELD_W - FJ_FIELD_W / 4);
+}
+
+static void fj_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_NONE) return;   // a swipe
+  if (fj_press_on_side()) fj_shield_activate();     // left / right 25%
+  else                    fj_pause_game();          // centre 50%
+}
+
+// The touch layer's hold: centre exits, as everywhere else. A hold on either
+// side raises the shield too, so a slow tap there is never lost and the sides
+// can never exit by accident.
+static void fj_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_NONE) return;
+  if (fj_press_on_side()) { fj_shield_activate(); return; }
+  apps_longpress_cb(e);
+}
+
+// Hold on a popup always exits, wherever on the popup it lands.
+static void fj_popup_exit_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_NONE) return;
+  apps_longpress_cb(e);
+}
+
+static void fj_pause_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  fj_resume_game();
+}
+
+static void fj_popup_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  fj_game_start();                 // straight back in (and through calibration)
+}
+
+static lv_obj_t *fj_make_popup(lv_color_t border)
+{
+  lv_obj_t *pop = lv_obj_create(apps_cont);
+  lv_obj_set_size(pop, 240, 110);
+  lv_obj_align(pop, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_color(pop, lv_color_make(10, 14, 34), 0);
+  lv_obj_set_style_bg_opa(pop, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(pop, border, 0);
+  lv_obj_set_style_border_width(pop, 2, 0);
+  lv_obj_set_style_radius(pop, 8, 0);
+  lv_obj_set_style_pad_all(pop, 0, 0);
+  lv_obj_set_scrollable(pop, false);
+  lv_obj_add_event_cb(pop, fj_popup_exit_cb, LV_EVENT_LONG_PRESSED, nullptr);
+  return pop;
+}
+
+static void fj_pause_game()
+{
+  if (!fj_running || fj_phase != FJ_P_PLAY || fj_pause_pop) return;
+  fj_phase   = FJ_P_PAUSED;
+  fj_turning = FJ_T_NONE;  fj_turn_fast = false;  fj_braking = false;  fj_firing = false;
+  fj_fire_hold = 0;
+
+  fj_pause_pop = fj_make_popup(lv_color_make(120, 160, 220));
+  lv_obj_add_event_cb(fj_pause_pop, fj_pause_tap_cb, LV_EVENT_CLICKED, nullptr);
+
+  lv_obj_t *t = lv_label_create(fj_pause_pop);
+  lv_label_set_text(t, "Paused");
+  lv_obj_set_style_text_font(t, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_color(t, lv_color_white(), 0);
+  lv_obj_align(t, LV_ALIGN_CENTER, 0, -14);
+
+  lv_obj_t *s = lv_label_create(fj_pause_pop);
+  lv_label_set_text(s, (imuReady && !joy_active()) ? "tap: resume + recalibrate"
+                                                   : "tap: resume");
+  lv_obj_set_style_text_font(s, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(s, lv_color_make(160, 200, 255), 0);
+  lv_obj_align(s, LV_ALIGN_CENTER, 0, 14);
+
+  lv_obj_t *h = lv_label_create(fj_pause_pop);
+  lv_label_set_text(h, "hold: exit");
+  lv_obj_set_style_text_font(h, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(h, lv_color_make(80, 80, 120), 0);
+  lv_obj_align(h, LV_ALIGN_BOTTOM_MID, 0, -6);
+}
+
+static void fj_resume_game()
+{
+  if (!fj_running || fj_phase != FJ_P_PAUSED) return;
+  if (fj_pause_pop) { lv_obj_del(fj_pause_pop); fj_pause_pop = nullptr; }
+  // The way the device is held has almost certainly changed while paused
+  if (imuReady && !joy_active()) fj_cal_begin();
+  else                           fj_phase = FJ_P_PLAY;
+  if (fj_view) lv_obj_invalidate(fj_view);
+}
+
+static void fj_show_popup()
+{
+  if (!apps_cont || fj_pop) return;
+  fj_pop = fj_make_popup(lv_color_make(120, 160, 220));
+  lv_obj_add_event_cb(fj_pop, fj_popup_tap_cb, LV_EVENT_CLICKED, nullptr);
+
+  lv_obj_t *title = lv_label_create(fj_pop);
+  if (fj_beat_high) {
+    lv_label_set_text(title, "New High Score!");
+    lv_obj_set_style_text_color(title, lv_color_make(255, 220, 60), 0);
+  } else {
+    lv_label_set_text(title, "GAME OVER");
+    lv_obj_set_style_text_color(title, lv_color_make(220, 80, 80), 0);
+  }
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
+
+  lv_obj_t *score = lv_label_create(fj_pop);
+  lv_label_set_text_fmt(score, "survived %d %s", fj_round, fj_round == 1 ? "round" : "rounds");
+  lv_obj_set_style_text_font(score, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(score, lv_color_white(), 0);
+  lv_obj_align(score, LV_ALIGN_CENTER, 0, -8);
+
+  lv_obj_t *best = lv_label_create(fj_pop);
+  lv_label_set_text_fmt(best, "Best: %d", cfg.fj_high_score);
+  lv_obj_set_style_text_font(best, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(best, lv_color_make(160, 200, 255), 0);
+  lv_obj_align(best, LV_ALIGN_CENTER, 0, 16);
+
+  lv_obj_t *hint = lv_label_create(fj_pop);
+  lv_label_set_text(hint, "tap: play again  hold: exit");
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(hint, lv_color_make(80, 80, 120), 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
+}
+
+// ── Start / restart ──────────────────────────────────────────────────────────
+static lv_obj_t *fj_label(lv_obj_t *parent, const lv_font_t *font, lv_color_t col)
+{
+  lv_obj_t *l = lv_label_create(parent);
+  lv_obj_set_style_text_font(l, font, 0);
+  lv_obj_set_style_text_color(l, col, 0);
+  return l;
+}
+
+static void fj_game_start()
+{
+  fj_stop_timers();
+  tune_stop();                       // "tap: play again" lands mid-tune
+
+  fj_dir       = FJ_PI2 / 4.0f;     // north
+  fj_turning   = FJ_T_NONE;
+  fj_braking   = false;
+  fj_firing    = false;
+  fj_health    = cfg.fj_health;
+  fj_tick      = 0;
+  fj_beat_high = false;
+  fj_kill_pend = fj_round_pend = false;
+  fj_fire_hold = 0;
+  fj_brake_cnt = 0;
+  fj_shield_left = 0;  fj_shield_cool = 0;  fj_heal_acc = 0.0f;  fj_dmg_acc = 0.0f;
+  fj_last_hp = fj_last_round = fj_last_best = fj_banner_round = -1;
+  fj_last_sh = -1;
+  fj_init_round(0);
+  fj_prepare_render();
+
+  lv_obj_clean(apps_cont);
+  app_subphase = 1;
+  fj_view = fj_hp_lbl = fj_rd_lbl = fj_banner = fj_hint = fj_sh_lbl = nullptr;
+  fj_cal_card = fj_cal_title = fj_cal_sub = nullptr;
+  fj_pause_pop = fj_pop = nullptr;
+
+  // Touch layer at the bottom of the z-order: tap pauses, hold exits. Nothing
+  // above it is clickable, so every press lands here.
+  lv_obj_t *zone = lv_obj_create(apps_cont);
+  lv_obj_set_size(zone, 320, 172);
+  lv_obj_set_pos(zone, 0, 0);
+  lv_obj_set_style_bg_opa(zone, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(zone, 0, 0);
+  lv_obj_set_style_pad_all(zone, 0, 0);
+  lv_obj_set_style_radius(zone, 0, 0);
+  lv_obj_set_scrollable(zone, false);
+  lv_obj_add_event_cb(zone, fj_tap_cb,       LV_EVENT_CLICKED,      nullptr);
+  lv_obj_add_event_cb(zone, fj_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+
+  // The field
+  fj_view = lv_obj_create(apps_cont);
+  lv_obj_set_size(fj_view, FJ_FIELD_W, FJ_FIELD_H);
+  lv_obj_set_pos(fj_view, 0, 0);
+  lv_obj_set_style_bg_opa(fj_view, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(fj_view, 0, 0);
+  lv_obj_set_style_pad_all(fj_view, 0, 0);
+  lv_obj_set_style_radius(fj_view, 0, 0);
+  lv_obj_set_scrollable(fj_view, false);
+  lv_obj_set_clickable(fj_view, false);
+  lv_obj_add_event_cb(fj_view, fj_draw_cb, LV_EVENT_DRAW_MAIN, nullptr);
+
+  // Banner and first-round controls hint
+  fj_banner = fj_label(apps_cont, &lv_font_montserrat_24, lv_color_white());
+  lv_obj_align(fj_banner, LV_ALIGN_TOP_MID, 0, 34);
+  lv_label_set_text(fj_banner, "ROUND 1");
+
+  fj_hint = fj_label(apps_cont, &dejavu_mono_14, lv_color_make(255, 235, 140));
+  lv_obj_set_style_text_align(fj_hint, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_text(fj_hint, joy_active() ? "stick: steer . push up: fire\nclick / tap sides: shield"
+                                          : "tilt: steer . forward: fire\ntap sides: shield");
+  lv_obj_align(fj_hint, LV_ALIGN_TOP_MID, 0, 58);
+
+  fj_sh_lbl = fj_label(apps_cont, &dejavu_mono_14, lv_color_make(150, 235, 255));
+  lv_label_set_text(fj_sh_lbl, "");
+  lv_obj_align(fj_sh_lbl, LV_ALIGN_TOP_MID, 0, 18);
+  lv_obj_set_hidden(fj_sh_lbl, true);
+
+  // Status bar: Health (left) / Round + Best (right)
+  fj_hp_lbl = fj_label(apps_cont, &dejavu_mono_14, lv_color_make(90, 210, 120));
+  lv_obj_set_style_text_align(fj_hp_lbl, LV_TEXT_ALIGN_LEFT, 0);
+  lv_obj_set_pos(fj_hp_lbl, 4, FJ_STATUS_Y);
+  lv_obj_set_size(fj_hp_lbl, 150, 16);
+
+  fj_rd_lbl = fj_label(apps_cont, &dejavu_mono_14, lv_color_make(180, 180, 100));
+  lv_obj_set_style_text_align(fj_rd_lbl, LV_TEXT_ALIGN_RIGHT, 0);
+  lv_obj_set_pos(fj_rd_lbl, 146, FJ_STATUS_Y);
+  lv_obj_set_size(fj_rd_lbl, 170, 16);
+
+  fj_running = true;
+  fj_phase   = FJ_P_PLAY;
+  fj_status_refresh();
+  fj_banner_refresh();
+  fj_shield_label_refresh();
+  fj_timer = lv_timer_create(fj_tick_cb, FJ_TICK_MS, nullptr);
+
+  if (imuReady && !joy_active()) fj_cal_begin();     // calibrate before the first frame of play
+  lv_obj_invalidate(fj_view);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  END FIGHTER JET
+// ══════════════════════════════════════════════════════════════════════════════
+
 // ── App start tap: coin only (rps+dice use their own starters) ────────────────
 static void app_start_tap_cb(lv_event_t *e)
 {
@@ -11126,6 +12661,10 @@ static void app_screen_start()
     tq_game_start();
     return;
   }
+  if (apps_idx == 9) {
+    fj_game_start();
+    return;
+  }
 
   // ── Coin: tap anywhere to flip ────────────────────────────────────────────
   lv_obj_clean(apps_cont);
@@ -11152,7 +12691,7 @@ static void app_screen_start()
 // without either input having its own idea of what "enter" means.
 static void apps_enter_selected()
 {
-  if (apps_idx == 9) {
+  if (apps_idx == 10) {
     cfg.menu_sounds = !cfg.menu_sounds;
     save_config();
     if (cfg.menu_sounds) menu_tone_hi();  // confirm it's on
@@ -11215,6 +12754,9 @@ static void joy_click_dispatch()
       else                 sn_pause_game();
       break;
     case 8: if (tq_pop)    tq_game_start(); break;
+    // Fighter Jet: the click raises the Healing Force Shield. Fire is a forward
+    // push of the stick; pause / resume / restart are taps on the touchscreen.
+    case 9: fj_shield_activate(); break;
     default: break;
   }
 }
@@ -11301,7 +12843,8 @@ static void apps_carousel_build()
     {nullptr,               nullptr},  // item 6 = Snake Letters   (rendered inline)
     {nullptr,               nullptr},  // item 7 = Bingo!          (rendered inline)
     {nullptr,               nullptr},  // item 8 = ToneQuest       (rendered inline)
-    {nullptr,               nullptr},  // item 9 = Sounds toggle   (rendered inline)
+    {nullptr,               nullptr},  // item 9 = Fighter Jet     (rendered inline)
+    {nullptr,               nullptr},  // item 10 = Sounds toggle  (rendered inline)
   };
 
   // Left arrow + zone
@@ -11332,7 +12875,7 @@ static void apps_carousel_build()
     lv_obj_add_event_cb(z,apps_right_cb,LV_EVENT_PRESSED,nullptr);
     lv_obj_add_event_cb(z,apps_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr); }
 
-  if (apps_idx == 9) {
+  if (apps_idx == 10) {
     // ── Sounds toggle (inline, mirrors WiFi toggle in settings) ──────────
     lv_obj_t *sicon = lv_label_create(apps_cont);
     lv_label_set_text(sicon, cfg.menu_sounds ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE);
@@ -11347,6 +12890,32 @@ static void apps_carousel_build()
       cfg.menu_sounds ? lv_color_make(80,200,120) : lv_color_make(180,60,60), 0);
     lv_obj_align(sdesc, LV_ALIGN_CENTER, 0, 28);
     // se_flash(sicon); se_flash(sdesc);
+  } else if (apps_idx == 9) {
+    // ── Fighter Jet ───────────────────────────────────────────────────────
+    lv_obj_t *name_lbl = lv_label_create(apps_cont);
+    lv_label_set_text(name_lbl, "Fighter Jet");
+    lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(name_lbl, lv_color_white(), 0);
+    lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(name_lbl, 180);
+    lv_obj_set_style_text_align(name_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(name_lbl, LV_ALIGN_CENTER, 0, -14);
+
+    lv_obj_t *desc_lbl = lv_label_create(apps_cont);
+    lv_label_set_text(desc_lbl, "Shoot down the enemies!");
+    lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
+    lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
+
+    if (cfg.fj_high_score > 0) {
+      lv_obj_t *hs_lbl = lv_label_create(apps_cont);
+      char hs_buf[32];
+      snprintf(hs_buf, sizeof(hs_buf), "Best: %d rounds", cfg.fj_high_score);
+      lv_label_set_text(hs_lbl, hs_buf);
+      lv_obj_set_style_text_font(hs_lbl, &lv_font_montserrat_14, 0);
+      lv_obj_set_style_text_color(hs_lbl, lv_color_make(255, 210, 60), 0);
+      lv_obj_align(hs_lbl, LV_ALIGN_CENTER, 0, 44);
+    }
   } else if (apps_idx == 8) {
     // ── ToneQuest ─────────────────────────────────────────────────────────
     lv_obj_t *name_lbl = lv_label_create(apps_cont);
@@ -11507,7 +13076,7 @@ static void apps_carousel_build()
 
   // Hint above dots
   lv_obj_t *hint = lv_label_create(apps_cont);
-  lv_label_set_text(hint, apps_idx == 9 ? "tap to toggle  .  hold to exit"
+  lv_label_set_text(hint, apps_idx == 10 ? "tap to toggle  .  hold to exit"
                                         : "tap to play  .  hold to exit");
   lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(hint, lv_color_make(70, 70, 95), 0);
@@ -13206,6 +14775,7 @@ void setup()
     seed_letter_rain_config();  // append [letter_rain] section if not yet present
     seed_snake_config();        // append [snake] section if not yet present
     seed_tonequest_config();    // append [tonequest] section if not yet present
+    seed_fighterjet_config();   // append [fighterjet] section if not yet present
 #if BOARD_HAS_JOYSTICK
     seed_joystick_config();     // append [joystick] section if not yet present
 #endif

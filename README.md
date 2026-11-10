@@ -55,7 +55,7 @@ One sketch builds for both boards. The target is detected at compile time and ev
 | **Software power-off** | Long-press battery screen → 5 s countdown → deep sleep; RESET button to wake |
 | **Alarm auto-wake** | In WiFi mode, device wakes from deep sleep 5 min before alarm to allow NTP sync; in AP/Off mode it wakes right at alarm time instead (no sync possible, no point burning battery early) |
 | **Alarm drift warning** | If the alarm fires with no reliable time source — AP/Off mode, or WiFi mode where NTP never landed — it still always sounds, but swaps the GIF for a plain text warning telling you to check another clock |
-| **Apps menu** | Long-press the smile GIF → math challenge gate → ASCII games carousel |
+| **Apps menu** | Long-press the smile GIF → math challenge gate → games carousel with Rock Paper Scissors, Dice, Coin Flip, Metronome, Tennis Letters, Letters Rain, Snake Letters, Bingo!, ToneQuest and Fighter Jet |
 | **Math challenge** | Random arithmetic gate (+ − × ÷, result < 100) with 4 shuffled answer buttons |
 | **Rock Paper Scissors** | Animated 3-2-1 countdown shake → CPU reveals its hand → GO! Shake or hard-tilt the device to restart |
 | **Rolling Dice** | Animated rolling frames → final dice face reveal. Shake or hard-tilt to re-roll |
@@ -63,6 +63,7 @@ One sketch builds for both boards. The target is detected at compile time and ev
 | **Tennis Letters** | Breakout-style ASCII game with Easy and Hard modes. Catch cycling letters (a-z); Hard mode lets paddle impact position and movement steer the ball. Separate high scores per mode |
 | **Letters Rain** | Falling-letters ASCII game in two modes: **Alphabet** — catch the target letter (A→Z) with a gyro-controlled paddle — and **Words** — catch a word's letters in order. Wrong catches shrink the paddle; `+` / `-` modify its size; `*` restores the default. Miss the target letter and the game ends. Alphabet's last score and Words' best saved to `config.ini` |
 | **Snake Letters** | Classic snake ASCII game in two modes: **Alphabet** — steer using tilt to eat a-z in order — and **Words** — catch the letter missing from a word (`d_g`). Avoid distraction letters and manage length with modifiers. Each mode's high score is persisted to `config.ini` |
+| **Fighter Jet** | Tilt- or joystick-controlled aerial combat: turn, fire, brake, survive escalating enemy rounds and use a healing shield |
 | **KY-023 joystick** *(S3)* | Optional module on the expansion header restores the tilt games and can control the USB mouse while the smile GIF is open. Off by default and claims no pins until enabled — see [KY-023 Joystick](#ky-023-joystick-s3-only) |
 | **Bingo!** | On-device 1–90 number caller. Tap or tilt to draw a ball with a cycling reveal animation and buzzer; long-press the circle for a history popup of every number called. No repeats — powered by a fresh Fisher-Yates shuffle each game |
 | **Printable Bingo tickets** | Web Configuration page links to `/bingo` — a self-contained, in-browser generator for UK/housie-style 3×9 ticket sheets (1–90) to pair with the on-device caller. Fresh tickets every load, no PIN needed |
@@ -108,7 +109,7 @@ QMI8658 fails to answer at boot degrades exactly the same way.
 | Feature | C6 | S3 | Notes |
 |---|---|---|---|
 | Brightness adjust | tilt **or** swipe | swipe | Swipe left/right on the Status screen works on both |
-| Tennis Letters, Letters Rain, Snake Letters | ✅ | **hidden**, or ✅ with a joystick | Steer only by tilt, so they are removed from the carousel rather than shipped unplayable. Plug in a [KY-023 joystick](#ky-023-joystick-s3-only) and they come back |
+| Tennis Letters, Letters Rain, Snake Letters, Fighter Jet | ✅ | **hidden**, or ✅ with a joystick | Require tilt or joystick steering, so they are removed from the carousel rather than shipped unplayable. Plug in a [KY-023 joystick](#ky-023-joystick-s3-only) and they come back |
 | ToneQuest | tilt | swipe, or tilt-equivalent with a joystick | The only game that swaps input rather than hiding — see [Apps carousel](#apps-carousel) |
 | Emotion GIF cycling | ✅ | **smile only** | The overlay still opens on upper-left tap; `sleep`/`sad`/`joy` are unreachable without tilt |
 | Rock Paper Scissors, Dice | ✅ | ✅ | Tap-driven; shake is a bonus, not the only input |
@@ -217,9 +218,9 @@ Connect a **passive buzzer** (not active) between **GPIO 5** and **GND**. If the
 ### KY-023 Joystick (S3 only)
 
 The S3 has no IMU, so **Tennis Letters**, **Letters Rain**, **Snake Letters** and
-**ToneQuest** normally have nothing to steer them and are dropped from the apps
-carousel. A £2 **KY-023** analog joystick module on the expansion header gives
-them all four back.
+**Fighter Jet** are hidden from the apps carousel until a joystick is enabled.
+A £2 **KY-023** analog joystick module on the expansion header restores those
+four games; **ToneQuest** remains available and switches to swipe input instead.
 
 Entirely optional. Until you turn it on — **Extra Games**, in the
 [USB carousel](#usb-mode--mouse-jiggler-s3-only) or `[joystick] extra_games` in
@@ -634,6 +635,26 @@ start_moves = 4
 flash_ms = 420
 gap_ms = 220
 tilt_percent = 55
+
+[fighterjet]
+high_score = 0
+start_enemies = 2
+enemies_per_round = 1
+max_enemies = 12
+player_health = 100
+enemy_health = 30
+enemy_fire_distance = 20
+enemy_fire_interval = 4
+aim_assist_percent = 200
+speed_percent = 50
+shield_seconds = 5
+shield_heal_percent = 10
+shield_damage_reduction_percent = 50
+shield_cooldown_seconds = 0
+turn_tilt_percent = 25
+fast_turn_tilt_percent = 50
+fire_tilt_percent = 20
+invert_turn = false
 ```
 
 | Section | Key | Default | Description |
@@ -659,6 +680,13 @@ tilt_percent = 55
 | `[joystick]` | `mouse` | `true` | **S3 only.** Enable joystick pointer and left-click control while the smile GIF is open in a USB HID persona |
 | `[joystick]` | `mouse_speed` | `8` | **S3 only.** Pointer speed at full deflection, in pixels per 20 ms (1–40) |
 | `[birthdays]` | `dates` | _(empty)_ | Comma-separated birthdays `DD-MM-YYYY`. On a matching day, alarm and timer use `happybirthday.gif` and the Happy Birthday melody. Up to 8 entries. Section may be omitted to disable the Easter egg. |
+| `[fighterjet]` | `high_score` | `0` | Best number of rounds survived; written by the game. |
+| `[fighterjet]` | `start_enemies` / `enemies_per_round` / `max_enemies` | `2` / `1` / `12` | Set the first round's enemy count, enemies added each round and the enemy cap. |
+| `[fighterjet]` | `player_health` / `enemy_health` | `100` / `30` | Player health and hits required to destroy an enemy. |
+| `[fighterjet]` | `enemy_fire_distance` / `enemy_fire_interval` | `20` / `4` | How close enemies must be to fire and the interval between their hits (frames at 20 FPS). |
+| `[fighterjet]` | `aim_assist_percent` / `speed_percent` | `200` / `50` | Hit-window width (100 is the original game's value) and cruise speed (100 is the original speed). |
+| `[fighterjet]` | `shield_seconds` / `shield_heal_percent` / `shield_damage_reduction_percent` / `shield_cooldown_seconds` | `5` / `10` / `50` / `0` | Shield duration, percent of max health restored per second, damage absorbed and wait before reuse. A zero cooldown allows immediate reuse. |
+| `[fighterjet]` | `turn_tilt_percent` / `fast_turn_tilt_percent` / `fire_tilt_percent` / `invert_turn` | `25` / `50` / `20` / `false` | C6 IMU turn, fast-turn and firing thresholds (percent of 1 g), plus an option to reverse left/right turning. |
 
 > If `config.ini` is missing the firmware boots with the hardcoded defaults shown above.
 
@@ -1011,11 +1039,12 @@ A random arithmetic problem (+ − × ÷, result always < 100) is shown in large
 
 ### Apps carousel
 
-Nine games plus a sounds toggle, navigated with **◀ ▶**. **Tap** to enter, **long-press** to go back.
+Ten games plus a sounds toggle when a steering device is available, navigated
+with **◀ ▶**. **Tap** to enter, **long-press** to go back.
 
-> **On a board with no IMU, three of the nine are hidden.** Tennis Letters,
-> Letters Rain and Snake Letters steer *only* by tilt, so rather than ship them
-> unplayable the carousel skips them in both directions, leaving seven reachable
+> **On a board with no steering device, four of the ten are hidden.** Tennis
+> Letters, Letters Rain, Snake Letters and Fighter Jet require tilt or a
+> joystick, so the carousel skips them in both directions, leaving six reachable
 > entries. A persisted carousel position pointing at a hidden app is normalised
 > when the carousel is built, so it can never strand you on an unreachable entry.
 >
@@ -1023,16 +1052,16 @@ Nine games plus a sounds toggle, navigated with **◀ ▶**. **Tap** to enter, *
 > taking four-way swipes where there is no accelerometer to tilt. See its
 > section below.
 >
-> **A [KY-023 joystick](#ky-023-joystick-s3-only) puts all three back.** On the
+> **A [KY-023 joystick](#ky-023-joystick-s3-only) puts all four back.** On the
 > S3, enabling *Extra Games* makes the joystick count as a steering device
-> everywhere the IMU used to: the three hidden games reappear (ten dots again),
-> and ToneQuest takes the joystick's bubble-level path rather than swipes.
+> everywhere the IMU used to: the four hidden games reappear, and ToneQuest
+> takes the joystick's bubble-level path rather than swipes.
 > Pushing the stick left or right pages the carousel, and its button enters
 > the highlighted item, exactly as tapping the middle does.
 >
 > The position dots below the title are drawn one per *reachable* entry and the
-> row is re-centred on its own width, so on an S3 you get six dots rather than
-> ten with four that can never light up.
+> row is re-centred on its own width, so on an S3 without a joystick you get six
+> dots rather than eleven with five that can never light up.
 
 ```
 ┌─────────────────────────────────────────┐
@@ -1244,9 +1273,42 @@ The gesture threshold is LVGL's default `LV_INDEV_DEF_GESTURE_LIMIT` of 50 px. O
 
 **Implementation note:** the domes are full circles inside wrapper objects sized to exactly the half that should be visible — LVGL clips children to their parent, so the other half simply never draws. The gradient runs the whole circle, which puts the wall on the 50 % white/hue mix and the crown on the pure hue: white-hot at the horizon, saturated at the top, like a setting sun.
 
+#### Fighter Jet
+
+Fighter Jet is an aerial-combat game: turn to line up enemies, fire while they are in front of you, and survive rounds that add enemies over time. The best score, stored as `[fighterjet] high_score`, is the number of rounds survived.
+
+On the **C6**, the game uses the IMU. Each start and resume begins with a short calibration: hold the device steady, tilt it forward when prompted to set the fire direction, then level it again. Tilt left/right to turn; a stronger tilt turns faster. Tilt forward to fire and backward to brake. The calibration measures the way you naturally hold the board, so the game's forward direction does not depend on a fixed resting angle.
+
+On the **S3**, enable the optional [KY-023 joystick](#ky-023-joystick-s3-only) to make the game available. Push left/right to turn, farther to turn faster, forward to fire and back to brake. Click the stick to raise the shield. The game is hidden from the carousel if neither an IMU nor the enabled joystick is available.
+
+On either board, tap the **centre half** of the playfield to pause or resume; long-press the centre to exit. Tap or hold either **outer quarter** to activate the Healing Force Shield. It surrounds the jet for five seconds by default, restores 10% of maximum health per second, and absorbs half of incoming damage. While active, the jet cannot fire and moves at one-quarter speed, but can still turn. The shield freezes while paused and may be raised again as soon as it ends by default. Tap a game-over popup to restart; long-press to exit.
+
+The `[fighterjet]` section is created automatically when missing. Adjust its difficulty and controls without recompiling:
+
+| Key | Default | Meaning |
+|---|---:|---|
+| `high_score` | `0` | Best rounds survived; maintained by the game. |
+| `start_enemies` | `2` | Enemies in the first round. |
+| `enemies_per_round` | `1` | Additional enemies per round. |
+| `max_enemies` | `12` | Maximum enemies in a round. |
+| `player_health` | `100` | Player's starting and maximum health. |
+| `enemy_health` | `30` | Hits needed to destroy an enemy. |
+| `enemy_fire_distance` | `20` | Distance inside which an enemy can fire. |
+| `enemy_fire_interval` | `4` | Enemy hit interval in frames (20 frames = 1 second). |
+| `aim_assist_percent` | `200` | Width of the hit window; `100` is the original value. |
+| `speed_percent` | `50` | Cruise speed; `100` is the original speed. |
+| `shield_seconds` | `5` | Shield duration. |
+| `shield_heal_percent` | `10` | Maximum health restored per second while shielded. |
+| `shield_damage_reduction_percent` | `50` | Percentage of incoming damage absorbed by the shield. |
+| `shield_cooldown_seconds` | `0` | Delay before reuse; `0` allows immediate reuse. |
+| `turn_tilt_percent` | `25` | C6 tilt threshold for a slow turn, as a percentage of 1 g. |
+| `fast_turn_tilt_percent` | `50` | C6 tilt threshold for a fast turn, as a percentage of 1 g. |
+| `fire_tilt_percent` | `20` | C6 forward-tilt threshold for firing, as a percentage of 1 g. |
+| `invert_turn` | `false` | Set `true` if left/right turns feel reversed on the C6. |
+
 #### Sounds toggle
 
-The last carousel item — tenth on a board with an IMU (or an S3 with a [joystick](#ky-023-joystick-s3-only) enabled), seventh on one with neither, since the three tilt-steered games are dropped from the carousel at runtime where nothing can steer them. Tap to mute/unmute all apps menu and game audio. The setting is saved to `config.ini` under `[menu] sounds`. This does **not** affect alarm, timer, or metronome sounds.
+The last carousel item — eleventh when a steering device is available, sixth on an S3 without an enabled joystick, since the four steering games are hidden when there is nothing to steer them. Tap to mute/unmute all apps menu and game audio. The setting is saved to `config.ini` under `[menu] sounds`. This does **not** affect alarm, timer, or metronome sounds.
 
 ---
 
@@ -1875,7 +1937,9 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v3.6.1 | ✅ released | **Fix: GIFs fail with "Not enough RAM" when an SD card is inserted** (#77) — on boards with internal flash, FFat stayed mounted next to the card for the whole session and held enough heap that the ESP32-C6 could show one GIF and then no more. It is now mounted only while the card is mirrored at boot, then released. `config.ini` is also no longer re-copied to internal flash on every boot: it is compared byte for byte and copied only when it changed, so the "Copying to internal flash" screen appears only when there is something to copy. Running without a card is unchanged. |
 | v3.6.2 | ✅ released | **Letters Rain: scattered waves and continuous rain** — decoys now enter on staggered rows, and another decoy drops every three fall ticks. Decoys keep falling after the target is caught, making each new wave overlap the existing rain. A larger entity pool handles the busier field, while target selection and simultaneous catches are resolved consistently so wrong-letter catches still count as wrong. |
 | v3.7.0 | ✅ released | **Tennis Letters: Easy and Hard modes** — Tennis now opens with a mode carousel. Easy keeps its fixed bounce; Hard aims the ball according to where it hits the paddle and adds spin from paddle movement, so the ball cannot be safely parked straight above the paddle. Each mode has its own persisted high score (`[tennis] high_score` and `hard_high_score`); the Apps carousel shows the better record. Existing config files remain compatible, and the shared paddle and speed settings are unchanged. |
-| v3.8.0 | 🚀 new | **Joystick mouse control (ESP32-S3 only)** — when a KY-023 joystick is enabled and a USB HID persona is active, the stick moves the host pointer while the smile GIF is open and its button left-clicks or drags. Pointer movement and clicks defer the automatic jiggler so it does not interrupt manual use. Configure it with `[joystick] mouse` and `mouse_speed` (1–40, default 8); C6 builds do not include USB HID. |
+| v3.8.0 | ✅ released | **Joystick mouse control (ESP32-S3 only)** — when a KY-023 joystick is enabled and a USB HID persona is active, the stick moves the host pointer while the smile GIF is open and its button left-clicks or drags. Pointer movement and clicks defer the automatic jiggler so it does not interrupt manual use. Configure it with `[joystick] mouse` and `mouse_speed` (1–40, default 8); C6 builds do not include USB HID. |
+| v3.8.1 | ✅ released | **Joystick gamepad control (ESP32-S3 only)** — swipe left or right on the jiggler overlay to switch between mouse mode and USB gamepad mode. In gamepad mode, the KY-023 stick controls the host's left analog stick and its button maps to gamepad button A; the existing mouse mode remains available. |
+| v3.9.0 | 🚀 new | **Fighter Jet.** Tilt- or joystick-controlled aerial combat with IMU calibration, escalating enemy rounds, a persisted rounds-survived score and the Healing Force Shield. The shield restores health and absorbs damage while disabling fire and reducing speed; configure the game under `[fighterjet]`. |
 
 ## License
 

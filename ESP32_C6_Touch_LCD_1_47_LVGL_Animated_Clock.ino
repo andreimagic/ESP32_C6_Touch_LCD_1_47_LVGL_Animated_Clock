@@ -186,6 +186,11 @@ struct AppConfig {
   // Default: empty (no birthday greetings).
   char birthday_dates[8][16]  = {"01-01-1970","06-08-2017"};   // [birthdays] dates (comma-separated)
   int  birthday_count         = 2;   // number of parsed birthday entries
+
+  // [christmas] enabled — December GIF + Christmas tunes on alarm/timer.
+  // Default true; set false for households that do not celebrate Christmas.
+  // Birthdays are unaffected either way.
+  bool christmas_enabled      = true;
 } cfg;
 
 // ─── Board configuration ─────────────────────────────────────────────────────
@@ -1050,11 +1055,12 @@ static bool is_birthday_today()
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  CHRISTMAS SEASON
-//  True for the whole of December (local time). Birthdays always win over it —
-//  every caller checks is_birthday_today() first.
+//  True for the whole of December (local time) unless [christmas] enabled = false.
+//  Birthdays always win over it — every caller checks is_birthday_today() first.
 // ══════════════════════════════════════════════════════════════════════════════
 static bool is_christmas_season()
 {
+  if (!cfg.christmas_enabled) return false;   // [christmas] enabled = false
   time_t now = time(nullptr);
   if (now < 1735689600UL) return false; // RTC not yet valid
   struct tm t;
@@ -1184,6 +1190,12 @@ R"INI(
 [birthdays]
 # Up to 8 entries, DD-MM-YYYY, comma separated. Only day and month are matched.
 dates = 01-01-1970,06-08-2017
+
+[christmas]
+# true = in December the alarm and timer show christmas.gif and play random
+# Christmas tunes (birthdays still take priority). false = never, for
+# households that do not celebrate Christmas.
+enabled = true
 
 [tennis]
 high_score = 0
@@ -1951,6 +1963,16 @@ static void load_config()
       }
     }
 
+    // ── [christmas] ──────────────────────────────────────────────────────────
+    // enabled = true | false   (default true)
+    else if (strcmp(section, "christmas") == 0) {
+      if (strcmp(key, "enabled") == 0) {
+        cfg.christmas_enabled = !(strcmp(val,"false")==0 || strcmp(val,"0")==0 ||
+                                  strcmp(val,"no")==0    || strcmp(val,"off")==0);
+        Serial.printf("[CFG]   christmas.enabled   = %s\n", cfg.christmas_enabled ? "true" : "false");
+      }
+    }
+
     // ── [birthdays] ──────────────────────────────────────────────────────────
     // dates = DD-MM-YYYY,DD-MM-YYYY,...   (up to 8 entries)
     // Only the day and month are used for comparison; the year is stored for
@@ -2084,7 +2106,7 @@ static void log_last_seen() {
 static void save_config()
 {
   // Re-read existing config, preserve [clock], [animation], [birthdays] and
-  // any comments. [wifi], [alarm], [timer], [menu], [tennis] are rewritten
+  // any comments. [wifi], [alarm], [timer], [menu], [christmas], [tennis] are rewritten
   // fresh from cfg on every call.
   //
   // Blank lines in the preserved block are intentionally dropped — we add
@@ -2116,6 +2138,7 @@ static void save_config()
           strncmp(trimmed,"[alarm]",       7)==0 ||
           strncmp(trimmed,"[timer]",       7)==0 ||
           strncmp(trimmed,"[menu]",        6)==0 ||
+          strncmp(trimmed,"[christmas]",  11)==0 ||
           strncmp(trimmed,"[usb]",         5)==0 ||
           strncmp(trimmed,"[joystick]",   10)==0 ||
           strncmp(trimmed,"[tennis]",      8)==0 ||
@@ -2167,6 +2190,9 @@ static void save_config()
 
   fw.print("\n[menu]\n");
   fw.printf("sounds = %s\n", cfg.menu_sounds ? "true" : "false");
+
+  fw.print("\n[christmas]\n");
+  fw.printf("enabled = %s\n", cfg.christmas_enabled ? "true" : "false");
 
 #if BOARD_HAS_USB_HID
   fw.print("\n[usb]\n");

@@ -44,6 +44,8 @@
 #include <FFat.h>          // internal-flash fallback (see STORAGE below)
 #include <SPI.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>   // GIF asset download (HTTPS)
+#include <HTTPClient.h>
 #include <esp_mac.h>
 // WiFiMulti removed in v2.8.0 — WiFiMulti::run() performs a *blocking* full
 // channel scan (~1.5-3 s) on every call while disconnected, which stalled LVGL
@@ -65,7 +67,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v3.9.1"
+#define FW_VERSION      "v3.10.0"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -2889,6 +2891,221 @@ static void wifi_event_cb(WiFiEvent_t event, WiFiEventInfo_t info)
     wifi_last_reason = info.wifi_sta_disconnected.reason;
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  GIF ASSET DOWNLOADER
+//  Fetches the stock animations from the project's GitHub repo into
+//  /cruzr_emotions on the active storage (SD card or internal flash).
+//
+//  Rules:
+//    • A file that already exists is NEVER touched, whatever its size — a user
+//      may have swapped in their own animation under the same name.
+//    • STA mode with a live link only. The AP hotspot has no uplink.
+//    • Runs in its own FreeRTOS task: a TLS download of a few MB would freeze
+//      LVGL and trip the watchdog if it ran from the UI loop.
+//    • Each file goes to <name>.gif.tmp first, is checked (HTTP 200, complete,
+//      "GIF8" header) and only then renamed, so a dropped connection can never
+//      leave a half-written .gif that LVGL would try to decode.
+//    • Triggered by the web button (/assets/download) and automatically once per
+//      WiFi connection when something is missing — which is how a firmware update
+//      that adds a new GIF picks it up on the next reboot or WiFi re-enable.
+//
+//  TLS note: the server certificate is NOT validated (setInsecure) — there is no
+//  CA bundle in the sketch. The payload checks above stop a broken download from
+//  being installed, but not a deliberate man-in-the-middle; the files are only
+//  ever fed to the GIF decoder, never executed.
+//
+//  When you add a GIF_*_PATH define, add it to ASSET_GIFS as well.
+// ══════════════════════════════════════════════════════════════════════════════
+#define ASSET_BASE_URL \
+  "https://raw.githubusercontent.com/andreimagic/ESP32_C6_Touch_LCD_1_47_LVGL_Animated_Clock/" \
+  "refs/heads/main/sd_card_root/cruzr_emotions/"
+
+static const char *const ASSET_GIFS[] = {
+  GIF_SMILE_PATH, GIF_SLEEP_PATH, GIF_SAD_PATH, GIF_JOY_PATH,
+  GIF_ALARM_PATH, GIF_TIMER_PATH, GIF_BIRTHDAY_PATH, GIF_CHRISTMAS_PATH
+};
+#define ASSET_GIF_COUNT      ((int)(sizeof(ASSET_GIFS) / sizeof(ASSET_GIFS[0])))
+#define ASSET_AUTO_COOLDOWN  300000UL   // ms between automatic attempts after one ran
+#define ASSET_MIN_HEAP       45000      // largest free block TLS needs to set up
+
+static volatile bool asset_running = false;
+static volatile int  asset_total   = 0;   // files this run set out to fetch
+static volatile int  asset_done    = 0;   // fetched OK
+static volatile int  asset_failed  = 0;
+static char          asset_current[40] = "";
+static char          asset_msg[120]    = "";   // last result, shown on the web page
+static uint32_t      asset_last_auto_ms = 0;
+static bool          asset_auto_tried   = false;
+
+static const char *asset_basename(const char *lvgl_path)
+{
+  const char *sl = strrchr(lvgl_path, '/');
+  return sl ? sl + 1 : lvgl_path;
+}
+
+static String asset_fs_path(int i)
+{
+  return String(GIF_DIR_FS) + "/" + asset_basename(ASSET_GIFS[i]);
+}
+
+static int assets_count_missing()
+{
+  if (!storageAvailable || !STORAGE) return 0;
+  int n = 0;
+  for (int i = 0; i < ASSET_GIF_COUNT; i++)
+    if (!STORAGE->exists(asset_fs_path(i))) n++;
+  return n;
+}
+
+// Downloads one file. On failure `err` says why and nothing is left behind.
+static bool asset_fetch_one(const String &url, const String &final_path,
+                            char *err, size_t errlen)
+{
+  String tmp = final_path + ".tmp";
+  if (STORAGE->exists(tmp)) STORAGE->remove(tmp);
+
+  WiFiClientSecure client;
+  client.setInsecure();                       // see TLS note above
+  HTTPClient http;
+  http.setConnectTimeout(10000);
+  http.setTimeout(20000);
+  http.setUserAgent("ESP32-Clock");
+  if (!http.begin(client, url)) { snprintf(err, errlen, "could not open connection"); return false; }
+
+  int code = http.GET();
+  if (code != HTTP_CODE_OK) {
+    if (code > 0) snprintf(err, errlen, "HTTP %d", code);
+    else          snprintf(err, errlen, "%s", http.errorToString(code).c_str());
+    http.end();
+    return false;
+  }
+
+  int len = http.getSize();                   // -1 when the server streams chunked
+  if (storageIsInternal && len > 0 && (size_t)len + 16384 > (size_t)FFat.freeBytes()) {
+    snprintf(err, errlen, "not enough free space on internal flash");
+    http.end();
+    return false;
+  }
+
+  File f = STORAGE->open(tmp, FILE_WRITE);
+  if (!f) { snprintf(err, errlen, "cannot create file"); http.end(); return false; }
+  int written = http.writeToStream(&f);
+  f.close();
+  http.end();
+
+  bool ok = (written > 100) && (len <= 0 || written == len);
+  if (!ok) {
+    snprintf(err, errlen, "download incomplete (%d of %d bytes)", written, len);
+  } else {
+    uint8_t hdr[4] = {0};
+    File r = STORAGE->open(tmp, FILE_READ);
+    if (r) { r.read(hdr, 4); r.close(); }
+    if (memcmp(hdr, "GIF8", 4) != 0) { ok = false; snprintf(err, errlen, "not a GIF file"); }
+  }
+  if (ok && !STORAGE->rename(tmp, final_path)) { ok = false; snprintf(err, errlen, "rename failed"); }
+  if (!ok && STORAGE->exists(tmp)) STORAGE->remove(tmp);
+  return ok;
+}
+
+static void assets_task(void *arg)
+{
+  if (arg) vTaskDelay(pdMS_TO_TICKS(3000));   // automatic run: let NTP / web server settle first
+
+  if (!STORAGE->exists(GIF_DIR_FS)) STORAGE->mkdir(GIF_DIR_FS);
+
+  int  done = 0, failed = 0;
+  char first_err[80] = "";
+  for (int i = 0; i < ASSET_GIF_COUNT; i++) {
+    String fs_path = asset_fs_path(i);
+    if (STORAGE->exists(fs_path)) continue;   // never overwrite, regardless of size
+
+    const char *name = asset_basename(ASSET_GIFS[i]);
+    strncpy(asset_current, name, sizeof(asset_current) - 1);
+    asset_current[sizeof(asset_current) - 1] = '\0';
+
+    char err[64] = "";
+    if (WiFi.status() != WL_CONNECTED) {
+      snprintf(err, sizeof(err), "WiFi connection lost");
+      failed++; asset_failed = failed;
+      if (!first_err[0]) snprintf(first_err, sizeof(first_err), "%s: %s", name, err);
+      break;
+    }
+    Serial.printf("[ASSET] downloading %s\n", name);
+    if (asset_fetch_one(String(ASSET_BASE_URL) + name, fs_path, err, sizeof(err))) {
+      done++; asset_done = done;
+      Serial.printf("[ASSET]   %s OK\n", name);
+    } else {
+      failed++; asset_failed = failed;
+      Serial.printf("[ASSET]   %s FAILED: %s\n", name, err);
+      if (!first_err[0]) snprintf(first_err, sizeof(first_err), "%s: %s", name, err);
+    }
+    vTaskDelay(pdMS_TO_TICKS(50));
+  }
+
+  if (failed == 0) snprintf(asset_msg, sizeof(asset_msg), "Done - %d GIF(s) downloaded.", done);
+  else             snprintf(asset_msg, sizeof(asset_msg), "Downloaded %d, failed %d (%s).", done, failed, first_err);
+  Serial.printf("[ASSET] %s\n", asset_msg);
+  asset_current[0] = '\0';
+  asset_running = false;
+  vTaskDelete(nullptr);
+}
+
+// 0 = started, 1 = already running, 2 = no WiFi/internet (STA only), 3 = no storage,
+// 4 = nothing missing, 5 = low memory, 6 = task could not be created
+static int assets_start(bool automatic)
+{
+  if (asset_running)                                         return 1;
+  if (wifiMode != WM_STA || WiFi.status() != WL_CONNECTED)   return 2;
+  if (!storageAvailable || !STORAGE)                         return 3;
+  int missing = assets_count_missing();
+  if (missing == 0) { snprintf(asset_msg, sizeof(asset_msg), "All GIFs already present."); return 4; }
+  if (ESP.getMaxAllocHeap() < ASSET_MIN_HEAP)                return 5;
+
+  asset_total   = missing;
+  asset_done    = 0;
+  asset_failed  = 0;
+  asset_msg[0]  = '\0';
+  asset_running = true;
+  if (xTaskCreate(assets_task, "assets", 12288, automatic ? (void *)1 : nullptr, 1, nullptr) != pdPASS) {
+    asset_running = false;
+    return 6;
+  }
+  return 0;
+}
+
+// Called on every successful WiFi connection. Cheap when nothing is missing
+// (a handful of exists() calls); otherwise one download attempt, then at most
+// one more per ASSET_AUTO_COOLDOWN so a flapping link cannot hammer GitHub.
+static void assets_auto_check()
+{
+  if (!storageAvailable || !STORAGE) return;
+  int missing = assets_count_missing();
+  if (missing == 0) { Serial.println("[ASSET] all GIFs present - nothing to download"); return; }
+  if (asset_auto_tried && (millis() - asset_last_auto_ms) < ASSET_AUTO_COOLDOWN) {
+    Serial.printf("[ASSET] %d GIF(s) missing - automatic retry held back (cooldown)\n", missing);
+    return;
+  }
+  asset_auto_tried   = true;
+  asset_last_auto_ms = millis();
+  Serial.printf("[ASSET] %d GIF(s) missing - starting one-time download\n", missing);
+  int r = assets_start(true);
+  if (r != 0) Serial.printf("[ASSET] automatic download not started (code %d)\n", r);
+}
+
+static String assets_page_note()
+{
+  String n = "Missing: ";
+  n += String(assets_count_missing());
+  n += " of ";
+  n += String(ASSET_GIF_COUNT);
+  n += " GIFs. Existing files are never overwritten, even if you replaced them with your own.";
+  if (wifiMode != WM_STA)
+    n += " <b>Unavailable in hotspot (AP) mode</b> &mdash; needs a WiFi connection with internet.";
+  else
+    n += " Also runs automatically after each WiFi connect when a GIF is missing.";
+  return n;
+}
+
 // ── AP hotspot ───────────────────────────────────────────────────────────────
 // Reached either by user choice (cfg.wifi_mode == WCFG_AP) or as the credential
 // rescue path when STA authentication keeps being rejected.
@@ -2944,6 +3161,8 @@ static void start_ap_mode()
 //   POST /config  — validates PIN, saves config.ini, applies settings
 //   POST /settime — validates PIN, applies date+time immediately to RTC
 //   POST /reboot  — validates PIN, reboots the ESP32
+//   POST /assets/download — validates PIN, downloads missing GIFs from GitHub (STA only)
+//   GET  /assets/status   — progress of that download (read-only)
 //   GET  /log     — streams last_seen.txt as plain-text download (read-only)
 //   GET  /bingo   — printable bingo ticket sheet, generated in-browser (read-only)
 //
@@ -3379,6 +3598,7 @@ static void start_web_server()
         ".time-btn{background:#6e40c9;color:#fff}"
         ".bingo{background:#1a7f64;color:#fff}"
         ".files{background:#8957e5;color:#fff}"
+        ".assets{background:#0969da;color:#fff}"
         ".note{font-size:11px;color:#8b949e;margin-top:8px}"
         ".err{color:#f85149;font-size:12px;margin-top:6px;display:none}"
         "hr{border:none;border-top:1px solid #30363d;margin:10px 0}"
@@ -3442,6 +3662,18 @@ static void start_web_server()
         "</div>"
         "<p class='note'>Browse everything on the active storage. Uploads are"
         " refused if the file will not fit.</p>"
+        "</div>"
+
+        // ── GIF assets ────────────────────────────────────────────────────
+        "<div class='card'>"
+        "<label>&#x1F39E; GIF animations &mdash; download the originals from GitHub</label>"
+        "<div class='row'>"
+        "<button class='btn assets' onclick='doAssets()'>&#x2B07; Download Missing GIFs</button>"
+        "</div>"
+        "<p class='note'>");
+    html += assets_page_note();
+    html += F("</p>"
+        "<p class='err' id='as-err'></p>"
         "</div>"
 
         // ── Date / time setter ────────────────────────────────────────────
@@ -3512,6 +3744,26 @@ static void start_web_server()
         "    if(r.ok){showErr('rb-err','Rebooting\\u2026 reconnect in ~5 s.');}"
         "    else{showErr('rb-err',t);}});})"
         "  .catch(function(){showErr('rb-err','Network error.');});}"
+
+        // Download missing GIFs, then poll progress
+        "function pollAssets(){"
+        "  fetch('/assets/status').then(function(r){return r.json();})"
+        "  .then(function(s){"
+        "    if(s.running){"
+        "      showErr('as-err','Downloading '+s.current+' ('+(s.done+s.failed+1)+' of '+s.total+')...');"
+        "      setTimeout(pollAssets,1500);"
+        "    }else{showErr('as-err',s.msg||'Finished.');}"
+        "  }).catch(function(){setTimeout(pollAssets,3000);});}"
+        "function doAssets(){"
+        "  showErr('as-err','');"
+        "  var p=pin();"
+        "  if(p.length!==6){showErr('as-err','PIN must be 6 digits.');return;}"
+        "  var fd=new FormData();fd.append('pin',p);"
+        "  fetch('/assets/download',{method:'POST',body:fd})"
+        "  .then(function(r){return r.text().then(function(t){"
+        "    showErr('as-err',t);"
+        "    if(r.ok&&t.indexOf('Started')===0)setTimeout(pollAssets,1500);});})"
+        "  .catch(function(){showErr('as-err','Network error.');});}"
         "</script>"
         "</body></html>");
 
@@ -3620,6 +3872,35 @@ static void start_web_server()
     Serial.printf("[WEB] RTC set via web: %04d-%02d-%02d %02d:%02d\n",
                   yr, mo, dy, hr, mn);
     web_server.send(200, "text/plain", "OK");
+  });
+
+  // ── POST /assets/download — fetch missing GIFs from GitHub (STA only) ─────
+  web_server.on("/assets/download", HTTP_POST, []() {
+    if (!web_server.hasArg("pin") || web_server.arg("pin") != String(ap_pin)) {
+      web_server.send(403, "text/plain", "Wrong PIN."); return;
+    }
+    switch (assets_start(false)) {
+      case 0: web_server.send(200, "text/plain", "Started - downloading missing GIFs..."); break;
+      case 1: web_server.send(409, "text/plain", "A download is already running."); break;
+      case 2: web_server.send(409, "text/plain",
+                "Needs a WiFi connection to your router. In hotspot (AP) mode there is no internet."); break;
+      case 3: web_server.send(500, "text/plain", "No storage mounted."); break;
+      case 4: web_server.send(200, "text/plain", "All GIFs already present - nothing to download."); break;
+      case 5: web_server.send(503, "text/plain", "Not enough free memory for a secure connection right now. Try again after a reboot."); break;
+      default: web_server.send(500, "text/plain", "Could not start the download task."); break;
+    }
+  });
+
+  // ── GET /assets/status — download progress (read-only, no PIN) ───────────
+  web_server.on("/assets/status", HTTP_GET, []() {
+    char buf[320];
+    snprintf(buf, sizeof(buf),
+             "{\"running\":%s,\"done\":%d,\"failed\":%d,\"total\":%d,"
+             "\"missing\":%d,\"current\":\"%s\",\"msg\":\"%s\"}",
+             asset_running ? "true" : "false", (int)asset_done, (int)asset_failed,
+             (int)asset_total, assets_count_missing(), asset_current, asset_msg);
+    web_server.sendHeader("Cache-Control", "no-store");
+    web_server.send(200, "application/json", buf);
   });
 
   // ── POST /reboot — validate PIN, schedule reboot ─────────────────────────
@@ -4496,6 +4777,7 @@ static void wifi_poll_cb(lv_timer_t *t)
         Serial.printf("[WiFi] mDNS could not claim '%s' — is another device "
                       "already using it? Change [wifi] hostname.\n",
                       cfg.wifi_hostname);
+      assets_auto_check();   // fetch any missing GIFs (one attempt per connection)
     }
     time_t now = time(nullptr);
     timeSynced = (now >= 8 * 3600 * 2);

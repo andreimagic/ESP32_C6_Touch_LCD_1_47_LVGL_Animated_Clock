@@ -18,6 +18,8 @@
  *          The S3 board has no accelerometer, so tilt-to-brightness and the
  *          three tilt-steered games (Tennis Letters, Letters Rain, Snake
  *          Letters) are hidden from the apps carousel on that target.
+ *          "Math. Right?" works on both: tilt (C6) or joystick (S3), and
+ *          left/right swipes everywhere.
  *
  * lv_conf.h requirements:
  *   LV_USE_GIF             = 1
@@ -67,7 +69,7 @@
 
 // ─── Firmware version ─────────────────────────────────────────────────────
 // Bump this on every release. Shown on the battery screen.
-#define FW_VERSION      "v3.10.0"
+#define FW_VERSION      "v3.11.0"
 
 // ─── Runtime configuration ───────────────────────────────────────────────────
 // Loaded from /config.ini on the SD card at boot.
@@ -183,6 +185,14 @@ struct AppConfig {
   int  tq_flash_ms                 = 420;       // [tonequest] flash_ms (dome lit + tone, per playback step)
   int  tq_gap_ms                   = 220;       // [tonequest] gap_ms (silence between playback steps)
   int  tq_tilt_percent             = 55;        // [tonequest] tilt_percent (% of 1 g that pins the ball to an edge)
+  int  mr_high_score               = 0;         // [math] high_score (Easy mode best, in correct answers)
+  int  mr_hard_high_score          = 0;         // [math] hard_high_score (Hard mode best)
+  int  mr_seconds                  = 30;        // [math] seconds (time per exercise, 3-120)
+  int  mr_easy_max                 = 20;        // [math] easy_max (Easy: + and - results stay below this, 5-100)
+  int  mr_hard_add_max             = 20;        // [math] hard_add_max (Hard: + and - results stay below this, 5-100)
+  int  mr_table_max                = 10;        // [math] table_max (Hard: x and / use the tables up to this, 2-12)
+  int  mr_tilt_percent             = 35;        // [math] tilt_percent (% of 1 g sideways that answers, 15-90)
+  bool mr_invert_tilt              = false;     // [math] invert_tilt (flip which side is "right")
   int  fj_high_score               = 0;         // [fighterjet] high_score (most rounds survived)
   int  fj_start_enemies            = 2;         // [fighterjet] start_enemies (enemies in round 1)
   int  fj_per_round                = 1;         // [fighterjet] enemies_per_round (added each round)
@@ -1298,6 +1308,23 @@ fast_turn_tilt_percent = 50
 fire_tilt_percent = 20
 invert_turn = false
 
+[math]
+# "Math. Right?" -- is the sum on screen right or wrong? Swipe (or tilt, or push
+# the joystick) right if it is right, left if it is wrong. seconds is the time
+# allowed for each exercise; one mistake or one timeout ends the game.
+# Easy: + and - with results below easy_max. Hard: + and - with results below
+# hard_add_max, plus x and / from the times tables up to table_max (2-12).
+# tilt_percent = sideways tilt (percent of 1 g) that answers; set invert_tilt =
+# true if right and left feel swapped on your unit.
+high_score = 0
+hard_high_score = 0
+seconds = 30
+easy_max = 20
+hard_add_max = 20
+table_max = 10
+tilt_percent = 35
+invert_tilt = false
+
 [tonequest]
 high_score = 0
 start_moves = 4
@@ -2101,6 +2128,45 @@ static void load_config()
       }
     }
 
+    // ── [math] — "Math. Right?" ──────────────────────────────────────────────
+    else if (strcmp(section, "math") == 0) {
+      if (strcmp(key, "high_score") == 0) {
+        cfg.mr_high_score = max(0, atoi(val));
+        Serial.printf("[CFG]   math.high_score           = %d\n", cfg.mr_high_score);
+      }
+      else if (strcmp(key, "hard_high_score") == 0) {
+        cfg.mr_hard_high_score = max(0, atoi(val));
+        Serial.printf("[CFG]   math.hard_high_score      = %d\n", cfg.mr_hard_high_score);
+      }
+      else if (strcmp(key, "seconds") == 0) {
+        cfg.mr_seconds = max(3, min(120, atoi(val)));
+        Serial.printf("[CFG]   math.seconds              = %d\n", cfg.mr_seconds);
+      }
+      else if (strcmp(key, "easy_max") == 0) {
+        cfg.mr_easy_max = max(5, min(100, atoi(val)));
+        Serial.printf("[CFG]   math.easy_max             = %d\n", cfg.mr_easy_max);
+      }
+      else if (strcmp(key, "hard_add_max") == 0) {
+        cfg.mr_hard_add_max = max(5, min(100, atoi(val)));
+        Serial.printf("[CFG]   math.hard_add_max         = %d\n", cfg.mr_hard_add_max);
+      }
+      else if (strcmp(key, "table_max") == 0) {
+        // 12 is the widest table whose sums still fit the 48 px font on one line
+        cfg.mr_table_max = max(2, min(12, atoi(val)));
+        Serial.printf("[CFG]   math.table_max            = %d\n", cfg.mr_table_max);
+      }
+      else if (strcmp(key, "tilt_percent") == 0) {
+        // Below 15 a hand that is merely unsteady answers; above 90 is a
+        // device held on its side.
+        cfg.mr_tilt_percent = max(15, min(90, atoi(val)));
+        Serial.printf("[CFG]   math.tilt_percent         = %d\n", cfg.mr_tilt_percent);
+      }
+      else if (strcmp(key, "invert_tilt") == 0) {
+        cfg.mr_invert_tilt = (strcmp(val,"true")==0 || strcmp(val,"1")==0);
+        Serial.printf("[CFG]   math.invert_tilt          = %s\n", cfg.mr_invert_tilt?"true":"false");
+      }
+    }
+
     // ── [christmas] ──────────────────────────────────────────────────────────
     // enabled = true | false   (default true)
     else if (strcmp(section, "christmas") == 0) {
@@ -2283,6 +2349,7 @@ static void save_config()
           strncmp(trimmed,"[letter_rain]",13)==0 ||
           strncmp(trimmed,"[snake]",       7)==0 ||
           strncmp(trimmed,"[fighterjet]", 12)==0 ||
+          strncmp(trimmed,"[math]",        6)==0 ||
           strncmp(trimmed,"[tonequest]",  11)==0) { inManaged=true;  continue; }
       if (*trimmed == '[')                    { inManaged=false; }
       if (inManaged)                            continue;
@@ -2411,6 +2478,17 @@ static void save_config()
   fw.printf("fire_tilt_percent = %d\n",    cfg.fj_fire_tilt_percent);
   fw.printf("invert_turn = %s\n",          cfg.fj_invert_turn ? "true" : "false");
 
+  // Ahead of [tonequest]: the tail check below verifies the last line written.
+  fw.print("\n[math]\n");
+  fw.printf("high_score = %d\n",           cfg.mr_high_score);
+  fw.printf("hard_high_score = %d\n",      cfg.mr_hard_high_score);
+  fw.printf("seconds = %d\n",              cfg.mr_seconds);
+  fw.printf("easy_max = %d\n",             cfg.mr_easy_max);
+  fw.printf("hard_add_max = %d\n",         cfg.mr_hard_add_max);
+  fw.printf("table_max = %d\n",            cfg.mr_table_max);
+  fw.printf("tilt_percent = %d\n",         cfg.mr_tilt_percent);
+  fw.printf("invert_tilt = %s\n",          cfg.mr_invert_tilt ? "true" : "false");
+
   fw.print("\n[tonequest]\n");
   fw.printf("high_score = %d\n",           cfg.tq_high_score);
   fw.printf("start_moves = %d\n",          cfg.tq_start_moves);
@@ -2458,7 +2536,7 @@ static void save_config()
   }
 
   Serial.printf("[CFG] Saved to %s (wifi/alarm/timer/menu/tennis/letter_rain/"
-                "snake/fighterjet/tonequest).\n", storage_label());
+                "snake/fighterjet/math/tonequest).\n", storage_label());
   
   // Save the current timestamp to the log file as well
   log_last_seen();
@@ -2664,6 +2742,54 @@ static void seed_tonequest_config()
   fa.printf("tilt_percent = %d\n",         cfg.tq_tilt_percent);
   fa.close();
   Serial.println("[CFG] [tonequest] section seeded into config.ini.");
+}
+
+// ── Ensure [math] section exists in config.ini ────────────────────────────────
+// Called once at boot after load_config(). Same contract as the other seeders:
+// a config.ini written before "Math. Right?" shipped gets the block appended
+// with the current (default) values, so the web editor shows every setting.
+static void seed_math_config()
+{
+  if (!storageAvailable || !STORAGE) return;
+
+  File fr = STORAGE->open("/config.ini", FILE_READ);
+  if (!fr) return;  // no file at all — save_config() will create it later
+  bool found = false;
+  char line[64];
+  while (fr.available() && !found) {
+    int len = 0;
+    while (fr.available() && len < (int)sizeof(line) - 1) {
+      char ch = fr.read();
+      if (ch == '\n') break;
+      if (ch == '\r') continue;  // strip CR
+      line[len++] = ch;
+    }
+    line[len] = '\0';
+    char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncmp(p, "[math]", 6) == 0) { found = true; }
+  }
+  fr.close();
+
+  if (found) {
+    Serial.println("[CFG] [math] section already present.");
+    return;
+  }
+
+  File fa = STORAGE->open("/config.ini", FILE_APPEND);
+  if (!fa) { Serial.println("[CFG] seed_math_config: cannot open for append"); return; }
+  fa.println();
+  fa.println("[math]");
+  fa.printf("high_score = %d\n",           cfg.mr_high_score);
+  fa.printf("hard_high_score = %d\n",      cfg.mr_hard_high_score);
+  fa.printf("seconds = %d\n",              cfg.mr_seconds);
+  fa.printf("easy_max = %d\n",             cfg.mr_easy_max);
+  fa.printf("hard_add_max = %d\n",         cfg.mr_hard_add_max);
+  fa.printf("table_max = %d\n",            cfg.mr_table_max);
+  fa.printf("tilt_percent = %d\n",         cfg.mr_tilt_percent);
+  fa.printf("invert_tilt = %s\n",          cfg.mr_invert_tilt ? "true" : "false");
+  fa.close();
+  Serial.println("[CFG] [math] section seeded into config.ini.");
 }
 
 // ── Ensure [fighterjet] section exists in config.ini ──────────────────────────
@@ -6854,8 +6980,10 @@ static void menu_tone_hi()   { menu_tone(NOTE_HI, 80); }
 // apps_cont declared globally above wifi_poll_cb
 static int         apps_idx       = 0;   // 0=RPS 1=Dice 2=Coin 3=Metro 4=Tennis 5=Rain
                                          // 6=Snake 7=Bingo 8=ToneQuest 9=Fighter Jet
-                                         // 10=Sound
-#define APPS_COUNT 11
+                                         // 10=Math. Right?  11=Sound (kept last)
+#define APPS_COUNT 12
+#define APP_IDX_MATH   10
+#define APP_IDX_SOUND  11
 
 // ── Gyro-dependent apps ──────────────────────────────────────────────────────
 // Tennis Letters (4), Letters Rain (5), Snake Letters (6) and Fighter Jet (9)
@@ -6868,6 +6996,8 @@ static int         apps_idx       = 0;   // 0=RPS 1=Dice 2=Coin 3=Metro 4=Tennis
 //   Bingo (7)          — bn_tap_cb calls numbers on tap; tilt is the alternate.
 //   Fighter Jet (9)    — IS hidden: it steers by tilt (C6) or joystick (S3) and
 //                        has no touch fallback, so it needs a steering device.
+//   Math. Right? (10)  — tilt or joystick is an extra; left/right swipes answer
+//                        on every board, so it never needs hiding.
 //   ToneQuest (8)      — the only app that swaps input method rather than
 //                        hiding. With an IMU the ball is a bubble level; with
 //                        none it takes four-way swipes instead, which answer a
@@ -6929,6 +7059,8 @@ static void tq_game_start(void);
 static void tq_stop(void);
 static void fj_game_start(void);
 static void fj_stop(void);
+static void mr_game_start(void);
+static void mr_stop(void);
 
 // ── Math problem generator ────────────────────────────────────────────────────
 static void math_generate(char *buf, int blen, int opts[4])
@@ -7094,6 +7226,7 @@ static void apps_close()
   bn_stop();
   tq_stop();
   fj_stop();
+  mr_stop();
   if (apps_cont) { lv_obj_del(apps_cont); apps_cont = nullptr; }
   app_subphase = 0;
 }
@@ -7112,6 +7245,7 @@ static void apps_longpress_cb(lv_event_t *e)
     bn_stop();
     tq_stop();
     fj_stop();
+    mr_stop();
     app_subphase = 0;
     apps_carousel_build();
   } else {
@@ -10360,16 +10494,24 @@ static void sn_move_tick_cb(lv_timer_t * /*t*/)
 // ══════════════════════════════════════════════════════════════════════════════
 static void gm_select_build();
 
+// "Math. Right?" mode (Easy / Hard), declared here because the carousel below
+// owns the selection; the game itself lives after Fighter Jet.
+static int mr_mode = GM_MODE_EASY;
+
 static int &gm_mode()
 {
-  return apps_idx == 4 ? tl_mode : apps_idx == 5 ? lr_mode : sn_mode;
+  return apps_idx == 4 ? tl_mode
+       : apps_idx == 5 ? lr_mode
+       : apps_idx == APP_IDX_MATH ? mr_mode
+       : sn_mode;
 }
 
 static void gm_start()
 {
-  if      (apps_idx == 4) tl_game_start();
-  else if (apps_idx == 5) lr_game_start();
-  else                    sn_game_start();
+  if      (apps_idx == 4)            tl_game_start();
+  else if (apps_idx == 5)            lr_game_start();
+  else if (apps_idx == APP_IDX_MATH) mr_game_start();
+  else                               sn_game_start();
 }
 
 static void gm_step(int dir)
@@ -10428,9 +10570,10 @@ static lv_obj_t *gm_zone(int x, int w, lv_event_code_t code, lv_event_cb_t cb)
 
 static void gm_select_build()
 {
-  if      (apps_idx == 4) tl_stop();
-  else if (apps_idx == 5) lr_stop();
-  else                    sn_stop();
+  if      (apps_idx == 4)            tl_stop();
+  else if (apps_idx == 5)            lr_stop();
+  else if (apps_idx == APP_IDX_MATH) mr_stop();
+  else                               sn_stop();
   lv_obj_clean(apps_cont);
   app_subphase = 2;
 
@@ -10446,11 +10589,16 @@ static void gm_select_build()
     tennis_cards[GM_MODE_COUNT] = {
       {":-)", "Easy", "Catch the alphabet!"},
       {";-)", "Hard", "Aim your bounces!"},
+    },
+    math_cards[GM_MODE_COUNT] = {
+      {"1+2", "Easy", "Plus and minus!"},
+      {"3x4", "Hard", "Times and divide too!"},
     };
   const int mode = gm_mode();
-  const auto &card = apps_idx == 4 ? tennis_cards[mode]
-                   : apps_idx == 5 ? rain_cards[mode]
-                   :                 snake_cards[mode];
+  const auto &card = apps_idx == 4            ? tennis_cards[mode]
+                   : apps_idx == 5            ? rain_cards[mode]
+                   : apps_idx == APP_IDX_MATH ? math_cards[mode]
+                   :                            snake_cards[mode];
 
   lv_obj_t *larr = lv_label_create(apps_cont);
   lv_label_set_text(larr, LV_SYMBOL_LEFT);
@@ -12906,6 +13054,785 @@ static void fj_game_start()
 //  END FIGHTER JET
 // ══════════════════════════════════════════════════════════════════════════════
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  MATH. RIGHT?  (apps_idx == APP_IDX_MATH)
+//
+//  A sum appears with an answer that is sometimes right and sometimes wrong:
+//
+//      Score: 4            21s            Best: 9     ← status bar
+//      ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬                      ← time left, shrinking
+//
+//                     9 + 5 = 13
+//
+//      < X               swipe or tilt              ✓ >
+//
+//  Say whether it is right before the per-exercise countdown (cfg.mr_seconds)
+//  runs out. Right answer → +1 and the next sum. Wrong answer or timeout →
+//  game over. There is no win state; the score is the run of correct answers,
+//  and each mode keeps its own best ([math] high_score / hard_high_score).
+//
+//  Modes (picked on the shared GAME MODE CAROUSEL):
+//    Easy — + and -, results below cfg.mr_easy_max (default 20).
+//    Hard — + and - below cfg.mr_hard_add_max, plus x and / from the times
+//           tables up to cfg.mr_table_max. Divisions always come out whole.
+//
+//  Input — all three are live together, whichever the board has:
+//    SWIPE    right = right, left = wrong. Every board.
+//    TILT     C6 with an IMU. Same axis and sign as the brightness tilt:
+//             accelY < 0 is a tilt to the right. Leaning past tilt_percent
+//             answers; the device then has to come back towards level before
+//             the next sum accepts a tilt, so one held lean cannot answer two.
+//    JOYSTICK S3 with "Extra Games" on. Push right/left, same re-arm rule.
+//             The stick button pauses / resumes / restarts (joy_click_dispatch).
+//  Tap pauses (the sum is hidden while paused), long-press exits.
+//
+//  Wrong answers shown are deliberately plausible: off by 1-3 for + and -,
+//  a neighbouring table fact (off by one of the factors) for x, off by 1-2
+//  for /. Never negative, and in Easy never at or past the result cap, so the
+//  size of a number never gives the answer away.
+//
+//  The high score is written to config.ini once per game (at game over or on
+//  exit), never per answer, to keep flash/SD writes down.
+// ══════════════════════════════════════════════════════════════════════════════
+
+#define MR_STATUS_Y       2    // px — status bar at the TOP for this game
+#define MR_BAR_X          4
+#define MR_BAR_Y         21
+#define MR_BAR_W        312
+#define MR_BAR_H          4
+#define MR_POLL_MS       40    // ms — countdown + tilt/stick, ~25 Hz
+#define MR_SETTLE_MS    300    // ms after a new sum before a lean can answer it
+#define MR_NOTE_MS     1000    // ms a lean may stay un-re-armed before we nag
+#define MR_REARM_F     0.5f    // lean (fraction of the answer threshold) that re-arms
+#define MR_JOY_PUSH    0.6f    // stick deflection that answers (same as carousel paging)
+#define MR_OK_MS        450    // ms of green flash after a correct answer
+#define MR_OVER_MS     1800    // ms the reveal stays readable before the popup
+#define MR_WARN_SEC       5    // last seconds tick and turn red
+#define MR_EQ_MAX_W     304    // px — wider than this drops to the 24 px font
+
+enum { MR_P_ASK = 0, MR_P_FEEDBACK, MR_P_OVER };
+enum { MR_OP_ADD = 0, MR_OP_SUB, MR_OP_MUL, MR_OP_DIV };
+static const char MR_OP_CH[4] = { '+', '-', 'x', '/' };
+
+// mr_mode is declared ahead of the GAME MODE CAROUSEL, which owns it.
+static bool mr_running     = false;
+static bool mr_paused      = false;
+static bool mr_resume_next = false;   // paused during the green flash: next sum on resume
+static bool mr_beat_high   = false;   // this run set a new record
+static bool mr_high_dirty  = false;   // record changed but not yet written to config.ini
+static int  mr_phase       = MR_P_ASK;
+static int  mr_score       = 0;
+
+// The current exercise
+static int  mr_a = 0, mr_b = 0, mr_op = MR_OP_ADD;
+static int  mr_result = 0;            // the true answer
+static int  mr_shown  = 0;            // the answer on screen
+static bool mr_truth  = true;         // mr_shown == mr_result
+static int  mr_last_a = -1, mr_last_b = -1, mr_last_op = -1;
+static bool mr_last_truth = false;
+static int  mr_truth_run  = 0;        // consecutive sums with the same truth value
+
+// Countdown
+static uint32_t mr_ask_t0       = 0;  // millis() the current sum appeared (or resumed)
+static uint32_t mr_deadline     = 0;  // millis() it times out
+static uint32_t mr_remaining_ms = 0;  // banked while paused
+static int      mr_shown_sec    = -1; // last second count drawn
+static int      mr_bar_px       = -1; // last bar width drawn
+static int      mr_bar_tint     = -1; // 0 green, 1 amber, 2 red
+
+// Lean input (tilt or stick)
+static bool mr_armed      = false;
+static int  mr_note_state = -1;       // 0 = input hint, 1 = "level the device"
+
+static lv_obj_t   *mr_score_lbl  = nullptr;
+static lv_obj_t   *mr_time_lbl   = nullptr;
+static lv_obj_t   *mr_hi_lbl     = nullptr;
+static lv_obj_t   *mr_bar        = nullptr;
+static lv_obj_t   *mr_eq_lbl     = nullptr;
+static lv_obj_t   *mr_fix_lbl    = nullptr;   // reveal line under the sum at game over
+static lv_obj_t   *mr_left_lbl   = nullptr;
+static lv_obj_t   *mr_right_lbl  = nullptr;
+static lv_obj_t   *mr_note_lbl   = nullptr;
+static lv_obj_t   *mr_pop        = nullptr;   // game-over popup
+static lv_obj_t   *mr_pause_pop  = nullptr;
+static lv_timer_t *mr_poll_timer = nullptr;
+static lv_timer_t *mr_step_timer = nullptr;   // one-shot: next sum / game-over popup
+static lv_timer_t *mr_beep_timer = nullptr;   // one-shot: silence a beep
+
+static void mr_ask(void);
+static void mr_pause_game(void);
+static void mr_resume_game(void);
+
+// Best score of the mode being played
+static int &mr_high()
+{
+  return mr_mode == GM_MODE_HARD ? cfg.mr_hard_high_score : cfg.mr_high_score;
+}
+
+// Results of + and - stay below this
+static int mr_add_max()
+{
+  return mr_mode == GM_MODE_HARD ? cfg.mr_hard_add_max : cfg.mr_easy_max;
+}
+
+// ── Beeps ────────────────────────────────────────────────────────────────────
+// Non-blocking, with a kept handle so a pending "off" can be cancelled before a
+// tune takes the buzzer (otherwise it would cut the tune's first note short).
+static void mr_beep_cancel()
+{
+  if (mr_beep_timer) { lv_timer_del(mr_beep_timer); mr_beep_timer = nullptr; }
+}
+
+static void mr_beep_off_cb(lv_timer_t *t)
+{
+  lv_timer_del(t);
+  mr_beep_timer = nullptr;
+  ledcWrite(BUZZER_PIN, 0);
+  ledcChangeFrequency(BUZZER_PIN, 2000, 8);   // restore alarm freq
+}
+
+static void mr_beep(int freq, int ms)
+{
+  if (!cfg.menu_sounds) return;
+  if (tune_timer) return;                     // never trample a tune in progress
+  mr_beep_cancel();
+  ledcChangeFrequency(BUZZER_PIN, freq, 8);
+  ledcWrite(BUZZER_PIN, 80);
+  mr_beep_timer = lv_timer_create(mr_beep_off_cb, ms, nullptr);
+  lv_timer_set_repeat_count(mr_beep_timer, 1);
+}
+
+// ── Persist the record (once per game, not per answer) ───────────────────────
+static void mr_flush_high()
+{
+  if (!mr_high_dirty) return;
+  mr_high_dirty = false;
+  save_config();
+}
+
+// ── Exercise generator ───────────────────────────────────────────────────────
+static int mr_wrong_answer()
+{
+  // Upper bound (exclusive) for a believable wrong answer. + and - must stay
+  // under the same cap as the real results, or "21" in Easy would be a giveaway.
+  const int lim = (mr_op <= MR_OP_SUB) ? mr_add_max() : 1000;
+  const int lo  = (mr_op <= MR_OP_SUB) ? 0 : 1;
+
+  for (int tries = 0; tries < 12; tries++) {
+    int d;
+    switch (mr_op) {
+      case MR_OP_MUL: {
+        const int k = random(4);
+        d = (k == 0) ? mr_a : (k == 1) ? mr_b : (k == 2) ? (int)random(1, 3) : 10;
+        break;
+      }
+      case MR_OP_DIV:
+        d = random(1, 3);
+        break;
+      default:
+        d = random(1, 4);
+        if (lim > 30 && random(5) == 0) d = 10;   // the classic tens slip
+        break;
+    }
+    if (random(2)) d = -d;
+    const int c = mr_result + d;
+    if (d == 0 || c == mr_result || c < lo || c >= lim) continue;
+    return c;
+  }
+  return (mr_result + 1 < lim) ? mr_result + 1 : mr_result - 1;
+}
+
+static void mr_new_problem()
+{
+  const int nops = (mr_mode == GM_MODE_HARD) ? 4 : 2;
+  const int amax = mr_add_max();
+  const int tmax = cfg.mr_table_max;
+
+  for (int tries = 0; tries < 4; tries++) {
+    mr_op = random(nops);
+    switch (mr_op) {
+      case MR_OP_ADD:
+        mr_result = random(2, amax);              // 2 .. amax-1
+        mr_a      = random(1, mr_result);         // both operands >= 1
+        mr_b      = mr_result - mr_a;
+        break;
+      case MR_OP_SUB:
+        mr_a      = random(1, amax);              // 1 .. amax-1
+        mr_b      = random(1, mr_a + 1);          // result 0 .. a-1
+        mr_result = mr_a - mr_b;
+        break;
+      case MR_OP_MUL:
+        mr_a      = random(2, tmax + 1);
+        mr_b      = random(1, tmax + 1);
+        if (random(2)) { int t = mr_a; mr_a = mr_b; mr_b = t; }
+        mr_result = mr_a * mr_b;
+        break;
+      default:                                    // MR_OP_DIV — always whole
+        mr_result = random(1, tmax + 1);
+        mr_b      = random(2, tmax + 1);
+        mr_a      = mr_result * mr_b;
+        break;
+    }
+    if (!(mr_op == mr_last_op && mr_a == mr_last_a && mr_b == mr_last_b)) break;
+  }
+  mr_last_op = mr_op; mr_last_a = mr_a; mr_last_b = mr_b;
+
+  // 50/50, but never more than three of the same in a row — a long streak
+  // reads as a pattern and invites guessing.
+  bool truth = random(2);
+  if (mr_truth_run >= 3 && truth == mr_last_truth) truth = !truth;
+  mr_truth_run  = (truth == mr_last_truth) ? mr_truth_run + 1 : 1;
+  mr_last_truth = truth;
+
+  mr_truth = truth;
+  mr_shown = truth ? mr_result : mr_wrong_answer();
+}
+
+// ── Drawing ──────────────────────────────────────────────────────────────────
+static void mr_status_refresh()
+{
+  if (mr_score_lbl) lv_label_set_text_fmt(mr_score_lbl, "Score: %d", mr_score);
+  if (mr_hi_lbl)    lv_label_set_text_fmt(mr_hi_lbl,    "Best: %d",  mr_high());
+}
+
+static void mr_show_equation(lv_color_t col)
+{
+  if (!mr_eq_lbl) return;
+  char buf[32];
+  snprintf(buf, sizeof(buf), "%d %c %d = %d", mr_a, MR_OP_CH[mr_op], mr_b, mr_shown);
+  lv_obj_set_style_text_font(mr_eq_lbl, &lv_font_montserrat_48, 0);
+  lv_label_set_text(mr_eq_lbl, buf);
+  // The widest sums ("12 x 12 = 144") fit at 48 px with a few pixels to spare;
+  // measure anyway so a config at its limits can never clip.
+  lv_obj_update_layout(mr_eq_lbl);
+  if (lv_obj_get_width(mr_eq_lbl) > MR_EQ_MAX_W)
+    lv_obj_set_style_text_font(mr_eq_lbl, &lv_font_montserrat_24, 0);
+  lv_obj_set_style_text_color(mr_eq_lbl, col, 0);
+  lv_obj_align(mr_eq_lbl, LV_ALIGN_CENTER, 0, -8);
+}
+
+// 0 = neither, -1 = "wrong" side lit, +1 = "right" side lit
+static void mr_sides(int lit)
+{
+  if (mr_left_lbl)
+    lv_obj_set_style_text_color(mr_left_lbl,
+      lit < 0 ? lv_color_make(255, 90, 90) : lv_color_make(150, 60, 60), 0);
+  if (mr_right_lbl)
+    lv_obj_set_style_text_color(mr_right_lbl,
+      lit > 0 ? lv_color_make(90, 255, 120) : lv_color_make(60, 150, 80), 0);
+}
+
+static const char *mr_note_text(int state)
+{
+  if (state == 1) return joy_active() ? "centre the stick" : "level the device";
+  if (joy_active()) return "swipe or push";
+  if (imuReady)     return "swipe or tilt";
+  return "swipe";
+}
+
+static void mr_note_set(int state)
+{
+  if (state == mr_note_state || !mr_note_lbl) return;
+  mr_note_state = state;
+  lv_label_set_text(mr_note_lbl, mr_note_text(state));
+  lv_obj_set_style_text_color(mr_note_lbl,
+    state ? lv_color_make(230, 180, 80) : lv_color_make(90, 95, 130), 0);
+}
+
+// Second counter + shrinking bar. Only touches LVGL when something visible
+// changes, since this runs 25 times a second.
+static void mr_time_refresh(uint32_t remaining_ms)
+{
+  const uint32_t total = (uint32_t)cfg.mr_seconds * 1000u;
+  if (remaining_ms > total) remaining_ms = total;
+
+  const int sec = (int)((remaining_ms + 999) / 1000);
+  if (sec != mr_shown_sec) {
+    // Tick the last few seconds — only on a real count-down step, not on the
+    // first draw of a sum or a redraw after resume.
+    const bool tick = (mr_shown_sec > 0 && sec < mr_shown_sec &&
+                       sec > 0 && sec <= MR_WARN_SEC && mr_phase == MR_P_ASK);
+    mr_shown_sec = sec;
+    if (mr_time_lbl) {
+      lv_label_set_text_fmt(mr_time_lbl, "%ds", sec);
+      lv_obj_set_style_text_color(mr_time_lbl,
+        sec <= MR_WARN_SEC ? lv_color_make(255, 90, 90) : lv_color_make(210, 210, 230), 0);
+    }
+    if (tick) mr_beep(NOTE_A5, 35);
+  }
+
+  if (!mr_bar) return;
+  const int px = (int)(((uint64_t)MR_BAR_W * remaining_ms) / (total ? total : 1));
+  if (px != mr_bar_px) {
+    mr_bar_px = px;
+    lv_obj_set_width(mr_bar, px > 0 ? px : 0);
+  }
+  const int tint = (remaining_ms * 2 > total) ? 0 : (remaining_ms * 5 > total) ? 1 : 2;
+  if (tint != mr_bar_tint) {
+    mr_bar_tint = tint;
+    lv_obj_set_style_bg_color(mr_bar,
+      tint == 0 ? lv_color_make(70, 200, 110)
+    : tint == 1 ? lv_color_make(240, 180, 40)
+                : lv_color_make(235, 70, 70), 0);
+  }
+}
+
+// ── Timers ───────────────────────────────────────────────────────────────────
+static void mr_stop_timers()
+{
+  if (mr_poll_timer) { lv_timer_del(mr_poll_timer); mr_poll_timer = nullptr; }
+  if (mr_step_timer) { lv_timer_del(mr_step_timer); mr_step_timer = nullptr; }
+  mr_beep_cancel();
+}
+
+// ── Stop (apps_close / apps_longpress_cb / mode carousel) ────────────────────
+static void mr_stop()
+{
+  const bool was_running = mr_running;
+  mr_flush_high();                  // a record set before a mid-game exit still counts
+  mr_running     = false;
+  mr_paused      = false;
+  mr_resume_next = false;
+  mr_phase       = MR_P_ASK;
+  mr_stop_timers();
+  // Same reason as tq_stop(): a game-over tune runs on the shared tune_timer.
+  if (was_running) tune_stop();
+  mr_score_lbl = mr_time_lbl = mr_hi_lbl = nullptr;
+  mr_bar = mr_eq_lbl = mr_fix_lbl = nullptr;
+  mr_left_lbl = mr_right_lbl = mr_note_lbl = nullptr;
+  mr_pop = mr_pause_pop = nullptr;
+}
+
+static void mr_exit_to_carousel()
+{
+  lv_indev_wait_release(lv_indev_get_act());
+  mr_stop();                        // apps_carousel_build() reaps the objects
+  app_subphase = 0;
+  apps_carousel_build();
+}
+
+// ── Game-over popup ──────────────────────────────────────────────────────────
+static void mr_popup_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_NONE) return;  // a swipe
+  mr_game_start();
+}
+
+static void mr_popup_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_NONE) return;  // a swipe
+  mr_exit_to_carousel();
+}
+
+static lv_obj_t *mr_popup_box(lv_event_cb_t tap_cb, lv_event_cb_t hold_cb)
+{
+  lv_obj_t *pop = lv_obj_create(apps_cont);
+  lv_obj_set_size(pop, 240, 110);
+  lv_obj_align(pop, LV_ALIGN_CENTER, 0, 6);
+  lv_obj_set_style_bg_color(pop, lv_color_make(10, 14, 34), 0);
+  lv_obj_set_style_bg_opa(pop, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(pop, lv_color_make(120, 160, 220), 0);
+  lv_obj_set_style_border_width(pop, 2, 0);
+  lv_obj_set_style_radius(pop, 8, 0);
+  lv_obj_set_style_pad_all(pop, 0, 0);
+  lv_obj_set_scrollable(pop, false);
+  lv_obj_add_event_cb(pop, tap_cb,  LV_EVENT_CLICKED,      nullptr);
+  lv_obj_add_event_cb(pop, hold_cb, LV_EVENT_LONG_PRESSED, nullptr);
+  return pop;
+}
+
+static void mr_show_popup_cb(lv_timer_t *t)
+{
+  lv_timer_del(t);
+  mr_step_timer = nullptr;
+  if (!mr_running || !apps_cont || mr_pop) return;
+
+  lv_obj_t *pop = mr_popup_box(mr_popup_tap_cb, mr_popup_longpress_cb);
+  mr_pop = pop;
+
+  lv_obj_t *title = lv_label_create(pop);
+  if (mr_beat_high) {
+    lv_label_set_text(title, "New High Score!");
+    lv_obj_set_style_text_color(title, lv_color_make(255, 220, 60), 0);
+  } else {
+    lv_label_set_text(title, "Game Over");
+    lv_obj_set_style_text_color(title, lv_color_make(220, 80, 80), 0);
+  }
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
+
+  lv_obj_t *score_lbl = lv_label_create(pop);
+  lv_label_set_text_fmt(score_lbl, "Score: %d", mr_score);
+  lv_obj_set_style_text_font(score_lbl, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(score_lbl, lv_color_white(), 0);
+  lv_obj_align(score_lbl, LV_ALIGN_CENTER, 0, -8);
+
+  lv_obj_t *hi_lbl = lv_label_create(pop);
+  lv_label_set_text_fmt(hi_lbl, "Best: %d", mr_high());
+  lv_obj_set_style_text_font(hi_lbl, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(hi_lbl, lv_color_make(160, 200, 255), 0);
+  lv_obj_align(hi_lbl, LV_ALIGN_CENTER, 0, 16);
+
+  lv_obj_t *hint = lv_label_create(pop);
+  lv_label_set_text(hint, "tap: play again  hold: exit");
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(hint, lv_color_make(80, 80, 120), 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
+}
+
+// ── Pause popup ──────────────────────────────────────────────────────────────
+static void mr_pause_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_NONE) return;  // a swipe
+  mr_resume_game();
+}
+
+static void mr_pause_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_NONE) return;  // a swipe
+  mr_exit_to_carousel();
+}
+
+static void mr_pause_game()
+{
+  if (!mr_running || mr_paused || mr_phase == MR_P_OVER || !apps_cont) return;
+  mr_paused = true;
+
+  if (mr_phase == MR_P_ASK) {
+    const int32_t rem = (int32_t)(mr_deadline - millis());
+    mr_remaining_ms = rem > 0 ? (uint32_t)rem : 0;
+  } else {                                   // mid green flash
+    if (mr_step_timer) { lv_timer_del(mr_step_timer); mr_step_timer = nullptr; }
+    mr_resume_next = true;
+  }
+  mr_beep_cancel();
+  ledcWrite(BUZZER_PIN, 0);
+  // No thinking time while paused: the sum goes away until play resumes.
+  if (mr_eq_lbl) lv_obj_set_hidden(mr_eq_lbl, true);
+
+  lv_obj_t *pop = mr_popup_box(mr_pause_tap_cb, mr_pause_longpress_cb);
+  mr_pause_pop = pop;
+
+  lv_obj_t *title = lv_label_create(pop);
+  lv_label_set_text(title, "Paused");
+  lv_obj_set_style_text_color(title, lv_color_make(160, 200, 255), 0);
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
+
+  lv_obj_t *score_lbl = lv_label_create(pop);
+  lv_label_set_text_fmt(score_lbl, "Score: %d", mr_score);
+  lv_obj_set_style_text_font(score_lbl, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(score_lbl, lv_color_white(), 0);
+  lv_obj_align(score_lbl, LV_ALIGN_CENTER, 0, 4);
+
+  lv_obj_t *hint = lv_label_create(pop);
+  lv_label_set_text(hint, "tap: continue  hold: exit");
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(hint, lv_color_make(80, 80, 120), 0);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
+}
+
+static void mr_resume_game()
+{
+  if (!mr_running || !mr_paused) return;
+  if (mr_pause_pop) { lv_obj_del(mr_pause_pop); mr_pause_pop = nullptr; }
+  mr_paused = false;
+  if (mr_eq_lbl) lv_obj_set_hidden(mr_eq_lbl, false);
+
+  if (mr_resume_next) {
+    mr_resume_next = false;
+    mr_ask();
+    return;
+  }
+  // Same sum, the time it had left. A lean has to re-arm, so a device that
+  // was set down tilted cannot answer the moment play resumes.
+  const uint32_t now = millis();
+  mr_ask_t0    = now;
+  mr_deadline  = now + mr_remaining_ms;
+  mr_armed     = false;
+  mr_shown_sec = -1;
+  mr_time_refresh(mr_remaining_ms);
+}
+
+// ── Answer handling ──────────────────────────────────────────────────────────
+static void mr_next_cb(lv_timer_t *t)
+{
+  lv_timer_del(t);
+  mr_step_timer = nullptr;
+  if (!mr_running || mr_paused) return;
+  mr_ask();
+}
+
+static void mr_fail(bool timeout)
+{
+  mr_phase = MR_P_OVER;
+  mr_show_equation(lv_color_make(255, 80, 80));
+  mr_note_set(0);
+
+  if (mr_fix_lbl) {
+    char buf[48];
+    if (mr_truth)
+      snprintf(buf, sizeof(buf), "%sIt was right!", timeout ? "Time's up!  " : "");
+    else
+      snprintf(buf, sizeof(buf), "%s%d %c %d = %d", timeout ? "Time's up!  " : "Oops!  ",
+               mr_a, MR_OP_CH[mr_op], mr_b, mr_result);
+    lv_label_set_text(mr_fix_lbl, buf);
+    lv_obj_set_hidden(mr_fix_lbl, false);
+  }
+
+  mr_flush_high();
+  mr_beep_cancel();
+  if (mr_beat_high) tune_play_success();
+  else              tune_play_failure();
+
+  if (mr_step_timer) lv_timer_del(mr_step_timer);
+  mr_step_timer = lv_timer_create(mr_show_popup_cb, MR_OVER_MS, nullptr);
+  lv_timer_set_repeat_count(mr_step_timer, 1);
+}
+
+static void mr_answer(bool said_right)
+{
+  if (!mr_running || mr_paused || mr_phase != MR_P_ASK) return;
+
+  mr_sides(said_right ? +1 : -1);
+  if (said_right != mr_truth) { mr_fail(false); return; }
+
+  mr_score++;
+  if (mr_score > mr_high()) {
+    mr_high()     = mr_score;
+    mr_beat_high  = true;
+    mr_high_dirty = true;
+  }
+  mr_status_refresh();
+
+  mr_phase = MR_P_FEEDBACK;
+  mr_show_equation(lv_color_make(90, 230, 120));
+  mr_beep(NOTE_HI, 70);
+
+  if (mr_step_timer) lv_timer_del(mr_step_timer);
+  mr_step_timer = lv_timer_create(mr_next_cb, MR_OK_MS, nullptr);
+  lv_timer_set_repeat_count(mr_step_timer, 1);
+}
+
+// ── Show the next sum ────────────────────────────────────────────────────────
+static void mr_ask()
+{
+  if (!mr_running) return;
+  mr_new_problem();
+
+  const uint32_t total = (uint32_t)cfg.mr_seconds * 1000u;
+  mr_phase     = MR_P_ASK;
+  mr_armed     = false;
+  mr_ask_t0    = millis();
+  mr_deadline  = mr_ask_t0 + total;
+  mr_shown_sec = -1;
+  mr_bar_px    = -1;
+  mr_bar_tint  = -1;
+
+  mr_show_equation(lv_color_white());
+  if (mr_fix_lbl) lv_obj_set_hidden(mr_fix_lbl, true);
+  mr_sides(0);
+  mr_time_refresh(total);
+}
+
+// ── Lean reading: +1.0 or more = answered "right", -1.0 or less = "wrong" ────
+// Returns false when there is no tilt/stick to read (swipes still work).
+static bool mr_read_lean(float *out)
+{
+#if BOARD_HAS_JOYSTICK
+  if (joy_active()) {
+    *out = joy_x() / MR_JOY_PUSH;            // screen convention: +x = right
+    return true;
+  }
+#endif
+  if (!imuReady) return false;
+  imu.update();
+  imu.getAccel(&accelData);
+  // accelY < 0 is a tilt to the right — the same sign the brightness tilt uses
+  // (and pairs with swipe right), so "right" means the same thing everywhere.
+  float n = -accelData.accelY / ((float)cfg.mr_tilt_percent / 100.0f);
+  if (cfg.mr_invert_tilt) n = -n;
+  *out = n;
+  return true;
+}
+
+// ── Countdown + lean tick ────────────────────────────────────────────────────
+static void mr_poll_cb(lv_timer_t * /*t*/)
+{
+  if (!mr_running || mr_paused || !apps_cont || mr_phase != MR_P_ASK) return;
+
+  const uint32_t now = millis();
+  const int32_t  rem = (int32_t)(mr_deadline - now);
+  if (rem <= 0) {
+    mr_time_refresh(0);
+    mr_fail(true);
+    return;
+  }
+  mr_time_refresh((uint32_t)rem);
+
+  float n;
+  if (!mr_read_lean(&n)) return;
+
+  if (!mr_armed) {
+    const uint32_t age = now - mr_ask_t0;
+    if (age >= MR_SETTLE_MS && fabsf(n) < MR_REARM_F) {
+      mr_armed = true;
+      mr_note_set(0);
+    } else if (age >= MR_NOTE_MS && fabsf(n) >= MR_REARM_F) {
+      mr_note_set(1);                        // still leaning from the last answer
+    }
+    return;
+  }
+
+  if      (n >=  1.0f) mr_answer(true);
+  else if (n <= -1.0f) mr_answer(false);
+}
+
+// ── Touch: swipe answers, tap pauses, hold exits ─────────────────────────────
+// Same three LVGL indev quirks as ToneQuest's SWIPE INPUT notes: the zone
+// clears GESTURE_BUBBLE so the gesture stops here, and CLICKED / LONG_PRESSED
+// that a swipe still produces are recognised by gesture_dir and ignored.
+static void mr_gesture_cb(lv_event_t * /*e*/)
+{
+  switch (lv_indev_get_gesture_dir(lv_indev_get_act())) {
+    case LV_DIR_RIGHT: mr_answer(true);  break;
+    case LV_DIR_LEFT:  mr_answer(false); break;
+    default: break;
+  }
+}
+
+static void mr_tap_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_NONE) return;  // a swipe
+  mr_pause_game();
+}
+
+static void mr_longpress_cb(lv_event_t *e)
+{
+  if (lv_event_get_code(e) != LV_EVENT_LONG_PRESSED) return;
+  if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_NONE) return;  // a swipe
+  apps_longpress_cb(e);              // app_subphase > 0 → back to the apps carousel
+}
+
+static lv_obj_t *mr_label(const lv_font_t *font, lv_color_t col)
+{
+  lv_obj_t *l = lv_label_create(apps_cont);
+  lv_obj_set_style_text_font(l, font, 0);
+  lv_obj_set_style_text_color(l, col, 0);
+  return l;
+}
+
+// ── Start / restart ──────────────────────────────────────────────────────────
+static void mr_game_start()
+{
+  mr_stop_timers();
+  // "tap: play again" usually lands while the game-over tune is still playing
+  tune_stop();
+  mr_flush_high();
+
+  mr_score       = 0;
+  mr_beat_high   = false;
+  mr_paused      = false;
+  mr_resume_next = false;
+  mr_phase       = MR_P_ASK;
+  mr_last_a = mr_last_b = mr_last_op = -1;
+  mr_truth_run   = 0;
+  mr_note_state  = -1;
+  mr_pop         = nullptr;
+  mr_pause_pop   = nullptr;
+
+  lv_obj_clean(apps_cont);
+  app_subphase = 1;
+
+  // Tap zone first, at the bottom of the z-order. Nothing above it is
+  // clickable, so every press lands here.
+  lv_obj_t *zone = lv_obj_create(apps_cont);
+  lv_obj_set_size(zone, 320, 172);
+  lv_obj_set_pos(zone, 0, 0);
+  lv_obj_set_style_bg_opa(zone, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(zone, 0, 0);
+  lv_obj_set_style_pad_all(zone, 0, 0);
+  lv_obj_set_style_radius(zone, 0, 0);
+  lv_obj_set_scrollable(zone, false);
+  lv_obj_set_gesture_bubble(zone, false);
+  lv_obj_add_event_cb(zone, mr_tap_cb,       LV_EVENT_CLICKED,      nullptr);
+  lv_obj_add_event_cb(zone, mr_longpress_cb, LV_EVENT_LONG_PRESSED, nullptr);
+  lv_obj_add_event_cb(zone, mr_gesture_cb,   LV_EVENT_GESTURE,      nullptr);
+
+  // Status bar (top): Score left, countdown centre, Best right
+  mr_score_lbl = mr_label(&dejavu_mono_14, lv_color_make(180, 180, 100));
+  lv_obj_set_style_text_align(mr_score_lbl, LV_TEXT_ALIGN_LEFT, 0);
+  lv_obj_set_pos(mr_score_lbl, 4, MR_STATUS_Y);
+  lv_obj_set_size(mr_score_lbl, 120, 16);
+
+  mr_hi_lbl = mr_label(&dejavu_mono_14, lv_color_make(180, 180, 100));
+  lv_obj_set_style_text_align(mr_hi_lbl, LV_TEXT_ALIGN_RIGHT, 0);
+  lv_obj_set_pos(mr_hi_lbl, 196, MR_STATUS_Y);
+  lv_obj_set_size(mr_hi_lbl, 120, 16);
+
+  mr_time_lbl = mr_label(&lv_font_montserrat_16, lv_color_make(210, 210, 230));
+  lv_obj_set_style_text_align(mr_time_lbl, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_pos(mr_time_lbl, 124, MR_STATUS_Y - 1);
+  lv_obj_set_size(mr_time_lbl, 72, 18);
+
+  // Time bar: a dim track with the fill drawn over it
+  lv_obj_t *track = lv_obj_create(apps_cont);
+  lv_obj_set_size(track, MR_BAR_W, MR_BAR_H);
+  lv_obj_set_pos(track, MR_BAR_X, MR_BAR_Y);
+  lv_obj_set_style_bg_color(track, lv_color_make(25, 30, 55), 0);
+  lv_obj_set_style_bg_opa(track, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(track, 0, 0);
+  lv_obj_set_style_pad_all(track, 0, 0);
+  lv_obj_set_style_radius(track, 2, 0);
+  lv_obj_set_scrollable(track, false);
+  lv_obj_set_clickable(track, false);
+
+  mr_bar = lv_obj_create(apps_cont);
+  lv_obj_set_size(mr_bar, MR_BAR_W, MR_BAR_H);
+  lv_obj_set_pos(mr_bar, MR_BAR_X, MR_BAR_Y);
+  lv_obj_set_style_bg_opa(mr_bar, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(mr_bar, 0, 0);
+  lv_obj_set_style_pad_all(mr_bar, 0, 0);
+  lv_obj_set_style_radius(mr_bar, 2, 0);
+  lv_obj_set_scrollable(mr_bar, false);
+  lv_obj_set_clickable(mr_bar, false);
+
+  // The sum, and the reveal line under it (only shown at game over)
+  mr_eq_lbl = mr_label(&lv_font_montserrat_48, lv_color_white());
+  lv_obj_align(mr_eq_lbl, LV_ALIGN_CENTER, 0, -8);
+
+  mr_fix_lbl = mr_label(&lv_font_montserrat_16, lv_color_make(120, 230, 140));
+  lv_obj_align(mr_fix_lbl, LV_ALIGN_CENTER, 0, 34);
+  lv_obj_set_hidden(mr_fix_lbl, true);
+
+  // Bottom row: "< X" (wrong) left, "✓ >" (right) right, input hint centre
+  mr_left_lbl = mr_label(&lv_font_montserrat_16, lv_color_make(150, 60, 60));
+  lv_label_set_text(mr_left_lbl, LV_SYMBOL_LEFT " " LV_SYMBOL_CLOSE);
+  lv_obj_align(mr_left_lbl, LV_ALIGN_BOTTOM_LEFT, 8, -6);
+
+  mr_right_lbl = mr_label(&lv_font_montserrat_16, lv_color_make(60, 150, 80));
+  lv_label_set_text(mr_right_lbl, LV_SYMBOL_OK " " LV_SYMBOL_RIGHT);
+  lv_obj_align(mr_right_lbl, LV_ALIGN_BOTTOM_RIGHT, -8, -6);
+
+  mr_note_lbl = mr_label(&dejavu_mono_14, lv_color_make(90, 95, 130));
+  lv_obj_align(mr_note_lbl, LV_ALIGN_BOTTOM_MID, 0, -6);
+  mr_note_set(0);
+
+  mr_running = true;
+  mr_status_refresh();
+  mr_ask();
+  mr_poll_timer = lv_timer_create(mr_poll_cb, MR_POLL_MS, nullptr);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  END MATH. RIGHT?
+// ══════════════════════════════════════════════════════════════════════════════
+
 // ── App start tap: coin only (rps+dice use their own starters) ────────────────
 static void app_start_tap_cb(lv_event_t *e)
 {
@@ -12931,8 +13858,8 @@ static void app_screen_start()
     app_screen_dice_start();
     return;
   }
-  if (apps_idx >= 4 && apps_idx <= 6) {
-    gm_select_build();   // Tennis: Easy or Hard. Letters Rain / Snake Letters: Alphabet or Words
+  if ((apps_idx >= 4 && apps_idx <= 6) || apps_idx == APP_IDX_MATH) {
+    gm_select_build();   // Tennis / Math. Right?: Easy or Hard. Letters Rain / Snake Letters: Alphabet or Words
     return;
   }
   if (apps_idx == 7) {
@@ -12973,7 +13900,7 @@ static void app_screen_start()
 // without either input having its own idea of what "enter" means.
 static void apps_enter_selected()
 {
-  if (apps_idx == 10) {
+  if (apps_idx == APP_IDX_SOUND) {
     cfg.menu_sounds = !cfg.menu_sounds;
     save_config();
     if (cfg.menu_sounds) menu_tone_hi();  // confirm it's on
@@ -13039,6 +13966,11 @@ static void joy_click_dispatch()
     // Fighter Jet: the click raises the Healing Force Shield. Fire is a forward
     // push of the stick; pause / resume / restart are taps on the touchscreen.
     case 9: fj_shield_activate(); break;
+    case APP_IDX_MATH:
+      if (mr_pop)          mr_game_start();   // game-over popup: play again
+      else if (mr_paused)  mr_resume_game();
+      else if (mr_running) mr_pause_game();
+      break;
     default: break;
   }
 }
@@ -13126,7 +14058,8 @@ static void apps_carousel_build()
     {nullptr,               nullptr},  // item 7 = Bingo!          (rendered inline)
     {nullptr,               nullptr},  // item 8 = ToneQuest       (rendered inline)
     {nullptr,               nullptr},  // item 9 = Fighter Jet     (rendered inline)
-    {nullptr,               nullptr},  // item 10 = Sounds toggle  (rendered inline)
+    {nullptr,               nullptr},  // item 10 = Math. Right?   (rendered inline)
+    {nullptr,               nullptr},  // item 11 = Sounds toggle  (rendered inline)
   };
 
   // Left arrow + zone
@@ -13157,7 +14090,7 @@ static void apps_carousel_build()
     lv_obj_add_event_cb(z,apps_right_cb,LV_EVENT_PRESSED,nullptr);
     lv_obj_add_event_cb(z,apps_longpress_cb,LV_EVENT_LONG_PRESSED,nullptr); }
 
-  if (apps_idx == 10) {
+  if (apps_idx == APP_IDX_SOUND) {
     // ── Sounds toggle (inline, mirrors WiFi toggle in settings) ──────────
     lv_obj_t *sicon = lv_label_create(apps_cont);
     lv_label_set_text(sicon, cfg.menu_sounds ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE);
@@ -13172,6 +14105,33 @@ static void apps_carousel_build()
       cfg.menu_sounds ? lv_color_make(80,200,120) : lv_color_make(180,60,60), 0);
     lv_obj_align(sdesc, LV_ALIGN_CENTER, 0, 28);
     // se_flash(sicon); se_flash(sdesc);
+  } else if (apps_idx == APP_IDX_MATH) {
+    // ── Math. Right? ──────────────────────────────────────────────────────
+    lv_obj_t *name_lbl = lv_label_create(apps_cont);
+    lv_label_set_text(name_lbl, "Math. Right?");
+    lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(name_lbl, lv_color_white(), 0);
+    lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(name_lbl, 180);
+    lv_obj_set_style_text_align(name_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(name_lbl, LV_ALIGN_CENTER, 0, -14);
+
+    lv_obj_t *desc_lbl = lv_label_create(apps_cont);
+    lv_label_set_text(desc_lbl, "Right or wrong? Be quick!");
+    lv_obj_set_style_text_font(desc_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(desc_lbl, lv_color_make(100, 180, 100), 0);
+    lv_obj_align(desc_lbl, LV_ALIGN_CENTER, 0, 20);
+
+    const int mr_best_any = max(cfg.mr_high_score, cfg.mr_hard_high_score);
+    if (mr_best_any > 0) {
+      lv_obj_t *hs_lbl = lv_label_create(apps_cont);
+      char hs_buf[32];
+      snprintf(hs_buf, sizeof(hs_buf), "Best: %d", mr_best_any);
+      lv_label_set_text(hs_lbl, hs_buf);
+      lv_obj_set_style_text_font(hs_lbl, &lv_font_montserrat_14, 0);
+      lv_obj_set_style_text_color(hs_lbl, lv_color_make(255, 210, 60), 0);
+      lv_obj_align(hs_lbl, LV_ALIGN_CENTER, 0, 44);
+    }
   } else if (apps_idx == 9) {
     // ── Fighter Jet ───────────────────────────────────────────────────────
     lv_obj_t *name_lbl = lv_label_create(apps_cont);
@@ -13358,7 +14318,7 @@ static void apps_carousel_build()
 
   // Hint above dots
   lv_obj_t *hint = lv_label_create(apps_cont);
-  lv_label_set_text(hint, apps_idx == 10 ? "tap to toggle  .  hold to exit"
+  lv_label_set_text(hint, apps_idx == APP_IDX_SOUND ? "tap to toggle  .  hold to exit"
                                         : "tap to play  .  hold to exit");
   lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(hint, lv_color_make(70, 70, 95), 0);
@@ -15058,6 +16018,7 @@ void setup()
     seed_snake_config();        // append [snake] section if not yet present
     seed_tonequest_config();    // append [tonequest] section if not yet present
     seed_fighterjet_config();   // append [fighterjet] section if not yet present
+    seed_math_config();         // append [math] section if not yet present
 #if BOARD_HAS_JOYSTICK
     seed_joystick_config();     // append [joystick] section if not yet present
 #endif

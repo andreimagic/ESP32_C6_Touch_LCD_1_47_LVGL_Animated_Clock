@@ -116,8 +116,9 @@
                         <tr><td><strong>macroPad — ASCII art over USB</strong></td><td>The clock introduces itself to a computer as a USB keyboard and <em>types</em> a stored text file into whatever window has focus, one keystroke at a time. Open an editor, tap a picture, and watch a penguin get drawn by keypresses — the same trick every keyboard performs, made visible. Write a new <code>.art</code> file, drop it in <code>/scripts</code>, and it appears in the menu; no toolchain, nothing to install. <strong>ESP32-S3 only</strong> — needs the USB-OTG peripheral the C6 does not have. Note that art lives on whichever storage is active and is <em>not</em> copied from card to internal flash at boot, unlike the GIFs.</td></tr>
                         <tr><td><strong>Battery monitor</strong></td><td>Live percentage, voltage, ADC raw — with LiPo discharge curve</td></tr>
                         <tr><td><strong>Low-power gate</strong></td><td>Refuses to boot if battery ≤ 10%, shows empty battery icon and deep sleeps.</td></tr>
-                        <tr><td><strong>Apps menu</strong></td><td>Math challenge gate, Rock Paper Scissors, Rolling Dice, Coin Flip, Metronome, Tennis Letters (Easy/Hard), Letters Rain, Snake Letters, Bingo!, ToneQuest, Fighter Jet</td></tr>
+                        <tr><td><strong>Apps menu</strong></td><td>Math challenge gate, Rock Paper Scissors, Rolling Dice, Coin Flip, Metronome, Tennis Letters (Easy/Hard), Letters Rain, Snake Letters, Bingo!, ToneQuest, Fighter Jet, Math. Right?</td></tr>
                         <tr><td><strong>Fighter Jet</strong></td><td>Tilt- or joystick-controlled aerial combat with escalating enemy rounds, a healing and damage-absorbing shield, and a saved rounds-survived record. Requires the C6 IMU or an enabled S3 KY-023 joystick.</td></tr>
+                        <tr><td><strong>Math. Right?</strong></td><td>Quick-fire arithmetic: is the sum on screen right or wrong? Swipe right or left (or tilt on the C6, or push the joystick on the S3) before the countdown runs out. Easy (+ &minus;) and Hard (adds &times; &divide;) modes with separate best scores. Works on both boards.</td></tr>
                         <tr><td><strong>Metronome</strong></td><td>60–240 BPM with hardware-timer accuracy, beat dot indicators, 2/4 3/4 4/4 time signatures, distinct hi/lo tones</td></tr>
                         <tr><td><strong>Bingo!</strong></td><td>On-device 1–90 number caller with cycle-and-reveal animation, tilt-to-draw, and a call-history popup — no repeats, ever</td></tr>
                         <tr><td><strong>Printable Bingo tickets</strong></td><td>Web Configuration links to <code>/bingo</code> — an in-browser generator for UK/housie-style ticket sheets, fresh set every load</td></tr>
@@ -218,7 +219,7 @@
                 <li><strong>Status (LL):</strong> Shows WiFi, NTP, and Brightness. Tilt left/right to adjust brightness.</li>
                 <li><strong>Battery (LR):</strong> Live %, voltage. Long-press for software power-off.</li>
                 <li><strong>Emotion Tilt:</strong> Tap UL (Smile). While playing, tilt the device to change emotions (sad, joy, sleep) in real-time via IMU.</li>
-                <li><strong>Apps Menu:</strong> Long-press the smile GIF → pass Math Gate → access Rock Paper Scissors, Dice, Coin Flip, Metronome, Tennis Letters, Letters Rain, Snake Letters, Bingo!, ToneQuest, and Fighter Jet. Fighter Jet requires an IMU or enabled joystick.</li>
+                <li><strong>Apps Menu:</strong> Long-press the smile GIF → pass Math Gate → access Rock Paper Scissors, Dice, Coin Flip, Metronome, Tennis Letters, Letters Rain, Snake Letters, Bingo!, ToneQuest, Fighter Jet, and Math. Right?. Fighter Jet requires an IMU or enabled joystick; Math. Right? works on every board.</li>
                 <li><strong>Gyro shake/tilt:</strong> While playing RPS or Dice, physically shake the device or tilt it hard sideways to restart the game — no tap needed.</li>
             </ul>
 
@@ -265,6 +266,11 @@
             <p><strong>ESP32-C6:</strong> Each start and resume calibrates the IMU: hold steady, tilt forward when prompted to set the fire direction, then level the device again. Tilt left/right to turn, tilt farther for a faster turn, tilt forward to fire and backward to brake. <strong>ESP32-S3:</strong> Enable the optional KY-023 joystick under <strong>Extra Games</strong>; push left/right to turn, farther to turn faster, forward to fire and back to brake. Click the stick to activate the shield. Without an IMU or enabled joystick, Fighter Jet is hidden from the carousel.</p>
             <p>On either board, tapping the centre half pauses or resumes; long-pressing the centre exits. Tap or hold either outer quarter to activate the <strong>Healing Force Shield</strong>. It lasts five seconds by default, restores 10% of maximum health per second and absorbs half of incoming damage. While active, firing is disabled and the jet moves at one-quarter speed, but it can still turn. The shield freezes while paused and can be raised again immediately by default. Tap a game-over popup to restart, or long-press to exit.</p>
 
+            <h3>&#10003; Math. Right?</h3>
+            <p>A sum appears with an answer that is sometimes right and sometimes wrong &mdash; say which before the countdown runs out. <strong>Swipe right</strong> if it is right, <strong>left</strong> if it is wrong. On the C6 you can also <strong>tilt</strong> right or left (the same axis as the brightness tilt); on the S3 with <em>Extra Games</em> on, push the <strong>joystick</strong>, whose button pauses, resumes and restarts. After each answer the device has to come back towards level before a tilt counts again; if it does not, the hint reads <code class="code-inline">level the device</code>.</p>
+            <p>Pick a mode from the carousel: <strong>Easy</strong> uses + and &minus; with results below 20; <strong>Hard</strong> adds &times; and &divide; from the times tables up to 10 (divisions always come out whole). A correct answer flashes green, beeps and shows the next sum; a wrong answer or timeout turns the sum red, shows the correct result and ends the run. The score is your run of correct answers, each mode keeps its own best, and best scores are saved once per game to spare the flash and SD card. Tap to pause (the sum is hidden), long-press to exit.</p>
+            <p>The wrong answers are believable &mdash; off by 1&ndash;3, or a neighbouring times-table fact &mdash; never negative, and the answer shown is right about half the time. Tune time per sum, number ranges and tilt sensitivity under <code class="code-inline">[math]</code>; the section is added to an existing <code class="code-inline">config.ini</code> automatically.</p>
+
             <h3>Config.ini Reference</h3>
 <pre><code>[wifi]
 mode = wifi   # wifi | ap | off
@@ -282,6 +288,16 @@ time = 07:10
 [animation]
 schedule = true
 duration = 10
+
+[math]
+high_score = 0
+hard_high_score = 0
+seconds = 30
+easy_max = 20
+hard_add_max = 20
+table_max = 10
+tilt_percent = 35
+invert_tilt = false
 
 [fighterjet]
 high_score = 0
@@ -446,7 +462,8 @@ invert_turn = false
                         <tr><td>v3.8.1</td><td>✅ released</td><td><strong>Joystick gamepad control (ESP32-S3 only).</strong> Swipe left or right on the jiggler overlay to switch between mouse mode and USB gamepad mode. In gamepad mode, the KY-023 stick controls the host's left analog stick and its button maps to gamepad button A; the existing mouse mode remains available.</td></tr>
                         <tr><td>v3.9.0</td><td>✅ released</td><td><strong>Fighter Jet.</strong> Tilt- or joystick-controlled aerial combat with calibrated C6 controls, escalating enemy rounds, saved rounds-survived high score and the Healing Force Shield. The shield heals and absorbs damage, at the cost of firing and speed while active; tune it and the game's difficulty in <code>[fighterjet]</code>.</td></tr>
                         <tr><td>v3.9.1</td><td>✅ released</td><td><strong>Christmas Season.</strong> Alarms and timers use <code>christmas.gif</code> and a randomly selected Christmas tune throughout December. Birthday greetings take priority; if the seasonal GIF is missing, the regular alarm or timer animation is used. Disable the feature with <code>[christmas] enabled = false</code>.</td></tr>
-                        <tr><td>v3.10.0</td><td>🚀 new</td><td><strong>Missing-GIF auto-heal.</strong> The Files page now reports missing animation GIFs and provides a PIN-protected <strong>Download Missing GIFs</strong> action with live progress. On WiFi connect, the clock also checks for missing assets and makes one automatic download attempt after a short delay. Files download into the active SD or internal-flash storage, are written temporarily, and are renamed into place only after the download completes and the GIF header is verified. Existing files are skipped; automatic attempts are rate-limited. Downloads are unavailable in AP mode and require enough free memory and, for internal flash, storage space.</td></tr>
+                        <tr><td>v3.10.0</td><td>✅ released</td><td><strong>Missing-GIF auto-heal.</strong> The Files page now reports missing animation GIFs and provides a PIN-protected <strong>Download Missing GIFs</strong> action with live progress. On WiFi connect, the clock also checks for missing assets and makes one automatic download attempt after a short delay. Files download into the active SD or internal-flash storage, are written temporarily, and are renamed into place only after the download completes and the GIF header is verified. Existing files are skipped; automatic attempts are rate-limited. Downloads are unavailable in AP mode and require enough free memory and, for internal flash, storage space.</td></tr>
+                        <tr><td>v3.11.0</td><td>🚀 new</td><td><strong>Math. Right?</strong> A quick-fire arithmetic game: a sum appears with an answer that is sometimes right and sometimes wrong &mdash; swipe right or left (or tilt on the C6, or push the KY-023 joystick on the S3) before the per-sum countdown runs out. One mistake or timeout ends the run. Easy (+ &minus;) and Hard (adds &times; and &divide;) keep separate best scores, saved once per game; tune it under <code>[math]</code>, which is added to an existing <code>config.ini</code> automatically. Works on both boards. <strong>Fix: ASCII art rendering.</strong> The Rock Paper Scissors countdown and GO! hands and the Rolling Dice frames are now left-aligned inside their labels, so rows no longer shear sideways.</td></tr>
                     </tbody>
                 </table>
             </div>

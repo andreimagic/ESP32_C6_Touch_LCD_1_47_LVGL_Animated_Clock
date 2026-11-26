@@ -60,7 +60,8 @@ jobs:
   # before anything is built.
   version:
     name: Resolve version
-    runs-on: onctl-2
+    # runs-on: onctl-2
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       channel: ${{ steps.version.outputs.channel }}

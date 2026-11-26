@@ -7142,7 +7142,7 @@ static const char *dice_art_roll(int n)
 {
   switch (n) {
     case 1: return
-      "    ______    \n"
+      "   ______     \n"
       "  /\\     \\  \n"
       " /o \\  o  \\ \n"
       "/   o\\_____\\\n"
@@ -7150,7 +7150,7 @@ static const char *dice_art_roll(int n)
       " \\ o/  o  /  \n"
       "  \\/____o/   ";
     case 2: return
-      "    ______    \n"
+      "   ______     \n"
       "  /\\     \\  \n"
       " /  \\  o  \\ \n"
       "/ o  \\_____\\\n"
@@ -7165,7 +7165,7 @@ static const char *dice_art_roll(int n)
       // "|   o   |o/\n"
       // "|     o |/ \n"
       // "'-------'  ";
-      "    ______    \n"
+      "   ______     \n"
       "  /\\ o   \\  \n"
       " /o \\  o  \\ \n"
       "/   o\\___o_\\\n"

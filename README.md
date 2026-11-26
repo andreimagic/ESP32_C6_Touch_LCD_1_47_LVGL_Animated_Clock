@@ -55,7 +55,7 @@ One sketch builds for both boards. The target is detected at compile time and ev
 | **Software power-off** | Long-press battery screen → 5 s countdown → deep sleep; RESET button to wake |
 | **Alarm auto-wake** | In WiFi mode, device wakes from deep sleep 5 min before alarm to allow NTP sync; in AP/Off mode it wakes right at alarm time instead (no sync possible, no point burning battery early) |
 | **Alarm drift warning** | If the alarm fires with no reliable time source — AP/Off mode, or WiFi mode where NTP never landed — it still always sounds, but swaps the GIF for a plain text warning telling you to check another clock |
-| **Apps menu** | Long-press the smile GIF → math challenge gate → games carousel with Rock Paper Scissors, Dice, Coin Flip, Metronome, Tennis Letters, Letters Rain, Snake Letters, Bingo!, ToneQuest and Fighter Jet |
+| **Apps menu** | Long-press the smile GIF → math challenge gate → games carousel with Rock Paper Scissors, Dice, Coin Flip, Metronome, Tennis Letters, Letters Rain, Snake Letters, Bingo!, ToneQuest, Fighter Jet and Math. Right? |
 | **Math challenge** | Random arithmetic gate (+ − × ÷, result < 100) with 4 shuffled answer buttons |
 | **Rock Paper Scissors** | Animated 3-2-1 countdown shake → CPU reveals its hand → GO! Shake or hard-tilt the device to restart |
 | **Rolling Dice** | Animated rolling frames → final dice face reveal. Shake or hard-tilt to re-roll |
@@ -64,6 +64,7 @@ One sketch builds for both boards. The target is detected at compile time and ev
 | **Letters Rain** | Falling-letters ASCII game in two modes: **Alphabet** — catch the target letter (A→Z) with a gyro-controlled paddle — and **Words** — catch a word's letters in order. Wrong catches shrink the paddle; `+` / `-` modify its size; `*` restores the default. Miss the target letter and the game ends. Alphabet's last score and Words' best saved to `config.ini` |
 | **Snake Letters** | Classic snake ASCII game in two modes: **Alphabet** — steer using tilt to eat a-z in order — and **Words** — catch the letter missing from a word (`d_g`). Avoid distraction letters and manage length with modifiers. Each mode's high score is persisted to `config.ini` |
 | **Fighter Jet** | Tilt- or joystick-controlled aerial combat: turn, fire, brake, survive escalating enemy rounds and use a healing shield |
+| **Math. Right?** | Quick-fire arithmetic: is the sum on screen right or wrong? Swipe right or left (or tilt on the C6, or push the joystick on the S3) before the countdown runs out. Easy (+ −) and Hard (adds × ÷) modes with separate best scores. Works on both boards |
 | **KY-023 joystick** *(S3)* | Optional module on the expansion header restores the tilt games and can control the USB mouse while the smile GIF is open. Off by default and claims no pins until enabled — see [KY-023 Joystick](#ky-023-joystick-s3-only) |
 | **Bingo!** | On-device 1–90 number caller. Tap or tilt to draw a ball with a cycling reveal animation and buzzer; long-press the circle for a history popup of every number called. No repeats — powered by a fresh Fisher-Yates shuffle each game |
 | **Printable Bingo tickets** | Web Configuration page links to `/bingo` — a self-contained, in-browser generator for UK/housie-style 3×9 ticket sheets (1–90) to pair with the on-device caller. Fresh tickets every load, no PIN needed |
@@ -113,6 +114,7 @@ QMI8658 fails to answer at boot degrades exactly the same way.
 | ToneQuest | tilt | swipe, or tilt-equivalent with a joystick | The only game that swaps input rather than hiding — see [Apps carousel](#apps-carousel) |
 | Emotion GIF cycling | ✅ | **smile only** | The overlay still opens on upper-left tap; `sleep`/`sad`/`joy` are unreachable without tilt |
 | Rock Paper Scissors, Dice | ✅ | ✅ | Tap-driven; shake is a bonus, not the only input |
+| Math. Right? | swipe **or** tilt | swipe; plus joystick with *Extra Games* on | Swipes answer on every board, so it is never hidden |
 | Bingo | ✅ | ✅ | Tap and the circle both draw |
 | RTC restore from log | ✅ | SD card only | The log is deliberately card-only — see [RTC Persistence Log](#rtc-persistence-log) |
 
@@ -319,6 +321,7 @@ have. No new speed or delay setting is introduced.
 | **Snake Letters** | Direction, all four ways. Dominant axis wins; a 180° reversal is still blocked |
 | **Tennis Letters** | Direction, or position — `[joystick] paddle_mode` |
 | **Letters Rain** | Direction, or position — `[joystick] paddle_mode` |
+| **Math. Right?** | Push right for *right*, left for *wrong*. The stick must come back towards centre before the next sum accepts a push |
 | **ToneQuest** | Position, on both axes. The levelling gate, the tones, the sequence and the win/lose logic are all unchanged; the stick just replaces the tilt |
 
 **The stick also drives the apps carousel.** Push it left or right to page
@@ -332,8 +335,8 @@ for the screen mid-game:
 | Where | Button press |
 |---|---|
 | Apps carousel | Enters the highlighted item, like tapping the middle |
-| Letters Rain / Snake Letters mode carousel | Starts the highlighted mode. Push **up** to back out to the apps carousel; left/right pages the modes |
-| Tennis Letters, Letters Rain, Snake Letters — playing | **Pauses**, like tapping the field |
+| Game mode carousel (Tennis Letters, Letters Rain, Snake Letters, Math. Right?) | Starts the highlighted mode. Push **up** to back out to the apps carousel; left/right pages the modes |
+| Tennis Letters, Letters Rain, Snake Letters, Math. Right? — playing | **Pauses**, like tapping the field |
 | Same games — paused | **Resumes**, like tapping the *Paused* popup |
 | Any joystick game — game over | Plays again, like tapping the popup |
 
@@ -635,6 +638,20 @@ next_level_score = 10
 words_high_score = 0
 words = ["box", "cat", "dog", "cactus", "rainbow"]
 
+[math]
+# "Math. Right?" -- swipe (or tilt, or push the joystick) right if the sum is
+# right, left if it is wrong. seconds = time per exercise; one mistake or one
+# timeout ends the game. Easy: + and - below easy_max. Hard: + and - below
+# hard_add_max, plus x and / from the times tables up to table_max (2-12).
+high_score = 0
+hard_high_score = 0
+seconds = 30
+easy_max = 20
+hard_add_max = 20
+table_max = 10
+tilt_percent = 35
+invert_tilt = false
+
 [tonequest]
 high_score = 0
 start_moves = 4
@@ -686,6 +703,11 @@ invert_turn = false
 | `[joystick]` | `mouse` | `true` | **S3 only.** Enable joystick pointer and left-click control while the smile GIF is open in a USB HID persona |
 | `[joystick]` | `mouse_speed` | `8` | **S3 only.** Pointer speed at full deflection, in pixels per 20 ms (1–40) |
 | `[birthdays]` | `dates` | _(empty)_ | Comma-separated birthdays `DD-MM-YYYY`. On a matching day, alarm and timer use `happybirthday.gif` and the Happy Birthday melody. Up to 8 entries. Section may be omitted to disable the Easter egg. |
+| `[math]` | `high_score` / `hard_high_score` | `0` / `0` | Math. Right? best scores for Easy and Hard, in correct answers. Written by the game once per game. |
+| `[math]` | `seconds` | `30` | Time allowed for each sum (3–120). |
+| `[math]` | `easy_max` / `hard_add_max` | `20` / `20` | + and − results stay below this in Easy / Hard (5–100). |
+| `[math]` | `table_max` | `10` | Hard: × and ÷ use the times tables up to this (2–12). |
+| `[math]` | `tilt_percent` / `invert_tilt` | `35` / `false` | C6 sideways tilt that answers, as a percentage of 1 g (15–90), and an option to swap which side means *right*. |
 | `[fighterjet]` | `high_score` | `0` | Best number of rounds survived; written by the game. |
 | `[fighterjet]` | `start_enemies` / `enemies_per_round` / `max_enemies` | `2` / `1` / `12` | Set the first round's enemy count, enemies added each round and the enemy cap. |
 | `[fighterjet]` | `player_health` / `enemy_health` | `100` / `30` | Player health and hits required to destroy an enemy. |
@@ -1045,18 +1067,19 @@ A random arithmetic problem (+ − × ÷, result always < 100) is shown in large
 
 ### Apps carousel
 
-Ten games plus a sounds toggle when a steering device is available, navigated
+Eleven games plus a sounds toggle when a steering device is available, navigated
 with **◀ ▶**. **Tap** to enter, **long-press** to go back.
 
-> **On a board with no steering device, four of the ten are hidden.** Tennis
+> **On a board with no steering device, four of the eleven are hidden.** Tennis
 > Letters, Letters Rain, Snake Letters and Fighter Jet require tilt or a
-> joystick, so the carousel skips them in both directions, leaving six reachable
+> joystick, so the carousel skips them in both directions, leaving seven reachable
 > entries. A persisted carousel position pointing at a hidden app is normalised
 > when the carousel is built, so it can never strand you on an unreachable entry.
 >
 > **ToneQuest is the exception** — it swaps input method rather than hiding,
 > taking four-way swipes where there is no accelerometer to tilt. See its
-> section below.
+> section below. **Math. Right?** is never hidden either: left/right swipes
+> answer on every board, and tilt or the joystick are extras.
 >
 > **A [KY-023 joystick](#ky-023-joystick-s3-only) puts all four back.** On the
 > S3, enabling *Extra Games* makes the joystick count as a steering device
@@ -1066,8 +1089,8 @@ with **◀ ▶**. **Tap** to enter, **long-press** to go back.
 > the highlighted item, exactly as tapping the middle does.
 >
 > The position dots below the title are drawn one per *reachable* entry and the
-> row is re-centred on its own width, so on an S3 without a joystick you get six
-> dots rather than eleven with five that can never light up.
+> row is re-centred on its own width, so on an S3 without a joystick you get seven
+> dots rather than twelve with five that can never light up.
 
 ```
 ┌─────────────────────────────────────────┐
@@ -1089,6 +1112,8 @@ Ready? → UP "3" → DOWN "3" ♪ → UP "2" → DOWN "2" ♪ → UP "1" → DO
 ```
 
 Each step is exactly 250 ms. At GO! the CPU's hand is revealed — play against it with your own hand. Tap, **shake**, or **hard-tilt** the device to play again, long-press to exit.
+
+> **ASCII art is left-aligned inside its label.** LVGL's `LV_TEXT_ALIGN_CENTER` centres every line on its own, so art whose lines differ in width shears by half-columns. The art labels use `LV_TEXT_ALIGN_LEFT` and are sized to their content; centring the label object still centres the whole picture on screen. Keep this in mind when adding new ASCII art.
 
 #### Rolling Dice
 
@@ -1312,9 +1337,56 @@ The `[fighterjet]` section is created automatically when missing. Adjust its dif
 | `fire_tilt_percent` | `20` | C6 forward-tilt threshold for firing, as a percentage of 1 g. |
 | `invert_turn` | `false` | Set `true` if left/right turns feel reversed on the C6. |
 
+#### Math. Right?
+
+A sum appears with an answer that is sometimes right and sometimes wrong. Say which before the countdown runs out:
+
+```
+Score: 4            21s            Best: 9      ← status bar
+▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬                       ← time left, shrinking
+
+                 9 + 5 = 13
+
+< X             swipe or tilt              ✓ >
+```
+
+Entering the game opens the shared mode carousel:
+
+| Mode | Sums | Best score |
+|---|---|---|
+| **Easy** | + and −, results below `easy_max` (default 20) | `[math] high_score` |
+| **Hard** | + and − below `hard_add_max`, plus × and ÷ from the times tables up to `table_max` (default 10). Divisions always come out whole | `[math] hard_high_score` |
+
+A correct answer flashes the sum green, beeps, adds a point and shows the next sum. A wrong answer or a timeout turns the sum red, shows the correct result, then opens the usual Game Over / New High Score popup. There is no win state — the score is your run of correct answers. The time bar under the status bar shrinks from green to amber to red, and each sum gets the full `seconds` again.
+
+**Input** — all three are live together, whichever the board has:
+
+| Input | Board | Right / wrong |
+|---|---|---|
+| **Swipe** | Both | Swipe right / left |
+| **Tilt** | C6 | Lean right / left past `tilt_percent` — the same axis as the brightness tilt |
+| **Joystick** | S3 with *Extra Games* on | Push right / left. The stick button pauses, resumes and restarts |
+
+After each answer the device (or stick) has to come back towards level before the next sum accepts a tilt, so one held lean cannot answer two sums. If you keep leaning, the hint reads **level the device**. **Tap** pauses the game and hides the sum; **long-press** exits.
+
+The wrong answers are meant to be believable: off by 1–3 for + and −, a neighbouring times-table fact for ×, off by 1–2 for ÷. They are never negative, and in Easy they never reach the result cap, so the size of a number never gives the answer away. The answer shown is right about half the time, and never right (or wrong) more than three times in a row.
+
+Best scores are written to `config.ini` once per game — at game over or on exit — never per answer, to keep flash and SD writes down. The `[math]` section is appended automatically to a `config.ini` written before this game shipped:
+
+| Key | Default | Meaning |
+|---|---:|---|
+| `high_score` | `0` | Easy best, in correct answers; maintained by the game. |
+| `hard_high_score` | `0` | Hard best; maintained by the game. |
+| `seconds` | `30` | Time allowed for each sum (3–120). |
+| `easy_max` | `20` | Easy: + and − results stay below this (5–100). |
+| `hard_add_max` | `20` | Hard: + and − results stay below this (5–100). |
+| `table_max` | `10` | Hard: × and ÷ use the times tables up to this (2–12). |
+| `tilt_percent` | `35` | C6 sideways tilt that answers, as a percentage of 1 g (15–90). |
+| `invert_tilt` | `false` | Set `true` if right and left feel swapped on your unit. |
+
 #### Sounds toggle
 
-The last carousel item — eleventh when a steering device is available, sixth on an S3 without an enabled joystick, since the four steering games are hidden when there is nothing to steer them. Tap to mute/unmute all apps menu and game audio. The setting is saved to `config.ini` under `[menu] sounds`. This does **not** affect alarm, timer, or metronome sounds.
+The last carousel item — twelfth when a steering device is available, seventh on an S3 without an enabled joystick, since the four steering games are hidden when there is nothing to steer them. Tap to mute/unmute all apps menu and game audio. The setting is saved to `config.ini` under `[menu] sounds`. This does **not** affect alarm, timer, or metronome sounds.
 
 ---
 
@@ -1966,7 +2038,8 @@ Some coin flip ASCII art displayed in the Apps Menu was sourced from [asciiart.e
 | v3.8.1 | ✅ released | **Joystick gamepad control (ESP32-S3 only)** — swipe left or right on the jiggler overlay to switch between mouse mode and USB gamepad mode. In gamepad mode, the KY-023 stick controls the host's left analog stick and its button maps to gamepad button A; the existing mouse mode remains available. |
 | v3.9.0 | ✅ released | **Fighter Jet.** Tilt- or joystick-controlled aerial combat with IMU calibration, escalating enemy rounds, a persisted rounds-survived score and the Healing Force Shield. The shield restores health and absorbs damage while disabling fire and reducing speed; configure the game under `[fighterjet]`. |
 | v3.9.1 | ✅ released | **Christmas Season.** December alarms and timers use `christmas.gif` and randomly selected Christmas tunes; birthday greetings take priority, and a missing seasonal GIF falls back to the regular alarm/timer animation. Set `[christmas] enabled = false` to disable it. |
-| v3.10.0 | 🚀 new | **Missing-GIF auto-heal.** The Files page now reports missing animation GIFs and provides a PIN-protected **Download Missing GIFs** action with live progress. On WiFi connect, the clock also checks for missing assets and makes one automatic download attempt after a short delay. Files download into the active SD or internal-flash storage, are written temporarily, and are renamed into place only after the download completes and the GIF header is verified. Existing files are skipped; automatic attempts are rate-limited. Downloads are unavailable in AP mode and require enough free memory and, for internal flash, storage space. |
+| v3.10.0 | ✅ released | **Missing-GIF auto-heal.** The Files page now reports missing animation GIFs and provides a PIN-protected **Download Missing GIFs** action with live progress. On WiFi connect, the clock also checks for missing assets and makes one automatic download attempt after a short delay. Files download into the active SD or internal-flash storage, are written temporarily, and are renamed into place only after the download completes and the GIF header is verified. Existing files are skipped; automatic attempts are rate-limited. Downloads are unavailable in AP mode and require enough free memory and, for internal flash, storage space. |
+| v3.11.0 | 🚀 new | **Math. Right?** A quick-fire arithmetic game: a sum appears with an answer that is sometimes right and sometimes wrong — swipe right or left (or tilt on the C6, or push the KY-023 joystick on the S3) before the per-sum countdown runs out. One mistake or timeout ends the run. Easy (+ −) and Hard (adds × and ÷ from the times tables) keep separate best scores, saved once per game. Tune it under `[math]`, which is added to an existing `config.ini` automatically; it works on both boards and is never hidden. **Fix: ASCII art rendering.** The Rock Paper Scissors countdown and GO! hands and the Rolling Dice frames are now left-aligned inside their labels, so rows no longer shear sideways. |
 
 ## License
 

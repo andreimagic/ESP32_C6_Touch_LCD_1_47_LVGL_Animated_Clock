@@ -7235,7 +7235,7 @@ static const char *rps_art_shake(bool up)
     "      (_____)    \n"
     "      (_____)    \n"
     "      (____)     \n"
-    " ---.__(___)       ";
+    "---.__(___)        ";
 }
 
 static const char *rps_art(int c)
@@ -7246,7 +7246,7 @@ static const char *rps_art(int c)
     "      (_____)     \n"
     "      (_____)     \n"
     "      (____)      \n"
-    " ---.__(___)        ";
+    "---.__(___)         ";
 
   if (c==2) return
     "    ________      \n"
@@ -7254,7 +7254,7 @@ static const char *rps_art(int c)
     "           ______)\n"
     "          _______)\n"
     "         _______) \n"
-    " ---.__________)    ";
+    "---.__________)     ";
 
   return
     "    _______       \n"
@@ -7262,7 +7262,7 @@ static const char *rps_art(int c)
     "          ______) \n"
     "       __________)\n"
     "      (____)      \n"
-    " ---.__(___)        ";
+    "---.__(___)         ";
 }
 
 static const char *rps_name(int c)
@@ -7307,6 +7307,44 @@ static const char *coin_art(bool heads)
       "                                `'                            '-.|\n";
 }
 
+// ── RPS result: two hands side by side ───────────────────────────────────────
+// Splits both arts on '\n', pads/clips each row to RPS_COL_W columns, and joins
+// them row by row with RPS_GAP spaces. Fixed widths keep both hands aligned in
+// a LEFT-aligned monospace label. Trailing spaces are trimmed per output row.
+#define RPS_COL_W     18
+#define RPS_GAP        1
+#define RPS_ROWS       6
+#define RPS_PAIR_BUF  ((RPS_COL_W * 2 + RPS_GAP + 1) * RPS_ROWS + 1)
+
+static const char *rps_copy_row(const char *src, char *dst)
+{
+  int n = 0;
+  while (*src && *src != '\n') {
+    if (n < RPS_COL_W) dst[n++] = *src;
+    src++;
+  }
+  while (n < RPS_COL_W) dst[n++] = ' ';
+  return (*src == '\n') ? src + 1 : src;
+}
+
+static void rps_pair_text(char *out, size_t cap, const char *left, const char *right)
+{
+  size_t o = 0;
+  for (int r = 0; r < RPS_ROWS; r++) {
+    char row[RPS_COL_W * 2 + RPS_GAP];
+    left  = rps_copy_row(left,  row);
+    for (int g = 0; g < RPS_GAP; g++) row[RPS_COL_W + g] = ' ';
+    right = rps_copy_row(right, row + RPS_COL_W + RPS_GAP);
+
+    int len = (int)sizeof(row);
+    while (len > 0 && row[len - 1] == ' ') len--;
+    if (o + (size_t)len + 2 > cap) break;
+    memcpy(out + o, row, (size_t)len); o += (size_t)len;
+    if (r < RPS_ROWS - 1) out[o++] = '\n';
+  }
+  out[o] = '\0';
+}
+
 // Common bottom hint
 static void app_hint(lv_obj_t *p, const char *text)
 {
@@ -7327,10 +7365,14 @@ static void app_screen_result(int data)
   lv_obj_clean(apps_cont);
   app_subphase = 1;
 
+  // ASCII art must be LEFT-aligned inside the label: CENTER centres every
+  // line independently, and lines of unequal width then shift by half-columns,
+  // shearing the picture. The label is content-sized, so centring the object
+  // (lv_obj_align below) still centres the whole block on screen.
   lv_obj_t *art = lv_label_create(apps_cont);
   lv_obj_set_style_text_font(art, &dejavu_mono_14, 0);
   lv_obj_set_style_text_color(art, lv_color_white(), 0);
-  lv_obj_set_style_text_align(art, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_align(art, LV_TEXT_ALIGN_LEFT, 0);
 
   lv_obj_t *res = lv_label_create(apps_cont);
   lv_obj_set_style_text_font(res, &dejavu_mono_16, 0);
@@ -7340,12 +7382,14 @@ static void app_screen_result(int data)
     // RPS: data = user choice, pick cpu now
     int cpu = random(1, 4);
     const char *verdict = rps_result(data, cpu);
-    char buf[120];
-    snprintf(buf, sizeof(buf), "%s\nvs\n%s", rps_art(data), rps_art(cpu));
+    // You (left) and CPU (right) side by side. The old stacked "%s\nvs\n%s"
+    // needed ~240 bytes in a 120-byte buffer (second hand silently truncated)
+    // and 13 rows would not fit 172px anyway. Side by side: 6 rows, 37 cols
+    // (~312px in dejavu_mono_14). lv_label_set_text copies, so stack is fine.
+    char buf[RPS_PAIR_BUF];
+    rps_pair_text(buf, sizeof(buf), rps_art(data), rps_art(cpu));
     lv_label_set_text(art, buf);
-    lv_label_set_long_mode(art, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(art, 280);
-    lv_obj_align(art, LV_ALIGN_CENTER, 0, -28);
+    lv_obj_align(art, LV_ALIGN_TOP_MID, 0, 8);
     lv_label_set_text(res, verdict);
     lv_obj_set_style_text_color(res,
       strcmp(verdict,"TIE!")==0     ? lv_color_make(220,220,60) :
@@ -7356,7 +7400,7 @@ static void app_screen_result(int data)
     // Dice: data = 1-6
     lv_label_set_text(art, dice_art(data));
     lv_obj_align(art, LV_ALIGN_CENTER, 0, -16);
-    char buf[782]; snprintf(buf, sizeof(buf), "Rolled: %d", data);
+    char buf[16]; snprintf(buf, sizeof(buf), "Rolled: %d", data);
     lv_label_set_text(res, buf);
     lv_obj_set_style_text_color(res, lv_color_make(100, 200, 255), 0);
     lv_obj_align(res, LV_ALIGN_BOTTOM_MID, 0, -36);
@@ -7403,10 +7447,8 @@ static void rps_anim_tick_cb(lv_timer_t * /*t*/)
     lv_obj_t *art = lv_label_create(apps_cont);
     lv_obj_set_style_text_font(art, &dejavu_mono_14, 0);
     lv_obj_set_style_text_color(art, lv_color_white(), 0);
-    lv_obj_set_style_text_align(art, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_align(art, LV_TEXT_ALIGN_LEFT, 0);   // see app_screen_result
     lv_label_set_text(art, rps_art(app_anim_result));
-    lv_label_set_long_mode(art, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(art, 290);
     lv_obj_align(art, LV_ALIGN_CENTER, 0, -20);
 
     lv_obj_t *go = lv_label_create(apps_cont);
@@ -7503,9 +7545,7 @@ static void app_screen_rps_start()
   app_anim_lbl = lv_label_create(apps_cont);
   lv_obj_set_style_text_font(app_anim_lbl, &dejavu_mono_14, 0);
   lv_obj_set_style_text_color(app_anim_lbl, lv_color_white(), 0);
-  lv_obj_set_style_text_align(app_anim_lbl, LV_TEXT_ALIGN_CENTER, 0);
-  lv_label_set_long_mode(app_anim_lbl, LV_LABEL_LONG_WRAP);
-  lv_obj_set_width(app_anim_lbl, 290);
+  lv_obj_set_style_text_align(app_anim_lbl, LV_TEXT_ALIGN_LEFT, 0);  // see app_screen_result
   lv_label_set_text(app_anim_lbl, rps_art_shake(true));
   lv_obj_align(app_anim_lbl, LV_ALIGN_CENTER, 0, -24);
 
@@ -7531,7 +7571,7 @@ static void app_screen_dice_start()
   app_anim_lbl = lv_label_create(apps_cont);
   lv_obj_set_style_text_font(app_anim_lbl, &dejavu_mono_14, 0);
   lv_obj_set_style_text_color(app_anim_lbl, lv_color_white(), 0);
-  lv_obj_set_style_text_align(app_anim_lbl, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_align(app_anim_lbl, LV_TEXT_ALIGN_LEFT, 0);  // see app_screen_result
   lv_label_set_text(app_anim_lbl, dice_art_roll(1));
   lv_obj_align(app_anim_lbl, LV_ALIGN_CENTER, 0, -10);
   app_anim_num = nullptr;
